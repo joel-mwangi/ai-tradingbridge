@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
+from app.live import router as live_router
 
 app = FastAPI(
     title="TradeBridge AI",
@@ -140,3 +141,7 @@ def analyze_latest_ticks(
             "not establish predictive performance."
         ),
     }
+
+
+# Live ticks are relayed in memory only; no database writes occur on this route.
+app.include_router(live_router)
