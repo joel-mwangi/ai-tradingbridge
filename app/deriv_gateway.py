@@ -1,8 +1,8 @@
 """Server-owned Deriv credential custody and account-session bootstrap.
 
-Credentials are held in process memory only. This intentionally requires an
-always-on ASGI deployment with one process until a shared encrypted session store
-and distributed ownership/locking are implemented. Never log access tokens.
+OAuth credentials are encrypted at rest in a server-only Supabase table. The encryption key
+must remain separate from the database. Active WebSockets still require an always-on ASGI
+host; never log access tokens or session tickets.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -22,12 +23,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSoc
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, SecretStr, StrictStr
 import websockets
+from cryptography.fernet import Fernet, InvalidToken
 
 router = APIRouter(prefix="/deriv", tags=["deriv"])
 bearer = HTTPBearer(auto_error=False)
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9]{2,32}$")
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
-_credentials: dict[str, "Credential"] = {}
 _ws_tickets: dict[str, tuple[str, float]] = {}
 
 
@@ -36,6 +37,113 @@ class Credential:
     access_token: str
     expires_at: float
     updated_at: float
+
+
+def _credential_cipher() -> Fernet:
+    key = os.getenv("TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY", "").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail="Credential encryption is not configured.")
+    try:
+        return Fernet(key.encode("ascii"))
+    except (ValueError, UnicodeEncodeError):
+        raise HTTPException(status_code=503, detail="Credential encryption key is invalid.")
+
+
+def _credential_store_config() -> tuple[str, str]:
+    url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not url or not service_key:
+        raise HTTPException(status_code=503, detail="Credential storage is not configured.")
+    return url, service_key
+
+
+async def _store_credential(user_id: str, access_token: str, expires_in: int) -> Credential:
+    url, service_key = _credential_store_config()
+    encrypted = _credential_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=expires_in)
+    payload = {
+        "user_id": user_id,
+        "encrypted_access_token": encrypted,
+        "expires_at": expires_at.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.post(
+                f"{url}/rest/v1/deriv_backend_credentials",
+                params={"on_conflict": "user_id"},
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                json=payload,
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not store the encrypted Deriv credential.")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not store the encrypted Deriv credential.")
+    return Credential(access_token=access_token, expires_at=expires_at.timestamp(), updated_at=now.timestamp())
+
+
+async def _load_credential(user_id: str) -> Credential | None:
+    url, service_key = _credential_store_config()
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.get(
+                f"{url}/rest/v1/deriv_backend_credentials",
+                params={
+                    "select": "encrypted_access_token,expires_at,updated_at",
+                    "user_id": f"eq.{user_id}",
+                    "limit": "1",
+                },
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not load the encrypted Deriv credential.")
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=503, detail="Credential storage returned invalid data.")
+        if not rows:
+            return None
+        row = rows[0]
+        if not isinstance(row, dict) or not isinstance(row.get("encrypted_access_token"), str):
+            raise HTTPException(status_code=503, detail="Credential storage returned invalid data.")
+        expires_at = datetime.fromisoformat(str(row.get("expires_at")).replace("Z", "+00:00")).timestamp()
+        updated_at = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00")).timestamp()
+        if expires_at <= time.time():
+            await _delete_credential(user_id)
+            return None
+        try:
+            access_token = _credential_cipher().decrypt(row["encrypted_access_token"].encode("ascii")).decode("utf-8")
+        except (InvalidToken, ValueError, UnicodeEncodeError):
+            raise HTTPException(status_code=503, detail="Stored Deriv credential cannot be decrypted.")
+        return Credential(access_token=access_token, expires_at=expires_at, updated_at=updated_at)
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError, OverflowError):
+        raise HTTPException(status_code=503, detail="Could not load the encrypted Deriv credential.")
+
+
+async def _delete_credential(user_id: str) -> None:
+    url, service_key = _credential_store_config()
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.delete(
+                f"{url}/rest/v1/deriv_backend_credentials",
+                params={"user_id": f"eq.{user_id}"},
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not revoke the stored Deriv credential.")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not revoke the stored Deriv credential.")
 
 
 class CredentialTransfer(BaseModel):
