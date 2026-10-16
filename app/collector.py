@@ -1,7 +1,9 @@
 import asyncio
 import csv
 import json
+import math
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,7 +12,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 SYMBOL = os.getenv("DERIV_SYMBOL", "1HZ100V")
+if not SYMBOL_PATTERN.fullmatch(SYMBOL):
+    raise ValueError("DERIV_SYMBOL must contain 2-32 letters, digits, or underscores.")
+
 # Same public endpoint verified for the Cloudflare tick collector.
 WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
 
@@ -35,24 +41,49 @@ def prepare_csv():
             csv.DictWriter(file, fieldnames=FIELDS).writeheader()
 
 
-def save_tick(tick):
-    quote = tick.get("quote")
-    epoch = tick.get("epoch")
-    pip_size = tick.get("pip_size")
+def _integer_value(value):
+    """Return an integer only when the input represents an exact integer."""
+    if isinstance(value, bool):
+        raise ValueError("Boolean is not an integer value.")
+    parsed = int(value)
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("Fractional numeric value.")
+    if isinstance(value, str) and value.strip() != str(parsed):
+        raise ValueError("Non-canonical integer string.")
+    return parsed
 
-    if quote is None or epoch is None or pip_size is None:
+
+def save_tick(tick):
+    if not isinstance(tick, dict):
+        print("Skipping tick: payload is not an object.", flush=True)
+        return False
+
+    quote = tick.get("quote")
+    epoch_value = tick.get("epoch")
+    pip_size = tick.get("pip_size")
+    symbol = tick.get("symbol", SYMBOL)
+
+    if quote is None or epoch_value is None or pip_size is None:
         print("Skipping tick: missing quote, epoch, or pip_size.", flush=True)
+        return False
+    if symbol != SYMBOL:
+        print("Skipping tick: symbol does not match configured subscription.", flush=True)
         return False
 
     try:
-        precision = int(pip_size)
-        epoch = int(epoch)
+        precision = _integer_value(pip_size)
+        epoch = _integer_value(epoch_value)
         numeric_quote = float(quote)
     except (TypeError, ValueError, OverflowError):
         print("Skipping tick: invalid quote, epoch, or pip_size.", flush=True)
         return False
 
-    if not 0 <= precision <= 10 or epoch <= 0 or numeric_quote <= 0:
+    if (
+        not 0 <= precision <= 10
+        or epoch <= 0
+        or not math.isfinite(numeric_quote)
+        or numeric_quote <= 0
+    ):
         print("Skipping tick: quote, epoch, or precision out of range.", flush=True)
         return False
 
@@ -61,7 +92,7 @@ def save_tick(tick):
     row = {
         "received_at_utc": datetime.now(timezone.utc).isoformat(),
         "epoch": epoch,
-        "symbol": tick.get("symbol", SYMBOL),
+        "symbol": symbol,
         "quote": formatted_quote,
         "pip_size": precision,
         "last_digit": last_digit,
@@ -99,12 +130,22 @@ async def collect():
                 print("Subscription request sent.", flush=True)
 
                 async for raw_message in ws:
-                    message = json.loads(raw_message)
+                    try:
+                        message = json.loads(raw_message)
+                    except (TypeError, json.JSONDecodeError):
+                        print("Skipping malformed WebSocket message.", flush=True)
+                        continue
+                    if not isinstance(message, dict):
+                        print("Skipping malformed WebSocket message.", flush=True)
+                        continue
                     if message.get("error"):
                         error = message["error"]
-                        raise RuntimeError(
-                            f"Deriv API error: {error.get('message', error)}"
+                        message_text = (
+                            error.get("message", "Unknown Deriv API error")
+                            if isinstance(error, dict)
+                            else "Unknown Deriv API error"
                         )
+                        raise RuntimeError(f"Deriv API error: {message_text}")
                     if message.get("msg_type") == "tick":
                         save_tick(message.get("tick", {}))
                     elif message.get("msg_type") == "subscription":
