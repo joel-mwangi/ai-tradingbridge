@@ -1,1 +1,17 @@
+# Secrets and local environment
 .env
+.env.*
+!.env.example
+
+# Python environments and generated files
+.venv/
+venv/
+aienv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local collected market data
+data/*.csv

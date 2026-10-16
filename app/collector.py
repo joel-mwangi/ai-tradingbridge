@@ -1,7 +1,9 @@
-﻿import asyncio
+import asyncio
 import csv
 import json
+import math
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,9 +12,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_ID = os.getenv("DERIV_APP_ID", "1089")
+SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 SYMBOL = os.getenv("DERIV_SYMBOL", "1HZ100V")
-WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
+if not SYMBOL_PATTERN.fullmatch(SYMBOL):
+    raise ValueError("DERIV_SYMBOL must contain 2-32 letters, digits, or underscores.")
+
+# Same public endpoint verified for the Cloudflare tick collector.
+WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = DATA_DIR / f"{SYMBOL}_ticks.csv"
@@ -30,33 +36,67 @@ FIELDS = [
 
 def prepare_csv():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     if not CSV_PATH.exists() or CSV_PATH.stat().st_size == 0:
         with CSV_PATH.open("w", newline="", encoding="utf-8") as file:
             csv.DictWriter(file, fieldnames=FIELDS).writeheader()
 
 
+def _integer_value(value):
+    """Return an integer only when the input represents an exact integer."""
+    if isinstance(value, bool):
+        raise ValueError("Boolean is not an integer value.")
+    parsed = int(value)
+    if isinstance(value, (int, float)) and parsed != value:
+        raise ValueError("Fractional numeric value.")
+    if isinstance(value, str) and value.strip() != str(parsed):
+        raise ValueError("Non-canonical integer string.")
+    return parsed
+
+
 def save_tick(tick):
+    if not isinstance(tick, dict):
+        print("Skipping tick: payload is not an object.", flush=True)
+        return False
+
     quote = tick.get("quote")
-    epoch = tick.get("epoch")
+    epoch_value = tick.get("epoch")
     pip_size = tick.get("pip_size")
+    symbol = tick.get("symbol", SYMBOL)
 
-    if quote is None or epoch is None or pip_size is None:
-        print("Skipping tick: missing quote, epoch, or pip_size.")
+    if quote is None or epoch_value is None or pip_size is None:
+        print("Skipping tick: missing quote, epoch, or pip_size.", flush=True)
+        return False
+    if symbol != SYMBOL:
+        print("Skipping tick: symbol does not match configured subscription.", flush=True)
         return False
 
-    precision = int(pip_size)
-    if not 0 <= precision <= 10:
-        print(f"Skipping tick: invalid precision {precision}.")
+    if isinstance(quote, bool):
+        print("Skipping tick: quote must be numeric, not boolean.", flush=True)
         return False
 
-    formatted_quote = f"{float(quote):.{precision}f}"
+    try:
+        precision = _integer_value(pip_size)
+        epoch = _integer_value(epoch_value)
+        numeric_quote = float(quote)
+    except (TypeError, ValueError, OverflowError):
+        print("Skipping tick: invalid quote, epoch, or pip_size.", flush=True)
+        return False
+
+    if (
+        not 0 <= precision <= 10
+        or epoch <= 0
+        or not math.isfinite(numeric_quote)
+        or numeric_quote <= 0
+    ):
+        print("Skipping tick: quote, epoch, or precision out of range.", flush=True)
+        return False
+
+    formatted_quote = f"{numeric_quote:.{precision}f}"
     last_digit = int(formatted_quote.replace(".", "")[-1])
-
     row = {
         "received_at_utc": datetime.now(timezone.utc).isoformat(),
-        "epoch": int(epoch),
-        "symbol": tick.get("symbol", SYMBOL),
+        "epoch": epoch,
+        "symbol": symbol,
         "quote": formatted_quote,
         "pip_size": precision,
         "last_digit": last_digit,
@@ -68,18 +108,17 @@ def save_tick(tick):
 
     print(
         f"{row['received_at_utc']} | {row['symbol']} | "
-        f"{formatted_quote} | digit={last_digit}"
+        f"{formatted_quote} | digit={last_digit}",
+        flush=True,
     )
     return True
 
 
 async def collect():
     prepare_csv()
-
     while True:
         try:
             print(f"Connecting to Deriv for {SYMBOL}...", flush=True)
-
             async with websockets.connect(
                 WS_URL,
                 ping_interval=20,
@@ -92,25 +131,29 @@ async def collect():
                     "subscribe": 1,
                     "req_id": 1,
                 }))
-
                 print("Subscription request sent.", flush=True)
 
                 async for raw_message in ws:
-                    message = json.loads(raw_message)
-
+                    try:
+                        message = json.loads(raw_message)
+                    except (TypeError, json.JSONDecodeError):
+                        print("Skipping malformed WebSocket message.", flush=True)
+                        continue
+                    if not isinstance(message, dict):
+                        print("Skipping malformed WebSocket message.", flush=True)
+                        continue
                     if message.get("error"):
                         error = message["error"]
-                        raise RuntimeError(
-                            f"Deriv API error: {error.get('message', error)}"
+                        message_text = (
+                            error.get("message", "Unknown Deriv API error")
+                            if isinstance(error, dict)
+                            else "Unknown Deriv API error"
                         )
-
+                        raise RuntimeError(f"Deriv API error: {message_text}")
                     if message.get("msg_type") == "tick":
-                        tick = message.get("tick", {})
-                        save_tick(tick)
-
+                        save_tick(message.get("tick", {}))
                     elif message.get("msg_type") == "subscription":
                         print("Tick subscription acknowledged.", flush=True)
-
         except asyncio.CancelledError:
             raise
         except Exception as exc:
