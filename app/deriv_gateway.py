@@ -356,12 +356,59 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                     except ValueError:
                         await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send a valid JSON request."}})
                         continue
-                    if not isinstance(message, dict) or not set(message).intersection(_ALLOWED_CLIENT_REQUESTS):
-                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported Deriv request."}})
+                    if not isinstance(message, dict):
+                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send a single Deriv request object."}})
                         continue
-                    if "authorize" in message:
-                        await websocket.send_json({"error": {"code": "AUTH_OWNED_BY_BACKEND", "message": "Authorization is managed by TradeBridge."}})
+                    request_keys = set(message).intersection(_ALLOWED_CLIENT_REQUESTS)
+                    if len(request_keys) != 1 or "authorize" in message:
+                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send exactly one supported Deriv request."}})
                         continue
+
+                    # Enforce the supported manual digit-contract scope at the gateway,
+                    # not only in the UI. This endpoint is demo-only.
+                    if "proposal" in message:
+                        amount = message.get("amount")
+                        contract_type = message.get("contract_type")
+                        duration = message.get("duration")
+                        duration_unit = message.get("duration_unit")
+                        symbol = message.get("symbol")
+                        allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
+                        try:
+                            stake = float(amount)
+                        except (TypeError, ValueError):
+                            stake = 0
+                        if not (1 <= stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
+                            await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
+                            continue
+                        if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                            await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only supported digit contracts and valid symbols are allowed."}})
+                            continue
+                        if duration_unit != "t" or type(duration) is not int or not 1 <= duration <= 10:
+                            await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use 1–10 ticks."}})
+                            continue
+                        if contract_type in {"DIGITOVER", "DIGITUNDER", "DIGITMATCH", "DIGITDIFF"}:
+                            barrier = message.get("barrier")
+                            if not isinstance(barrier, (str, int)) or not str(barrier).isdigit() or not 0 <= int(barrier) <= 9:
+                                await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "A valid digit barrier is required."}})
+                                continue
+                            if contract_type == "DIGITOVER" and int(barrier) > 8 or contract_type == "DIGITUNDER" and int(barrier) < 1:
+                                await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "The barrier is outside the contract's valid range."}})
+                                continue
+                    if "buy" in message:
+                        try:
+                            buy_price = float(message.get("price"))
+                        except (TypeError, ValueError):
+                            buy_price = 0
+                        if not (0 < buy_price <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
+                            await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Purchase price is outside the server-configured limit."}})
+                            continue
+                        if not isinstance(message.get("buy"), (str, int)) or not str(message.get("buy")).strip():
+                            await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A valid proposal identifier is required."}})
+                            continue
+                    if "sell" in message:
+                        if not str(message.get("sell", "")).isdigit() or message.get("price") != 0:
+                            await websocket.send_json({"error": {"code": "INVALID_SELL", "message": "Only a market sale of an open contract is supported."}})
+                            continue
                     await upstream.send(json.dumps(message, separators=(",", ":")))
 
             async def deriv_to_client() -> None:
