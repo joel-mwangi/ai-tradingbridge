@@ -46,7 +46,7 @@ def _integer_value(value):
     if isinstance(value, bool):
         raise ValueError("Boolean is not an integer value.")
     parsed = int(value)
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, (int, float)) and parsed != value:
         raise ValueError("Fractional numeric value.")
     if isinstance(value, str) and value.strip() != str(parsed):
         raise ValueError("Non-canonical integer string.")
@@ -68,6 +68,10 @@ def save_tick(tick):
         return False
     if symbol != SYMBOL:
         print("Skipping tick: symbol does not match configured subscription.", flush=True)
+        return False
+
+    if isinstance(quote, bool):
+        print("Skipping tick: quote must be numeric, not boolean.", flush=True)
         return False
 
     try:
