@@ -148,6 +148,41 @@ async def session_status(user_id: Annotated[str, Depends(current_user)]) -> dict
     }
 
 
+async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
+    """Return only account IDs linked to this app user; fail closed on DB errors."""
+    if not account_ids:
+        return set()
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not supabase_url or not service_key:
+        raise HTTPException(status_code=503, detail="Secure account linking is not configured.")
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.get(
+                f"{supabase_url}/rest/v1/deriv_account_links",
+                params={
+                    "select": "deriv_account_id",
+                    "user_id": f"eq.{user_id}",
+                    "deriv_account_id": f"in.({','.join(account_ids)})",
+                },
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Secure account linking could not be verified.")
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=503, detail="Secure account linking returned invalid data.")
+        return {
+            row["deriv_account_id"]
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("deriv_account_id"), str)
+        }
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=503, detail="Secure account linking could not be verified.")
+
+
 @router.post("/accounts")
 async def list_accounts(
     user_id: Annotated[str, Depends(current_user)],
@@ -172,10 +207,43 @@ async def list_accounts(
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Deriv account lookup failed.")
-    # Keep provider payload shape, but never return the OAuth token.
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="Unexpected Deriv account response.")
-    return payload
+
+    root = payload if isinstance(payload, dict) else {}
+    data = root.get("data")
+    data_record = data if isinstance(data, dict) else {}
+    candidates = (
+        data if isinstance(data, list)
+        else data_record.get("accounts") if isinstance(data_record.get("accounts"), list)
+        else [data_record] if data_record.get("account_id")
+        else root.get("accounts") if isinstance(root.get("accounts"), list)
+        else []
+    )
+    normalized: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        account_id = item.get("account_id", item.get("accountId", item.get("id")))
+        if not isinstance(account_id, str) or not ACCOUNT_ID_RE.fullmatch(account_id):
+            continue
+        raw_balance = item.get("balance")
+        try:
+            balance = float(raw_balance) if raw_balance is not None and str(raw_balance).strip() else None
+        except (TypeError, ValueError):
+            balance = None
+        if balance is not None and not __import__("math").isfinite(balance):
+            balance = None
+        normalized.append({
+            "account_id": account_id,
+            "balance": balance,
+            "currency": item.get("currency") if isinstance(item.get("currency"), str) else None,
+            "account_type": item.get("account_type", item.get("accountType")),
+            "status": item.get("status") if isinstance(item.get("status"), str) else None,
+        })
+    linked_ids = await _linked_account_ids(user_id, [item["account_id"] for item in normalized])
+    owned_accounts = [item for item in normalized if item["account_id"] in linked_ids]
+    if not owned_accounts:
+        raise HTTPException(status_code=409, detail="No Deriv accounts are linked to this app user.")
+    return {"connected": True, "accounts": owned_accounts}
 
 
 @router.post("/session/activate")
