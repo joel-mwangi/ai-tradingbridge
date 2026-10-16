@@ -6,7 +6,9 @@ and distributed ownership/locking are implemented. Never log access tokens.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import os
 import re
 import time
@@ -14,9 +16,10 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, SecretStr, StrictStr
+import websockets
 
 router = APIRouter(prefix="/deriv", tags=["deriv"])
 bearer = HTTPBearer(auto_error=False)
@@ -49,11 +52,8 @@ def _require_bridge_secret(supplied: str | None) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized credential transfer.")
 
 
-async def current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> str:
-    """Validate the caller's Supabase access token with Supabase Auth."""
-    token = credentials.credentials if credentials else ""
+async def _resolve_user_token(token: str) -> str:
+    """Validate a Supabase access token without exposing it to logs or responses."""
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     anon_key = os.getenv("SUPABASE_ANON_KEY", "")
     if not token:
@@ -79,6 +79,12 @@ async def current_user(
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Could not verify app session.")
+
+
+async def current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> str:
+    return await _resolve_user_token(credentials.credentials if credentials else "")
 
 
 @router.post("/internal/credentials", include_in_schema=False, status_code=204)
@@ -231,3 +237,138 @@ async def activate_account_session(
 @router.delete("/session", status_code=204)
 async def disconnect_deriv(user_id: Annotated[str, Depends(current_user)]) -> None:
     _credentials.pop(user_id, None)
+
+
+_ALLOWED_CLIENT_REQUESTS = {
+    "active_symbols", "ticks", "ticks_history", "proposal", "buy", "sell",
+    "balance", "portfolio", "statement", "profit_table", "proposal_open_contract",
+    "transaction", "ping", "forget", "forget_all",
+}
+
+
+@router.websocket("/ws")
+async def deriv_websocket_proxy(websocket: WebSocket) -> None:
+    """Proxy an authenticated demo-account session without exposing Deriv OTP URLs."""
+    offered = [part.strip() for part in websocket.headers.get("sec-websocket-protocol", "").split(",")]
+    app_token = next((part for part in offered if part.count(".") == 2 and len(part) > 40), "")
+    try:
+        user_id = await _resolve_user_token(app_token)
+    except HTTPException as exc:
+        await websocket.close(code=4401 if exc.status_code == 401 else 4403)
+        return
+
+    account_id = websocket.query_params.get("account_id", "")
+    if not ACCOUNT_ID_RE.fullmatch(account_id):
+        await websocket.close(code=4400)
+        return
+    try:
+        credential = await _owned_credential(user_id)
+    except HTTPException as exc:
+        await websocket.close(code=4401 if exc.status_code in (401, 409) else 1011)
+        return
+
+    # Validate the account against the OAuth credential, and intentionally keep
+    # real-account execution disabled at the backend boundary.
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            accounts_response = await client.get(
+                "https://api.derivws.com/trading/v1/options/accounts",
+                headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
+            )
+            if accounts_response.status_code == 401:
+                _credentials.pop(user_id, None)
+                await websocket.close(code=4401)
+                return
+            if not accounts_response.is_success:
+                await websocket.close(code=1011)
+                return
+            payload = accounts_response.json()
+            root = payload if isinstance(payload, dict) else {}
+            data = root.get("data")
+            accounts = (
+                data if isinstance(data, list)
+                else data.get("accounts", []) if isinstance(data, dict) and isinstance(data.get("accounts", []), list)
+                else [data] if isinstance(data, dict) and data.get("account_id")
+                else root.get("accounts", []) if isinstance(root.get("accounts"), list)
+                else []
+            )
+            account = next((item for item in accounts if isinstance(item, dict) and item.get("account_id") == account_id), None)
+            if not account or str(account.get("account_type", "")).lower() != "demo":
+                await websocket.close(code=4403)
+                return
+            otp_response = await client.post(
+                f"https://api.derivws.com/trading/v1/options/accounts/{account_id}/otp",
+                headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
+            )
+            if not otp_response.is_success:
+                await websocket.close(code=1011)
+                return
+            otp_payload = otp_response.json()
+            otp_data = otp_payload.get("data") if isinstance(otp_payload, dict) else None
+            provider_url = otp_data.get("url") if isinstance(otp_data, dict) else None
+            if not isinstance(provider_url, str):
+                await websocket.close(code=1011)
+                return
+            from urllib.parse import urlparse
+            parsed = urlparse(provider_url)
+            if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
+                await websocket.close(code=1011)
+                return
+    except (httpx.HTTPError, ValueError):
+        await websocket.close(code=1011)
+        return
+
+    try:
+        async with websockets.connect(
+            provider_url,
+            open_timeout=8,
+            close_timeout=3,
+            ping_interval=20,
+            max_size=1_048_576,
+        ) as upstream:
+            await websocket.accept(subprotocol="tradebridge")
+
+            async def client_to_deriv() -> None:
+                while True:
+                    raw = await websocket.receive_text()
+                    if len(raw) > 256_000:
+                        await websocket.close(code=4400)
+                        return
+                    try:
+                        message = json.loads(raw)
+                    except ValueError:
+                        await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send a valid JSON request."}})
+                        continue
+                    if not isinstance(message, dict) or not set(message).intersection(_ALLOWED_CLIENT_REQUESTS):
+                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported Deriv request."}})
+                        continue
+                    if "authorize" in message:
+                        await websocket.send_json({"error": {"code": "AUTH_OWNED_BY_BACKEND", "message": "Authorization is managed by TradeBridge."}})
+                        continue
+                    await upstream.send(json.dumps(message, separators=(",", ":")))
+
+            async def deriv_to_client() -> None:
+                async for raw in upstream:
+                    await websocket.send_text(raw)
+
+            tasks = {
+                asyncio.create_task(client_to_deriv()),
+                asyncio.create_task(deriv_to_client()),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                if not task.cancelled():
+                    error = task.exception()
+                    if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
+                        raise error
+    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
+        pass
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+    finally:
+        _credentials.get(user_id)
