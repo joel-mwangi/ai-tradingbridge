@@ -1,39 +1,41 @@
 from collections import Counter
 from typing import Sequence
 
-import numpy as np
-
 
 def analyze_digits(digits: Sequence[int]) -> dict:
-    """Suemarize obserced lats digits from 0 through 9."""
+    """Summarize observed last digits (0 through 9) without claiming predictability."""
     if not digits:
-        raise ValueError("Provide at least 1 digit.")
-    if any(not isinstance(d, (int, np.integer)) or d < 0 or d > 9 for d in digits):
-        raise ValueError("Every digit must be an integer  from 0 to 9.")
-    counts = Counter(int(d) for d in digits)
+        raise ValueError("Provide at least one digit.")
+
+    # bool is a subclass of int in Python, so reject it explicitly.
+    if any(type(digit) is not int or not 0 <= digit <= 9 for digit in digits):
+        raise ValueError("Every digit must be an integer from 0 to 9.")
+
+    counts = Counter(digits)
     total = len(digits)
-
-    frequencies = {
-        str(d): counts[d]/total
-        for d in range(10)
-
-    }
+    frequencies = {str(digit): counts[digit] / total for digit in range(10)}
     expected = total / 10
     chi_square = sum(
-        (counts[d] - expected) **2 / expected
-        for d in range(10)
-
+        (counts[digit] - expected) ** 2 / expected
+        for digit in range(10)
     )
 
-    return{
+    return {
         "sample_size": total,
-        "counts":{str(d): counts[d] for d in range(10)},
+        "counts": {str(digit): counts[digit] for digit in range(10)},
         "frequencies": frequencies,
-        "most_observed_digit": max(range(10), key=lambda d: counts[d]),
-        "least_observed_digit": min(range(10), key=lambda d: counts[d]),
+        "most_observed_digits": [
+            digit for digit in range(10)
+            if counts[digit] == max(counts.values())
+        ],
+        "least_observed_digits": [
+            digit for digit in range(10)
+            if counts[digit] == min(counts.values())
+        ],
         "chi_square_statistic": round(chi_square, 4),
-        "warning": (
-            "Historical frequency is descriptive, not proof of a "
-            "predictive edge. Statistical significance requires further testing."
-        ),    
+        "interpretation": (
+            "Descriptive statistics only. This result does not establish a "
+            "predictive edge; test hypotheses on sufficiently large, "
+            "time-separated out-of-sample data."
+        ),
     }
