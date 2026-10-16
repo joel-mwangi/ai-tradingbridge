@@ -9,12 +9,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
+from app.deriv_gateway import router as deriv_router
 
 app = FastAPI(
     title="TradeBridge AI",
     description="Research and evaluation service for historical market data",
     version="0.3.0",
 )
+
+app.include_router(deriv_router)
 
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 bearer_scheme = HTTPBearer(auto_error=False)
