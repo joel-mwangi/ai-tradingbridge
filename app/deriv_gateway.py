@@ -298,11 +298,7 @@ async def exchange_oauth_code(
     if not accounts:
         raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
 
-    _credentials[body.user_id] = Credential(
-        access_token=access_token,
-        expires_at=time.time() + expires_in,
-        updated_at=time.time(),
-    )
+    await _store_credential(body.user_id, access_token, expires_in)
     return {"accounts": accounts, "expires_in": expires_in}
 
 
@@ -313,12 +309,7 @@ async def transfer_credentials(
 ) -> None:
     """Trusted Next.js OAuth callback transfers a token; token is never returned."""
     _require_bridge_secret(x_tradebridge_bridge_token)
-    # Replacing a user's credential invalidates their previous in-memory session.
-    _credentials[body.user_id] = Credential(
-        access_token=body.access_token.get_secret_value(),
-        expires_at=time.time() + body.expires_in,
-        updated_at=time.time(),
-    )
+    await _store_credential(body.user_id, body.access_token.get_secret_value(), body.expires_in)
 
 
 @router.delete("/internal/credentials/{user_id}", include_in_schema=False, status_code=204)
@@ -327,7 +318,7 @@ async def revoke_transferred_credentials(
     x_tradebridge_bridge_token: Annotated[str | None, Header()] = None,
 ) -> None:
     _require_bridge_secret(x_tradebridge_bridge_token)
-    _credentials.pop(user_id, None)
+    await _delete_credential(user_id)
 
 
 async def _owned_credential(user_id: str) -> Credential:
@@ -735,8 +726,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
         except Exception:
             pass
     finally:
-        _credentials.get(user_id)
-
+    
 
 @router.websocket("/live/market")
 async def live_market_proxy(websocket: WebSocket) -> None:
