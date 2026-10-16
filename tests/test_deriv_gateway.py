@@ -1,10 +1,39 @@
+import asyncio
 import time
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from cryptography.fernet import Fernet
 
 from app import deriv_gateway, main
 
 client = TestClient(main.app)
+
+
+@pytest.fixture
+def credential_store(monkeypatch):
+    store = {}
+
+    async def fake_store(user_id, access_token, expires_in):
+        credential = deriv_gateway.Credential(
+            access_token=access_token,
+            expires_at=time.time() + expires_in,
+            updated_at=time.time(),
+        )
+        store[user_id] = credential
+        return credential
+
+    async def fake_load(user_id):
+        return store.get(user_id)
+
+    async def fake_delete(user_id):
+        store.pop(user_id, None)
+
+    monkeypatch.setattr(deriv_gateway, "_store_credential", fake_store)
+    monkeypatch.setattr(deriv_gateway, "_load_credential", fake_load)
+    monkeypatch.setattr(deriv_gateway, "_delete_credential", fake_delete)
+    return store
 
 
 def test_deriv_session_requires_app_authentication():
@@ -34,9 +63,8 @@ def test_credential_transfer_requires_bridge_secret(monkeypatch):
     assert "secret-token" not in response.text
 
 
-def test_credential_transfer_never_returns_deriv_token(monkeypatch):
+def test_credential_transfer_never_returns_deriv_token(monkeypatch, credential_store):
     monkeypatch.setenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", "expected-secret")
-    deriv_gateway._credentials.clear()
     response = client.post(
         "/deriv/internal/credentials",
         headers={"X-Tradebridge-Bridge-Token": "expected-secret"},
@@ -44,33 +72,28 @@ def test_credential_transfer_never_returns_deriv_token(monkeypatch):
     )
     assert response.status_code == 204
     assert "secret-token" not in response.text
-    assert deriv_gateway._credentials["user-1"].access_token == "secret-token"
-    deriv_gateway._credentials.clear()
+    assert credential_store["user-1"].access_token == "secret-token"
 
 
-def test_session_status_never_returns_credential(monkeypatch):
-    monkeypatch.setenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", "expected-secret")
-    deriv_gateway._credentials.clear()
-    transfer = client.post(
-        "/deriv/internal/credentials",
-        headers={"X-Tradebridge-Bridge-Token": "expected-secret"},
-        json={"user_id": "user-1", "access_token": "secret-token", "expires_in": 3600},
+def test_session_status_never_returns_credential(monkeypatch, credential_store):
+    credential_store["user-1"] = deriv_gateway.Credential(
+        access_token="secret-token",
+        expires_at=time.time() + 3600,
+        updated_at=time.time(),
     )
-    assert transfer.status_code == 204
     main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "user-1"
     try:
         response = client.get("/deriv/session")
     finally:
         main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
-        deriv_gateway._credentials.clear()
     assert response.status_code == 200
     assert response.json()["connected"] is True
     assert "secret-token" not in response.text
     assert "access_token" not in response.json()
 
 
-def test_expired_credentials_are_removed():
-    deriv_gateway._credentials["expired-user"] = deriv_gateway.Credential(
+def test_expired_credentials_are_removed(credential_store):
+    credential_store["expired-user"] = deriv_gateway.Credential(
         access_token="secret-token",
         expires_at=time.time() - 1,
         updated_at=time.time() - 10,
@@ -81,7 +104,7 @@ def test_expired_credentials_are_removed():
     finally:
         main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
     assert response.status_code == 401
-    assert "expired-user" not in deriv_gateway._credentials
+    assert "expired-user" not in credential_store
 
 
 def test_websocket_ticket_is_short_lived_and_one_time(monkeypatch):
@@ -143,10 +166,16 @@ def test_oauth_exchange_rejects_redirect_uri_mismatch_before_provider_call(monke
 def test_linked_account_lookup_fails_closed_without_service_role(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
-    import pytest
-    from fastapi import HTTPException
-
     with pytest.raises(HTTPException) as exc:
-        import asyncio
         asyncio.run(deriv_gateway._linked_account_ids("user-1", ["CR123"]))
     assert exc.value.status_code == 503
+
+
+def test_credential_cipher_encrypts_and_round_trips_token(monkeypatch):
+    key = Fernet.generate_key().decode("ascii")
+    monkeypatch.setenv("TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY", key)
+    cipher = deriv_gateway._credential_cipher()
+    token = "a-sensitive-deriv-token"
+    encrypted = cipher.encrypt(token.encode("utf-8"))
+    assert token.encode("utf-8") not in encrypted
+    assert cipher.decrypt(encrypted).decode("utf-8") == token
