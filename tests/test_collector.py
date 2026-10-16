@@ -42,6 +42,7 @@ def test_saves_valid_tick(output_csv):
     tick(quote="inf"),
     tick(quote="-inf"),
     tick(quote="0"),
+    tick(quote=True),
     tick(epoch=1.5),
     tick(epoch=0),
     tick(pip_size=2.5),
