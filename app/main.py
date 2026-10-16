@@ -1,8 +1,11 @@
+import hmac
 import os
 import re
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
@@ -10,30 +13,49 @@ from app.analysis import analyze_digits
 app = FastAPI(
     title="TradeBridge AI",
     description="Research and evaluation service for historical market data",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 class DigitRequest(BaseModel):
     digits: list[StrictInt] = Field(min_length=1, max_length=100_000)
 
 
+def require_api_token(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
+    ],
+) -> None:
+    """Require server-to-server bearer auth; fail closed if deployment is misconfigured."""
+    expected = os.getenv("TRADEBRIDGE_API_TOKEN", "")
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API authentication is not configured on this service.",
+        )
+    supplied = credentials.credentials if credentials else ""
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "tradebridge-ai",
-        "mode": "research",
-        "database_configured": bool(
-            os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        ),
-    }
+    # Public liveness endpoint: do not disclose whether secrets are configured.
+    return {"status": "ok", "service": "tradebridge-ai", "mode": "research"}
 
 
 @app.post("/analysis/digits")
-def digit_analysis(request: DigitRequest):
+def digit_analysis(
+    request: DigitRequest,
+    _: Annotated[None, Depends(require_api_token)],
+):
     try:
         return analyze_digits(request.digits)
     except ValueError as exc:
@@ -42,10 +64,11 @@ def digit_analysis(request: DigitRequest):
 
 @app.get("/analysis/digits/latest")
 def analyze_latest_ticks(
+    _: Annotated[None, Depends(require_api_token)],
     symbol: str = Query(default="1HZ100V", min_length=2, max_length=32),
-    limit: int = Query(default=1000, ge=10, le=100_000),
+    limit: int = Query(default=1000, ge=10, le=10_000),
 ):
-    """Analyze stored ticks from Supabase; the service-role key stays server-side."""
+    """Analyze stored ticks from Supabase; credentials remain server-side."""
     if not SYMBOL_PATTERN.fullmatch(symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol format.")
 
@@ -70,12 +93,11 @@ def analyze_latest_ticks(
                 "apikey": service_key,
                 "Authorization": f"Bearer {service_key}",
             },
-            timeout=15.0,
+            timeout=10.0,
         )
         response.raise_for_status()
         rows = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        # Do not return upstream response bodies or credentials to callers.
         raise HTTPException(
             status_code=502,
             detail="Unable to retrieve tick history from Supabase.",
@@ -86,11 +108,18 @@ def analyze_latest_ticks(
 
     digits = []
     for row in rows:
-        digit = row.get("last_digit") if isinstance(row, dict) else None
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=502, detail="Malformed tick history row.")
+        digit = row.get("last_digit")
         if type(digit) is not int or not 0 <= digit <= 9:
             raise HTTPException(
                 status_code=502,
                 detail="Tick history contains an invalid last_digit value.",
+            )
+        if row.get("symbol") != symbol:
+            raise HTTPException(
+                status_code=502,
+                detail="Tick history contains a row for an unexpected symbol.",
             )
         digits.append(digit)
 
