@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -183,7 +184,7 @@ async def exchange_oauth_code(
             continue
         accounts.append({
             "account_id": account_id,
-            "account_type": item.get("account_type", item.get("accountType")),
+            "account_type": (item.get("account_type", item.get("accountType")) if isinstance(item.get("account_type", item.get("accountType")), str) else None),
             "currency": item.get("currency") if isinstance(item.get("currency"), str) else None,
         })
     if not accounts:
@@ -326,7 +327,7 @@ async def list_accounts(
             balance = float(raw_balance) if raw_balance is not None and str(raw_balance).strip() else None
         except (TypeError, ValueError):
             balance = None
-        if balance is not None and not __import__("math").isfinite(balance):
+        if balance is not None and not math.isfinite(balance):
             balance = None
         normalized.append({
             "account_id": account_id,
@@ -576,9 +577,12 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                             if not isinstance(barrier, (str, int)) or not str(barrier).isdigit() or not 0 <= int(barrier) <= 9:
                                 await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "A valid digit barrier is required."}})
                                 continue
-                            if contract_type == "DIGITOVER" and int(barrier) > 8 or contract_type == "DIGITUNDER" and int(barrier) < 1:
+                            if (contract_type == "DIGITOVER" and int(barrier) > 8) or (contract_type == "DIGITUNDER" and int(barrier) < 1):
                                 await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "The barrier is outside the contract's valid range."}})
                                 continue
+                        if contract_type in {"DIGITEVEN", "DIGITODD"} and "barrier" in message:
+                            await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
+                            continue
                     if "buy" in message:
                         try:
                             buy_price = float(message.get("price"))
