@@ -47,6 +47,13 @@ class AccountRequest(BaseModel):
     account_id: StrictStr = Field(min_length=2, max_length=32)
 
 
+class OAuthExchangeRequest(BaseModel):
+    user_id: StrictStr = Field(min_length=1, max_length=128)
+    code: StrictStr = Field(min_length=1, max_length=4096)
+    code_verifier: StrictStr = Field(min_length=43, max_length=128)
+    redirect_uri: StrictStr = Field(min_length=1, max_length=2048)
+
+
 def _origin_allowed(origin: str | None) -> bool:
     configured = {
         value.strip().rstrip("/")
@@ -99,6 +106,95 @@ async def current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> str:
     return await _resolve_user_token(credentials.credentials if credentials else "")
+
+
+@router.post("/internal/oauth/exchange", include_in_schema=False)
+async def exchange_oauth_code(
+    body: OAuthExchangeRequest,
+    x_tradebridge_bridge_token: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Exchange Deriv OAuth code on FastAPI and retain the token only server-side."""
+    _require_bridge_secret(x_tradebridge_bridge_token)
+    client_id = os.getenv("DERIV_OAUTH_CLIENT_ID", "").strip()
+    configured_redirect = os.getenv("DERIV_OAUTH_REDIRECT_URI", "").strip()
+    if not configured_redirect:
+        app_url = os.getenv("APP_URL", "").strip().rstrip("/")
+        configured_redirect = f"{app_url}/api/auth/deriv/callback" if app_url else ""
+    if not client_id or not configured_redirect:
+        raise HTTPException(status_code=503, detail="Deriv OAuth is not configured on the backend.")
+    if not hmac.compare_digest(body.redirect_uri, configured_redirect):
+        raise HTTPException(status_code=400, detail="OAuth redirect URI does not match backend configuration.")
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            token_response = await client.post(
+                "https://auth.deriv.com/oauth2/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "code": body.code,
+                    "code_verifier": body.code_verifier,
+                    "redirect_uri": configured_redirect,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+            )
+            if not token_response.is_success:
+                raise HTTPException(status_code=502, detail="Deriv OAuth code exchange failed.")
+            token_payload = token_response.json()
+            access_token = token_payload.get("access_token") if isinstance(token_payload, dict) else None
+            if not isinstance(access_token, str) or not access_token:
+                raise HTTPException(status_code=502, detail="Deriv returned an invalid OAuth response.")
+            expires_raw = token_payload.get("expires_in", 3600)
+            try:
+                expires_in = max(60, min(int(expires_raw), 86400))
+            except (TypeError, ValueError):
+                expires_in = 3600
+
+            accounts_response = await client.get(
+                "https://api.derivws.com/trading/v1/options/accounts",
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            )
+            if accounts_response.status_code == 401:
+                raise HTTPException(status_code=502, detail="Deriv rejected the new OAuth credential.")
+            if not accounts_response.is_success:
+                raise HTTPException(status_code=502, detail="Deriv account verification failed.")
+            accounts_payload = accounts_response.json()
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=502, detail="Deriv OAuth verification failed.")
+
+    root = accounts_payload if isinstance(accounts_payload, dict) else {}
+    data = root.get("data")
+    data_record = data if isinstance(data, dict) else {}
+    candidates = (
+        data if isinstance(data, list)
+        else data_record.get("accounts") if isinstance(data_record.get("accounts"), list)
+        else [data_record] if data_record.get("account_id")
+        else root.get("accounts") if isinstance(root.get("accounts"), list)
+        else []
+    )
+    accounts: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        account_id = item.get("account_id", item.get("accountId", item.get("id")))
+        if not isinstance(account_id, str) or not ACCOUNT_ID_RE.fullmatch(account_id):
+            continue
+        accounts.append({
+            "account_id": account_id,
+            "account_type": item.get("account_type", item.get("accountType")),
+            "currency": item.get("currency") if isinstance(item.get("currency"), str) else None,
+        })
+    if not accounts:
+        raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
+
+    _credentials[body.user_id] = Credential(
+        access_token=access_token,
+        expires_at=time.time() + expires_in,
+        updated_at=time.time(),
+    )
+    return {"accounts": accounts, "expires_in": expires_in}
 
 
 @router.post("/internal/credentials", include_in_schema=False, status_code=204)
