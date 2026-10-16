@@ -723,8 +723,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             await websocket.close(code=1011)
         except Exception:
             pass
-    finally:
-    
+
 
 @router.websocket("/live/market")
 async def live_market_proxy(websocket: WebSocket) -> None:
