@@ -47,6 +47,17 @@ class AccountRequest(BaseModel):
     account_id: StrictStr = Field(min_length=2, max_length=32)
 
 
+def _origin_allowed(origin: str | None) -> bool:
+    configured = {
+        value.strip().rstrip("/")
+        for value in os.getenv("TRADEBRIDGE_ALLOWED_ORIGINS", "").split(",")
+        if value.strip()
+    }
+    # If configured, browser WebSocket handshakes must originate from one of
+    # these exact origins. Native clients without Origin remain supported.
+    return not origin or not configured or origin.rstrip("/") in configured
+
+
 def _require_bridge_secret(supplied: str | None) -> None:
     expected = os.getenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", "")
     if not expected:
@@ -266,6 +277,9 @@ async def create_websocket_ticket(
 @router.websocket("/ws")
 async def deriv_websocket_proxy(websocket: WebSocket) -> None:
     """Proxy an authenticated demo-account session using a one-use short-lived ticket."""
+    if not _origin_allowed(websocket.headers.get("origin")):
+        await websocket.close(code=4403)
+        return
     offered = [part.strip() for part in websocket.headers.get("sec-websocket-protocol", "").split(",")]
     ticket = next((part for part in offered if part != "tradebridge"), "")
     ticket_record = _ws_tickets.pop(ticket, None)
@@ -441,6 +455,9 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
 @router.websocket("/live/market")
 async def live_market_proxy(websocket: WebSocket) -> None:
     """Proxy public market ticks/history in memory; never persist live market data."""
+    if not _origin_allowed(websocket.headers.get("origin")):
+        await websocket.close(code=4403)
+        return
     await websocket.accept()
     subscribed_symbols: set[str] = set()
     allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
