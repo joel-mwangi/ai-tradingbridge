@@ -252,7 +252,7 @@ async def exchange_oauth_code(
                 raise HTTPException(status_code=502, detail="Deriv returned an invalid OAuth response.")
             expires_raw = token_payload.get("expires_in", 3600)
             try:
-                expires_in = max(60, min(int(expires_raw), 86400))
+                expires_in = max(1, min(int(expires_raw), 86400))
             except (TypeError, ValueError):
                 expires_in = 3600
 
