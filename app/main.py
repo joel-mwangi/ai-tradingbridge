@@ -5,15 +5,36 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
+from app.deriv_gateway import router as deriv_router
 
 app = FastAPI(
     title="TradeBridge AI",
-    description="Research and evaluation service for historical market data",
-    version="0.3.0",
+    description="Authenticated Deriv session gateway with legacy descriptive analysis endpoints",
+    version="0.4.0",
+)
+
+app.include_router(deriv_router)
+
+# Explicitly allow only configured frontend origins for browser HTTP calls.
+# Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
+# https://swigtrade.vercel.app,http://localhost:3000
+_allowed_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("TRADEBRIDGE_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
 
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
@@ -48,7 +69,7 @@ def require_api_token(
 @app.get("/health")
 def health():
     # Public liveness endpoint: do not disclose whether secrets are configured.
-    return {"status": "ok", "service": "tradebridge-ai", "mode": "research"}
+    return {"status": "ok", "service": "tradebridge-backend", "mode": "backend"}
 
 
 @app.post("/analysis/digits")
