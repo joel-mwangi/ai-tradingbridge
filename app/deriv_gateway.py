@@ -660,7 +660,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                         contract_type = message.get("contract_type")
                         duration = message.get("duration")
                         duration_unit = message.get("duration_unit")
-                        symbol = message.get("symbol")
+                        symbol = message.get("underlying_symbol", message.get("symbol"))
                         allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
                         try:
                             stake = float(amount)
