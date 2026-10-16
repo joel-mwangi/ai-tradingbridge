@@ -115,9 +115,6 @@ async def _load_credential(user_id: str) -> Credential | None:
             raise HTTPException(status_code=503, detail="Credential storage returned invalid data.")
         expires_at = datetime.fromisoformat(str(row.get("expires_at")).replace("Z", "+00:00")).timestamp()
         updated_at = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00")).timestamp()
-        if expires_at <= time.time():
-            await _delete_credential(user_id)
-            return None
         try:
             access_token = _credential_cipher().decrypt(row["encrypted_access_token"].encode("ascii")).decode("utf-8")
         except (InvalidToken, ValueError, UnicodeEncodeError):
@@ -325,6 +322,9 @@ async def _owned_credential(user_id: str) -> Credential:
     credential = await _load_credential(user_id)
     if credential is None:
         raise HTTPException(status_code=409, detail="Deriv is not connected to this backend session.")
+    if credential.expires_at <= time.time():
+        await _delete_credential(user_id)
+        raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect Deriv.")
     return credential
 
 
@@ -332,7 +332,9 @@ async def _owned_credential(user_id: str) -> Credential:
 async def session_status(user_id: Annotated[str, Depends(current_user)]) -> dict[str, Any]:
     """Return safe connection metadata, never credentials or provider WebSocket URLs."""
     credential = await _load_credential(user_id)
-    if not credential:
+    if not credential or credential.expires_at <= time.time():
+        if credential:
+            await _delete_credential(user_id)
         return {"connected": False}
     return {
         "connected": True,
