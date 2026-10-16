@@ -68,6 +68,7 @@ Configure these server-only environment variables before enabling the frontend m
 DERIV_OAUTH_CLIENT_ID=YOUR_DERIV_OAUTH_CLIENT_ID
 DERIV_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/deriv/callback
 TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
+TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
 TRADEBRIDGE_ALLOWED_ORIGINS=https://YOUR_FRONTEND_HOST,http://localhost:3000
 SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
@@ -84,4 +85,4 @@ The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value configur
 - `WS /deriv/ws?account_id=...` — authenticated Demo-only Options WebSocket proxy with server-side stake, contract, duration, and sell-request validation.
 - `WS /deriv/live/market` — public market-data WebSocket proxy; no live tick persistence.
 
-Credentials are currently held in process memory. Restarts clear them, and this implementation is not safe for multiple independent workers without shared encrypted session storage and coordination. Real-account execution is explicitly blocked. Treat this as a migration foundation until the automated tests and end-to-end Deriv workflow are verified.
+Deriv OAuth credentials are encrypted at rest in `public.deriv_backend_credentials`; the Fernet key must be generated locally and stored only in the backend's secret environment, separate from Supabase. Active WebSocket connections still close on process restart and clients must reconnect. The credential table migration must be applied before enabling the backend. Real-account execution is explicitly blocked. Treat this as a migration candidate until automated tests and the end-to-end Deriv workflow are verified.
