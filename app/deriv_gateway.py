@@ -631,6 +631,9 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
         ) as upstream:
             await websocket.accept(subprotocol="tradebridge")
 
+            pending_proposal_requests: set[int] = set()
+            valid_proposals: dict[str, float] = {}
+
             async def client_to_deriv() -> None:
                 while True:
                     raw = await websocket.receive_text()
@@ -666,6 +669,10 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                         if not (1 <= stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
                             await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
                             continue
+                        request_id = message.get("req_id")
+                        if type(request_id) is not int or request_id < 0:
+                            await websocket.send_json({"error": {"code": "INVALID_REQUEST_ID", "message": "A valid request ID is required for a proposal."}})
+                            continue
                         if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
                             await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only supported digit contracts and valid symbols are allowed."}})
                             continue
@@ -694,14 +701,47 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                         if not isinstance(message.get("buy"), (str, int)) or not str(message.get("buy")).strip():
                             await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A valid proposal identifier is required."}})
                             continue
+                        proposal_id = str(message.get("buy"))
+                        quoted_price = valid_proposals.get(proposal_id)
+                        if quoted_price is None:
+                            await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "Purchase must use a fresh proposal created on this session."}})
+                            continue
+                        if buy_price + 1e-9 < quoted_price:
+                            await websocket.send_json({"error": {"code": "INVALID_PURCHASE_PRICE", "message": "Purchase maximum price cannot be below the quoted ask price."}})
+                            continue
+                        # Consume before sending upstream. If the acknowledgement is
+                        # lost, this session will not submit the same proposal twice.
+                        valid_proposals.pop(proposal_id, None)
                     if "sell" in message:
                         if not str(message.get("sell", "")).isdigit() or message.get("price") != 0:
                             await websocket.send_json({"error": {"code": "INVALID_SELL", "message": "Only a market sale of an open contract is supported."}})
                             continue
+                    if "proposal" in message:
+                        pending_proposal_requests.add(message["req_id"])
                     await upstream.send(json.dumps(message, separators=(",", ":")))
 
             async def deriv_to_client() -> None:
                 async for raw in upstream:
+                    try:
+                        provider_message = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        provider_message = {}
+                    request_id = provider_message.get("req_id") if isinstance(provider_message, dict) else None
+                    if isinstance(request_id, int) and request_id in pending_proposal_requests:
+                        if provider_message.get("msg_type") == "proposal":
+                            proposal = provider_message.get("proposal")
+                            if isinstance(proposal, dict):
+                                proposal_id = proposal.get("id")
+                                try:
+                                    ask_price = float(proposal.get("ask_price"))
+                                except (TypeError, ValueError):
+                                    ask_price = 0
+                                if isinstance(proposal_id, (str, int)) and str(proposal_id) and ask_price > 0 and math.isfinite(ask_price):
+                                    valid_proposals[str(proposal_id)] = ask_price
+                                    while len(valid_proposals) > 128:
+                                        valid_proposals.pop(next(iter(valid_proposals)))
+                        if provider_message.get("error") or provider_message.get("msg_type") == "proposal":
+                            pending_proposal_requests.discard(request_id)
                     await websocket.send_text(raw)
 
             tasks = {
