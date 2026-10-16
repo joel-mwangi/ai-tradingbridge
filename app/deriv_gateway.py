@@ -517,6 +517,9 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
                 await websocket.close(code=1011)
                 return
+    except HTTPException as exc:
+        await websocket.close(code=4403 if exc.status_code in (403, 409) else 1011)
+        return
     except (httpx.HTTPError, ValueError):
         await websocket.close(code=1011)
         return
