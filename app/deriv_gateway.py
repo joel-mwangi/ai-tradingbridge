@@ -24,6 +24,7 @@ import websockets
 router = APIRouter(prefix="/deriv", tags=["deriv"])
 bearer = HTTPBearer(auto_error=False)
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9]{2,32}$")
+SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 _credentials: dict[str, "Credential"] = {}
 
 
