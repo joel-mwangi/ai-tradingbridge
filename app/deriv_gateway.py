@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, SecretStr, StrictStr
 
@@ -180,8 +180,15 @@ async def activate_account_session(
             if not accounts_response.is_success:
                 raise HTTPException(status_code=502, detail="Deriv account verification failed.")
             accounts_payload = accounts_response.json()
-            root = accounts_payload.get("data", accounts_payload) if isinstance(accounts_payload, dict) else {}
-            accounts = root.get("accounts", []) if isinstance(root, dict) else []
+            root = accounts_payload if isinstance(accounts_payload, dict) else {}
+            data = root.get("data")
+            accounts = (
+                data if isinstance(data, list)
+                else data.get("accounts", []) if isinstance(data, dict) and isinstance(data.get("accounts", []), list)
+                else [data] if isinstance(data, dict) and data.get("account_id")
+                else root.get("accounts", []) if isinstance(root.get("accounts"), list)
+                else []
+            )
             account = next((item for item in accounts if isinstance(item, dict) and item.get("account_id") == body.account_id), None)
             if account is None:
                 raise HTTPException(status_code=403, detail="Account is not available to this Deriv authorization.")
