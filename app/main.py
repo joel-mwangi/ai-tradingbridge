@@ -14,8 +14,8 @@ from app.deriv_gateway import router as deriv_router
 
 app = FastAPI(
     title="TradeBridge AI",
-    description="Research and evaluation service for historical market data",
-    version="0.3.0",
+    description="Authenticated Deriv session gateway with legacy descriptive analysis endpoints",
+    version="0.4.0",
 )
 
 app.include_router(deriv_router)
@@ -69,7 +69,7 @@ def require_api_token(
 @app.get("/health")
 def health():
     # Public liveness endpoint: do not disclose whether secrets are configured.
-    return {"status": "ok", "service": "tradebridge-ai", "mode": "research"}
+    return {"status": "ok", "service": "tradebridge-backend", "mode": "backend"}
 
 
 @app.post("/analysis/digits")
