@@ -322,27 +322,23 @@ async def revoke_transferred_credentials(
 
 
 async def _owned_credential(user_id: str) -> Credential:
-    credential = _credentials.get(user_id)
+    credential = await _load_credential(user_id)
     if credential is None:
         raise HTTPException(status_code=409, detail="Deriv is not connected to this backend session.")
-    if credential.expires_at <= time.time():
-        _credentials.pop(user_id, None)
-        raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect Deriv.")
     return credential
 
 
 @router.get("/session")
 async def session_status(user_id: Annotated[str, Depends(current_user)]) -> dict[str, Any]:
     """Return safe connection metadata, never credentials or provider WebSocket URLs."""
-    credential = _credentials.get(user_id)
-    if not credential or credential.expires_at <= time.time():
+    credential = await _load_credential(user_id)
+    if not credential:
         return {"connected": False}
     return {
         "connected": True,
         "credential_updated_at": int(credential.updated_at),
         "expires_at": int(credential.expires_at),
     }
-
 
 async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
     """Return only account IDs linked to this app user; fail closed on DB errors."""
@@ -394,7 +390,7 @@ async def list_accounts(
                 },
             )
         if response.status_code == 401:
-            _credentials.pop(user_id, None)
+            await _delete_credential(user_id)
             raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect.")
         if not response.is_success:
             raise HTTPException(status_code=502, detail="Deriv account lookup failed.")
@@ -459,7 +455,7 @@ async def activate_account_session(
                 headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
             )
             if accounts_response.status_code == 401:
-                _credentials.pop(user_id, None)
+                await _delete_credential(user_id)
                 raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect.")
             if not accounts_response.is_success:
                 raise HTTPException(status_code=502, detail="Deriv account verification failed.")
@@ -517,7 +513,7 @@ async def activate_account_session(
 
 @router.delete("/session", status_code=204)
 async def disconnect_deriv(user_id: Annotated[str, Depends(current_user)]) -> None:
-    _credentials.pop(user_id, None)
+    await _delete_credential(user_id)
 
 
 _ALLOWED_CLIENT_REQUESTS = {
@@ -574,7 +570,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
             )
             if accounts_response.status_code == 401:
-                _credentials.pop(user_id, None)
+                await _delete_credential(user_id)
                 await websocket.close(code=4401)
                 return
             if not accounts_response.is_success:
