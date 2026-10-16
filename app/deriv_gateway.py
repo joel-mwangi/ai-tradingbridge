@@ -372,3 +372,66 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             pass
     finally:
         _credentials.get(user_id)
+
+
+@router.websocket("/live/market")
+async def live_market_proxy(websocket: WebSocket) -> None:
+    """Proxy public market ticks/history in memory; never persist live market data."""
+    await websocket.accept()
+    subscribed_symbols: set[str] = set()
+    allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
+    try:
+        async with websockets.connect(
+            "wss://api.derivws.com/trading/v1/options/ws/public",
+            open_timeout=8,
+            close_timeout=3,
+            ping_interval=20,
+            max_size=1_048_576,
+        ) as upstream:
+            async def client_to_upstream() -> None:
+                while True:
+                    raw = await websocket.receive_text()
+                    if len(raw.encode("utf-8")) > 64_000:
+                        await websocket.close(code=4400, reason="Request too large")
+                        return
+                    try:
+                        message = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send valid JSON."}})
+                        continue
+                    if not isinstance(message, dict) or not set(message).intersection(allowed):
+                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported market-data request."}})
+                        continue
+                    if "ticks" in message or "ticks_history" in message:
+                        symbol = message.get("ticks") if isinstance(message.get("ticks"), str) else message.get("ticks_history")
+                        if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                            await websocket.send_json({"error": {"code": "INVALID_SYMBOL", "message": "Invalid market symbol."}})
+                            continue
+                        if message.get("subscribe") == 1:
+                            subscribed_symbols.add(symbol)
+                            if len(subscribed_symbols) > 24:
+                                subscribed_symbols.discard(symbol)
+                                await websocket.send_json({"error": {"code": "SUBSCRIPTION_LIMIT", "message": "Too many active subscriptions."}})
+                                continue
+                    await upstream.send(json.dumps(message, separators=(",", ":")))
+
+            async def upstream_to_client() -> None:
+                async for raw in upstream:
+                    await websocket.send_text(raw)
+
+            tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                if not task.cancelled():
+                    error = task.exception()
+                    if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
+                        raise error
+    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
+        pass
+    except Exception:
+        try:
+            await websocket.close(code=1011, reason="Market feed unavailable")
+        except Exception:
+            pass
