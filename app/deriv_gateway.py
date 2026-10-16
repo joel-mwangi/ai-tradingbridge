@@ -410,7 +410,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             continue
                         if message.get("subscribe") == 1:
                             subscribed_symbols.add(symbol)
-                            if len(subscribed_symbols) > 24:
+                            if len(subscribed_symbols) > 256:
                                 subscribed_symbols.discard(symbol)
                                 await websocket.send_json({"error": {"code": "SUBSCRIPTION_LIMIT", "message": "Too many active subscriptions."}})
                                 continue
