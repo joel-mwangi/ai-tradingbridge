@@ -376,6 +376,9 @@ async def activate_account_session(
             account = next((item for item in accounts if isinstance(item, dict) and item.get("account_id") == body.account_id), None)
             if account is None:
                 raise HTTPException(status_code=403, detail="Account is not available to this Deriv authorization.")
+            linked_ids = await _linked_account_ids(user_id, [body.account_id])
+            if body.account_id not in linked_ids:
+                raise HTTPException(status_code=403, detail="Account is not linked to this TradeBridge user.")
             account_type = str(account.get("account_type", "")).lower()
             if account_type != "demo":
                 raise HTTPException(
@@ -489,6 +492,10 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             )
             account = next((item for item in accounts if isinstance(item, dict) and item.get("account_id") == account_id), None)
             if not account or str(account.get("account_type", "")).lower() != "demo":
+                await websocket.close(code=4403)
+                return
+            linked_ids = await _linked_account_ids(user_id, [account_id])
+            if account_id not in linked_ids:
                 await websocket.close(code=4403)
                 return
             otp_response = await client.post(
