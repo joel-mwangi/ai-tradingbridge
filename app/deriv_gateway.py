@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -26,6 +27,7 @@ bearer = HTTPBearer(auto_error=False)
 ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9]{2,32}$")
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 _credentials: dict[str, "Credential"] = {}
+_ws_tickets: dict[str, tuple[str, float]] = {}
 
 
 @dataclass
@@ -247,16 +249,30 @@ _ALLOWED_CLIENT_REQUESTS = {
 }
 
 
+@router.post("/ws-ticket")
+async def create_websocket_ticket(
+    user_id: Annotated[str, Depends(current_user)],
+) -> dict[str, Any]:
+    """Issue a short-lived, one-use WebSocket ticket instead of putting a JWT in handshake headers."""
+    now = time.time()
+    for ticket, (_, expires_at) in list(_ws_tickets.items()):
+        if expires_at <= now:
+            _ws_tickets.pop(ticket, None)
+    ticket = secrets.token_urlsafe(32)
+    _ws_tickets[ticket] = (user_id, now + 30)
+    return {"ticket": ticket, "expires_in": 30}
+
+
 @router.websocket("/ws")
 async def deriv_websocket_proxy(websocket: WebSocket) -> None:
-    """Proxy an authenticated demo-account session without exposing Deriv OTP URLs."""
+    """Proxy an authenticated demo-account session using a one-use short-lived ticket."""
     offered = [part.strip() for part in websocket.headers.get("sec-websocket-protocol", "").split(",")]
-    app_token = next((part for part in offered if part.count(".") == 2 and len(part) > 40), "")
-    try:
-        user_id = await _resolve_user_token(app_token)
-    except HTTPException as exc:
-        await websocket.close(code=4401 if exc.status_code == 401 else 4403)
+    ticket = next((part for part in offered if part != "tradebridge"), "")
+    ticket_record = _ws_tickets.pop(ticket, None)
+    if not ticket_record or ticket_record[1] <= time.time():
+        await websocket.close(code=4401)
         return
+    user_id = ticket_record[0]
 
     account_id = websocket.query_params.get("account_id", "")
     if not ACCOUNT_ID_RE.fullmatch(account_id):
