@@ -105,3 +105,48 @@ def test_origin_allowlist_is_exact(monkeypatch):
     assert deriv_gateway._origin_allowed("https://swigtrade.vercel.app")
     assert deriv_gateway._origin_allowed("http://localhost:3000")
     assert not deriv_gateway._origin_allowed("https://evil.example")
+
+
+def test_oauth_exchange_fails_closed_without_bridge_secret(monkeypatch):
+    monkeypatch.delenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", raising=False)
+    response = client.post(
+        "/deriv/internal/oauth/exchange",
+        json={
+            "user_id": "user-1",
+            "code": "authorization-code",
+            "code_verifier": "a" * 43,
+            "redirect_uri": "https://app.example/api/auth/deriv/callback",
+        },
+    )
+    assert response.status_code == 503
+    assert "authorization-code" not in response.text
+
+
+def test_oauth_exchange_rejects_redirect_uri_mismatch_before_provider_call(monkeypatch):
+    monkeypatch.setenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", "expected-secret")
+    monkeypatch.setenv("DERIV_OAUTH_CLIENT_ID", "public-client-id")
+    monkeypatch.setenv("DERIV_OAUTH_REDIRECT_URI", "https://app.example/api/auth/deriv/callback")
+    response = client.post(
+        "/deriv/internal/oauth/exchange",
+        headers={"X-Tradebridge-Bridge-Token": "expected-secret"},
+        json={
+            "user_id": "user-1",
+            "code": "authorization-code",
+            "code_verifier": "a" * 43,
+            "redirect_uri": "https://attacker.example/api/auth/deriv/callback",
+        },
+    )
+    assert response.status_code == 400
+    assert "authorization-code" not in response.text
+
+
+def test_linked_account_lookup_fails_closed_without_service_role(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        import asyncio
+        asyncio.run(deriv_gateway._linked_account_ids("user-1", ["CR123"]))
+    assert exc.value.status_code == 503
