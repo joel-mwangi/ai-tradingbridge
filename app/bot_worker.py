@@ -22,7 +22,7 @@ import httpx
 import websockets
 from fastapi import HTTPException
 
-from app.deriv_gateway import _load_credential
+from app.deriv_gateway import _linked_account_ids, _load_credential
 
 LOG = logging.getLogger("tradebridge.bot_worker")
 TERMINAL_RUNS = {"stopped", "completed", "failed", "interrupted"}
@@ -116,6 +116,16 @@ class DurableBotWorker:
         account = next((a for a in accounts if isinstance(a, dict) and a.get("account_id") == run["account_id"]), None)
         if not account or str(account.get("account_type", "")).lower() != "demo":
             raise WorkerError("Worker permits Demo accounts only.")
+        try:
+            linked = await _linked_account_ids(str(run["user_id"]), [str(run["account_id"])])
+        except HTTPException as exc:
+            raise WorkerError("Could not verify account ownership; execution blocked.") from exc
+        if str(run["account_id"]) not in linked:
+            raise WorkerError("Deriv account is no longer linked to this user; execution blocked.")
+        max_stake = float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+        stake = float(run.get("config", {}).get("stakeStrategy", {}).get("amount", 0))
+        if not 0 < stake <= max_stake:
+            raise WorkerError("Configured stake exceeds the server-side Demo stake limit.")
         return credential
 
     async def open_socket(self, run: dict[str, Any], credential: Any):
@@ -182,7 +192,8 @@ class DurableBotWorker:
         contract_id = trade.get("contract_id")
         if not contract_id:
             return False
-        await self.trade_patch(trade["id"], {"state": "settling"})
+        monitor_attempts = int(trade.get("monitor_attempts") or 0) + 1
+        await self.trade_patch(trade["id"], {"state": "settling", "monitor_attempts": monitor_attempts})
         try:
             await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": int(contract_id),
                                       "subscribe": 1, "req_id": int(time.time_ns() % 2_000_000_000)}))
@@ -248,10 +259,14 @@ class DurableBotWorker:
                         return False
                     return True
         except (TimeoutError, websockets.ConnectionClosed, OSError):
-            await self.trade_patch(trade["id"], {"state": "outcome_unknown",
-                                                 "error_message": "Lost connection while monitoring; contract must be reconciled."})
-            await self.set_run(run["id"], "reconciliation_required",
-                               stop_reason="Contract outcome is uncertain; no new trades will be submitted.")
+            await self.trade_patch(trade["id"], {"state": "outcome_unknown", "monitor_attempts": monitor_attempts,
+                                                 "error_message": "Lost connection while monitoring; reattach to this known contract before placing another trade."})
+            if monitor_attempts < 4:
+                await self.set_run(run["id"], "queued",
+                                   stop_reason="Connection interrupted while monitoring a known contract; worker will resume monitoring without buying.")
+            else:
+                await self.set_run(run["id"], "reconciliation_required",
+                                   stop_reason="Repeated failures monitoring a known contract; manual broker reconciliation required.")
             return False
         return False
 
