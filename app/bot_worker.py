@@ -356,21 +356,39 @@ class DurableBotWorker:
                 await self.set_run(run["id"], "interrupted", ended_at=utc_now(),
                                    stop_reason="Worker heartbeat expired before a trade was in flight.")
 
+    async def heartbeat_forever(self) -> None:
+        while not self.stopping.is_set():
+            await self.db("POST", "bot_worker_heartbeats", params={"on_conflict": "worker_id"},
+                          body={"worker_id": self.worker_id, "last_seen_at": utc_now()},
+                          prefer="resolution=merge-duplicates,return=minimal")
+            try:
+                await asyncio.wait_for(self.stopping.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                pass
+
     async def run_forever(self) -> None:
         LOG.info("worker started worker_id=%s", self.worker_id)
-        while not self.stopping.is_set():
+        heartbeat_task = asyncio.create_task(self.heartbeat_forever(), name="bot-worker-heartbeat")
+        try:
+            while not self.stopping.is_set():
+                try:
+                    await self.recover_stale_runs()
+                    run = await self.claim_next()
+                    if run:
+                        await self.execute_run(run)
+                    else:
+                        await asyncio.wait_for(self.stopping.wait(), timeout=self.poll_seconds)
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    LOG.exception("worker poll failed; fail-closed retry after delay")
+                    await asyncio.sleep(min(10, max(2, self.poll_seconds)))
+        finally:
+            heartbeat_task.cancel()
             try:
-                await self.recover_stale_runs()
-                run = await self.claim_next()
-                if run:
-                    await self.execute_run(run)
-                else:
-                    await asyncio.wait_for(self.stopping.wait(), timeout=self.poll_seconds)
-            except asyncio.TimeoutError:
-                continue
-            except Exception:
-                LOG.exception("worker poll failed; fail-closed retry after delay")
-                await asyncio.sleep(min(10, max(2, self.poll_seconds)))
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
 
 async def main() -> None:
