@@ -9,7 +9,6 @@ from app.bot_worker import DurableBotWorker
 def make_worker(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-test-key")
-    monkeypatch.setenv("DERIV_APP_ID", "12345")
     return DurableBotWorker()
 
 
@@ -36,7 +35,7 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
             async def close(self):
                 return None
 
-        async def open_socket(_token):
+        async def open_socket(_run, _credential):
             return FakeSocket()
 
         async def rows(table, _params):
@@ -182,10 +181,9 @@ def test_stale_worker_with_known_contract_requeues_monitoring_not_buy(monkeypatc
 def test_worker_requires_explicit_server_credentials(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
-    monkeypatch.delenv("DERIV_APP_ID", raising=False)
     try:
         DurableBotWorker()
     except RuntimeError as exc:
-        assert "DERIV_APP_ID" in str(exc)
+        assert "SUPABASE_URL" in str(exc)
     else:
         raise AssertionError("worker must fail closed when environment is incomplete")
