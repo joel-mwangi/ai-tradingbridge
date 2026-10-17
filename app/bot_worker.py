@@ -393,7 +393,19 @@ class DurableBotWorker:
                     # A stop request or stale heartbeat can arrive while the proposal
                     # is in flight. Check after the durable intent write, immediately
                     # before the side-effecting request; never retry if the ack is lost.
-                    if not await self.may_submit_buy(run_id):
+                    try:
+                        may_buy = await self.may_submit_buy(run_id)
+                    except WorkerError as exc:
+                        # The buy request has not been sent yet, so this is a
+                        # definitive no-purchase outcome, not an ambiguous buy.
+                        await self.trade_patch(trade["id"], {
+                            "state": "failed",
+                            "error_message": f"Purchase blocked before request ({str(exc)[:180]}).",
+                        })
+                        await self.set_run(run_id, "failed", ended_at=utc_now(),
+                                           stop_reason="Purchase blocked before sending the buy request.")
+                        return
+                    if not may_buy:
                         await self.trade_patch(trade["id"], {
                             "state": "failed",
                             "error_message": "Purchase prevented before the buy request was sent.",
