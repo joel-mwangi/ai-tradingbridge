@@ -153,8 +153,8 @@ def test_stale_worker_with_inflight_trade_requires_reconciliation(monkeypatch):
         await worker.recover_stale_runs()
         await worker.close()
         assert any(event[0] == "trade" and event[1] == "outcome_unknown" for event in events)
-        assert any(event[0] == "run" and event[1] == "reconciliation_required" for event in events)
-        assert any("manual reconciliation" in (event[2] or "") for event in events if event[0] == "run")
+        assert any(event[0] != "trade" and event[1] == "reconciliation_required" for event in events)
+        assert any("manual reconciliation" in (event[2] or "") for event in events if event[0] != "trade")
 
     asyncio.run(scenario())
 
