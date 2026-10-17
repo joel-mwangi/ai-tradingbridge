@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 import httpx
@@ -112,6 +113,14 @@ async def create_run(body: CreateRunRequest, user_id: Annotated[str, Depends(cur
     if not ACCOUNT_ID_RE.fullmatch(body.account_id):
         raise HTTPException(status_code=422, detail="Invalid account identifier.")
     body.config.validate_contract()
+    # Fail closed when the persistent worker is not actually online; do not create queued runs that can never execute.
+    live_after = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+    workers = await _db_request("GET", "bot_worker_heartbeats", params={
+        "select": "worker_id,last_seen_at", "last_seen_at": f"gt.{live_after}",
+        "order": "last_seen_at.desc", "limit": "1",
+    })
+    if not isinstance(workers, list) or not workers:
+        raise HTTPException(status_code=503, detail="Automated execution worker is offline; no run was queued.")
     # Verify the account is a linked Demo account under this user's Deriv OAuth identity.
     from app.deriv_gateway import _linked_account_ids, _owned_credential
     credential = await _owned_credential(user_id)
