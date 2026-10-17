@@ -193,3 +193,40 @@ def test_worker_requires_explicit_server_credentials(monkeypatch):
         assert "SUPABASE_URL" in str(exc)
     else:
         raise AssertionError("worker must fail closed when environment is incomplete")
+
+
+def test_known_contract_disconnect_requeues_monitoring_without_new_buy(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        events = []
+        run = {"id": "run-known", "status": "running", "config": {"stopConditions": []}}
+        trade = {"id": "trade-known", "contract_id": "12345", "state": "open", "monitor_attempts": 0}
+
+        class DisconnectedSocket:
+            async def send(self, _payload):
+                return None
+
+            async def recv(self):
+                raise asyncio.TimeoutError()
+
+        async def trade_patch(trade_id, body):
+            events.append(("trade", body.get("state"), body.get("monitor_attempts")))
+            return {"id": trade_id, **body}
+
+        async def set_run(run_id, status, **fields):
+            events.append(("run", status, fields.get("stop_reason")))
+
+        async def patch_one(_table, _params, _body):
+            return {"id": "run-known"}
+
+        worker.trade_patch = trade_patch
+        worker.set_run = set_run
+        worker.patch_one = patch_one
+        keep_running = await worker.monitor_contract(DisconnectedSocket(), run, trade)
+        await worker.close()
+        assert keep_running is False
+        assert ("trade", "outcome_unknown", 1) in events
+        assert any(event[0] == "run" and event[1] == "queued" for event in events)
+        assert not any(event[0] == "run" and event[1] == "reconciliation_required" for event in events)
+
+    asyncio.run(scenario())
