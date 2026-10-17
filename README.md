@@ -8,7 +8,7 @@ It does not support real-account trading.
 - Python 3.11 or newer
 - An always-on ASGI host with outbound HTTPS and WebSocket access to `api.derivws.com`
   (not a serverless function runtime — active WebSocket connections close on process restart)
-- A Supabase project with the migrations applied (see below)
+- A Supabase project with the canonical migrations from the [TradeBridge repository](https://github.com/joel-mwangi/tradebridge/tree/main/supabase/migrations) applied
 
 ## Local setup
 
@@ -45,25 +45,15 @@ only in server-side environment variables.
 
 ## Supabase migrations
 
-Two tables are required. Apply the migration before starting the service:
+**TradeBridge is the single source of truth for shared Supabase schema migrations.**
+Do not create or apply duplicate schema migrations from this backend repository.
 
-```powershell
-# With the Supabase CLI:
-supabase db push
-
-# Or directly with psql:
-psql $DATABASE_URL -f supabase/migrations/20261017000001_deriv_credentials.sql
-```
-
-Tables created:
-
-| Table | Purpose |
-|---|---|
-| `public.deriv_backend_credentials` | Fernet-encrypted Deriv OAuth tokens, keyed by user ID |
-| `public.deriv_account_links` | Maps app user IDs to verified Deriv account IDs |
-
-Both tables have RLS enabled with no browser-accessible policies. Only the service-role key
-(used server-side) can read or write them.
+Review and apply the required migrations from
+[TradeBridge `supabase/migrations`](https://github.com/joel-mwangi/tradebridge/tree/main/supabase/migrations)
+to the intended Supabase project using the project's established migration workflow.
+Confirm the target project and migration status before applying changes. The backend
+expects the canonical `public.deriv_backend_credentials` and
+`public.deriv_account_links` tables to exist with the schema defined by TradeBridge.
 
 ## Run and test
 
