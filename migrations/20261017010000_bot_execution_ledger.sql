@@ -76,3 +76,15 @@ comment on table public.bot_runs is
   'Server-owned Demo bot run state; browser local storage is not authoritative.';
 comment on table public.bot_trades is
   'Durable broker order ledger. Settled P&L is recorded only from confirmed Deriv contract updates.';
+
+
+-- Worker liveness is durable and server-authoritative. Run creation fails closed if no
+-- persistent worker has checked in recently.
+create table if not exists public.bot_worker_heartbeats (
+  worker_id text primary key,
+  last_seen_at timestamptz not null,
+  started_at timestamptz not null default now()
+);
+alter table public.bot_worker_heartbeats enable row level security;
+comment on table public.bot_worker_heartbeats is
+  'Private liveness registry for persistent bot execution workers; service role only.';
