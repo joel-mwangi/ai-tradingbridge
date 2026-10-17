@@ -16,13 +16,13 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import urlparse
 
 import httpx
 import websockets
 from fastapi import HTTPException
 
-from app.deriv_gateway import _credential_cipher, _load_credential
+from app.deriv_gateway import _load_credential
 
 LOG = logging.getLogger("tradebridge.bot_worker")
 TERMINAL_RUNS = {"stopped", "completed", "failed", "interrupted"}
@@ -41,11 +41,10 @@ class DurableBotWorker:
     def __init__(self) -> None:
         self.supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-        self.app_id = os.getenv("DERIV_APP_ID", "").strip()
         self.poll_seconds = float(os.getenv("BOT_WORKER_POLL_SECONDS", "2"))
         self.worker_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:10]}"
-        if not self.supabase_url or not self.service_key or not self.app_id:
-            raise RuntimeError("SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and DERIV_APP_ID are required.")
+        if not self.supabase_url or not self.service_key:
+            raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
         self.http = httpx.AsyncClient(timeout=10.0, headers={
             "apikey": self.service_key,
             "Authorization": f"Bearer {self.service_key}",
@@ -119,18 +118,26 @@ class DurableBotWorker:
             raise WorkerError("Worker permits Demo accounts only.")
         return credential
 
-    async def open_socket(self, token: str):
-        ws = await websockets.connect(
-            f"wss://ws.derivws.com/websockets/v3?app_id={quote(self.app_id)}",
-            open_timeout=10, close_timeout=3, ping_interval=20, ping_timeout=20,
-            max_size=2**20,
+    async def open_socket(self, run: dict[str, Any], credential: Any):
+        """Open only the authenticated Demo Options socket issued for this linked account."""
+        response = await self.http.post(
+            f"https://api.derivws.com/trading/v1/options/accounts/{run['account_id']}/otp",
+            headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
         )
-        try:
-            await self.request(ws, {"authorize": token}, timeout=12)
-        except Exception:
-            await ws.close()
-            raise
-        return ws
+        if not response.is_success:
+            raise WorkerError("Deriv did not issue a Demo session URL; execution blocked.")
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        provider_url = data.get("url") if isinstance(data, dict) else None
+        if not isinstance(provider_url, str):
+            raise WorkerError("Deriv returned an invalid Demo session URL.")
+        parsed = urlparse(provider_url)
+        if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
+            raise WorkerError("Deriv session URL did not match the approved Demo endpoint.")
+        return await websockets.connect(
+            provider_url, open_timeout=10, close_timeout=3, ping_interval=20,
+            ping_timeout=20, max_size=2**20,
+        )
 
     async def request(self, ws, payload: dict[str, Any], timeout: float = 12) -> dict[str, Any]:
         req_id = int(time.time_ns() % 2_000_000_000)
@@ -272,17 +279,20 @@ class DurableBotWorker:
                                        stop_reason="Ambiguous buy after worker restart; manual broker reconciliation required.")
                     return
                 if trade.get("state") in {"open", "settling", "outcome_unknown"} and trade.get("contract_id"):
-                    ws = await self.open_socket(credential.access_token)
+                    ws = await self.open_socket(run, credential)
                     try:
-                        await self.monitor_contract(ws, run, trade)
+                            should_continue = await self.monitor_contract(ws, run, trade)
                     finally:
                         await ws.close()
-                    return
+                    if not should_continue:
+                        return
+                    # The known contract is conclusively settled; continue through the
+                    # normal risk-gated loop using a fresh authenticated Demo session.
                 if trade.get("state") not in {"settled", "failed"}:
                     await self.set_run(run_id, "reconciliation_required",
                                        stop_reason="Existing trade state requires reconciliation.")
                     return
-            ws = await self.open_socket(credential.access_token)
+            ws = await self.open_socket(run, credential)
             try:
                 while not self.stopping.is_set():
                     current = await self.rows("bot_runs", {"select": "*", "id": f"eq.{run_id}", "limit": "1"})
@@ -378,6 +388,11 @@ class DurableBotWorker:
                     await self.set_run(run["id"], "queued",
                                        stop_reason="Worker restarted; resuming monitoring of the known contract.")
                 elif trade.get("state") in ACTIVE_TRADE_STATES:
+                    if trade.get("state") == "buy_pending" and not trade.get("contract_id"):
+                        await self.trade_patch(trade["id"], {
+                            "state": "outcome_unknown",
+                            "error_message": "Worker restarted after buy was persisted; Deriv acceptance is unknown.",
+                        })
                     await self.set_run(run["id"], "reconciliation_required",
                                        stop_reason="Stale worker heartbeat with ambiguous purchase; manual reconciliation required.")
                 else:
