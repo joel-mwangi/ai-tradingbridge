@@ -277,7 +277,12 @@ class DurableBotWorker:
         except (TimeoutError, websockets.ConnectionClosed, OSError):
             await self.trade_patch(trade["id"], {"state": "outcome_unknown", "monitor_attempts": monitor_attempts,
                                                  "error_message": "Lost connection while monitoring; reattach to this known contract before placing another trade."})
-            if monitor_attempts < 4:
+            current = await self.rows("bot_runs", {"select": "status", "id": f"eq.{run['id']}", "limit": "1"})
+            current_status = current[0].get("status") if current else None
+            if current_status == "stopping":
+                await self.set_run(run["id"], "reconciliation_required",
+                                   stop_reason="Stop was requested while the contract connection was lost; reconcile the known contract before proceeding.")
+            elif monitor_attempts < 4:
                 await self.set_run(run["id"], "queued",
                                    stop_reason="Connection interrupted while monitoring a known contract; worker will resume monitoring without buying.")
             else:
@@ -424,7 +429,7 @@ class DurableBotWorker:
         # Never auto-resume a run whose worker heartbeat is stale: a crash can occur
         # after a buy request leaves the process but before the response is persisted.
         cutoff = time.time() - 45
-        rows = await self.rows("bot_runs", {"select": "*", "status": "eq.running", "limit": "100"})
+        rows = await self.rows("bot_runs", {"select": "*", "status": "in.(running,stopping)", "limit": "100"})
         for run in rows:
             heartbeat = run.get("heartbeat_at")
             try:
@@ -435,6 +440,24 @@ class DurableBotWorker:
                 continue
             trades = await self.rows("bot_trades", {"select": "*", "run_id": f"eq.{run['id']}",
                                                     "order": "created_at.desc", "limit": "1"})
+            if run.get("status") == "stopping":
+                if trades and trades[0].get("state") == "settled":
+                    latest = await self.sync_run_totals(str(run["id"]))
+                    await self.set_run(run["id"], "stopped", ended_at=utc_now(),
+                                       stop_reason=latest.get("stop_reason") or "Stop request completed after settlement recovery.")
+                elif trades and trades[0].get("state") in ACTIVE_TRADE_STATES:
+                    trade = trades[0]
+                    if trade.get("state") == "buy_pending" and not trade.get("contract_id"):
+                        await self.trade_patch(trade["id"], {
+                            "state": "outcome_unknown",
+                            "error_message": "Worker restarted after stop request while buy outcome was unknown.",
+                        })
+                    await self.set_run(run["id"], "reconciliation_required",
+                                       stop_reason="Worker restarted after stop request with an unresolved trade; reconcile with Deriv before proceeding.")
+                else:
+                    await self.set_run(run["id"], "stopped", ended_at=utc_now(),
+                                       stop_reason="Stop request recovered after worker restart.")
+                continue
             if trades:
                 trade = trades[0]
                 if trade.get("state") in {"open", "settling", "outcome_unknown"} and trade.get("contract_id"):
