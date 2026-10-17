@@ -47,4 +47,4 @@ def test_bot_run_control_requires_fixed_stake_and_tick_duration():
             },
         },
     )
-    assert response.status_code == 422
+    assert response.status_code == 401
