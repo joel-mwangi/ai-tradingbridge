@@ -388,16 +388,17 @@ class DurableBotWorker:
                     if not proposal_id or ask_price <= 0:
                         await self.trade_patch(trade["id"], {"state": "failed", "error_message": "Invalid proposal response."})
                         raise WorkerError("Deriv returned an invalid proposal.")
-                    # A stop request or stale worker heartbeat can arrive while the
-                    # proposal is in flight. Recheck before the side-effecting buy.
+                    await self.trade_patch(trade["id"], {"state": "buy_pending", "proposal_id": str(proposal_id),
+                                                         "buy_requested_at": utc_now()})
+                    # A stop request or stale heartbeat can arrive while the proposal
+                    # is in flight. Check after the durable intent write, immediately
+                    # before the side-effecting request; never retry if the ack is lost.
                     if not await self.may_submit_buy(run_id):
                         await self.trade_patch(trade["id"], {
                             "state": "failed",
-                            "error_message": "Purchase prevented because the run was stopped before buy.",
+                            "error_message": "Purchase prevented before the buy request was sent.",
                         })
                         return
-                    await self.trade_patch(trade["id"], {"state": "buy_pending", "proposal_id": str(proposal_id),
-                                                         "buy_requested_at": utc_now()})
                     try:
                         bought = await self.request(ws, {"buy": str(proposal_id), "price": ask_price}, timeout=15)
                     except WorkerError:
