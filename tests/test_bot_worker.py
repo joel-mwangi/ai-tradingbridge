@@ -23,8 +23,12 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
         async def credential(_run):
             return SimpleNamespace(access_token="demo-token", expires_at=9_999_999_999)
 
+        class FakeSocket:
+            async def close(self):
+                return None
+
         async def open_socket(_token):
-            return object()
+            return FakeSocket()
 
         async def rows(table, _params):
             return [] if table == "bot_trades" else []
