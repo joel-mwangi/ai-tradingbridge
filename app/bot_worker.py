@@ -189,7 +189,8 @@ class DurableBotWorker:
                                stop_reason=current[0].get("stop_reason") or "User requested stop before purchase.")
             return False
         if status != "running":
-            raise WorkerError(f"Run is no longer running ({status}); purchase blocked.")
+            LOG.warning("purchase blocked because run is no longer running run_id=%s status=%s", run_id, status)
+            return False
         return True
 
     async def create_trade(self, run: dict[str, Any]) -> dict[str, Any]:
