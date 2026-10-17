@@ -21,7 +21,7 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field, SecretStr, StrictStr
+from pydantic import BaseModel, Field, SecretStr, StrictStr, field_validator
 import websockets
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -203,6 +203,18 @@ class OAuthExchangeRequest(BaseModel):
     code: StrictStr = Field(min_length=1, max_length=4096)
     code_verifier: StrictStr = Field(min_length=43, max_length=128)
     redirect_uri: StrictStr = Field(min_length=1, max_length=2048)
+
+
+class AccountOwnershipRequest(BaseModel):
+    user_id: StrictStr = Field(min_length=1, max_length=128)
+    account_ids: list[StrictStr] = Field(min_length=1, max_length=100)
+
+    @field_validator("account_ids")
+    @classmethod
+    def validate_account_ids(cls, value: list[str]) -> list[str]:
+        if any(not ACCOUNT_ID_RE.fullmatch(account_id) for account_id in value):
+            raise ValueError("Invalid Deriv account ID.")
+        return list(dict.fromkeys(value))
 
 
 def _origin_allowed(origin: str | None) -> bool:
@@ -429,6 +441,17 @@ async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Secure account linking could not be verified.")
+
+
+@router.post("/internal/account-ownership", include_in_schema=False)
+async def verify_account_ownership(
+    body: AccountOwnershipRequest,
+    x_tradebridge_bridge_token: Annotated[str | None, Header()] = None,
+) -> dict[str, list[str]]:
+    """Verify account ownership for trusted Next.js server routes only."""
+    _require_bridge_secret(x_tradebridge_bridge_token)
+    owned_ids = await _linked_account_ids(body.user_id, body.account_ids)
+    return {"owned_account_ids": sorted(owned_ids)}
 
 
 @router.post("/accounts")
