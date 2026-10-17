@@ -314,3 +314,13 @@ def test_restart_after_settlement_reconciles_totals_before_resuming(monkeypatch)
         assert any("reconciled run counters" in (event[2] or "") for event in events if event[0] == "run")
 
     asyncio.run(scenario())
+
+
+def test_supabase_service_role_headers_are_not_defaulted_on_upstream_http_client(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        await worker.close()
+        assert "apikey" not in worker.http.headers
+        assert "Authorization" not in worker.http.headers
+
+    asyncio.run(scenario())
