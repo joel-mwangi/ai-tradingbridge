@@ -3,15 +3,14 @@ import json
 import os
 from types import SimpleNamespace
 
-from app.bot_worker import DurableBotWorker, WorkerError
+from app.bot_worker import DurableBotWorker
 
 
 def make_worker(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-test-key")
     monkeypatch.setenv("DERIV_APP_ID", "12345")
-    worker = DurableBotWorker()
-    return worker
+    return DurableBotWorker()
 
 
 def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
@@ -19,6 +18,16 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
         worker = make_worker(monkeypatch)
         events = []
         request_calls = []
+        run = {
+            "id": "run-1", "user_id": "user-1", "account_id": "VRTC123",
+            "currency": "USD", "config": {
+                "id": "bot-1", "name": "Demo", "symbol": "1HZ100V",
+                "contractType": "DIGITEVEN", "duration": 1, "durationUnit": "t",
+                "stakeStrategy": {"type": "fixed", "amount": 1},
+                "stopConditions": [{"type": "tradeCount", "max": 1}],
+                "cooldownSeconds": 1, "maxTradesPerDay": 1,
+            },
+        }
 
         async def credential(_run):
             return SimpleNamespace(access_token="demo-token", expires_at=9_999_999_999)
@@ -31,9 +40,7 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
             return FakeSocket()
 
         async def rows(table, _params):
-            if table == "bot_runs":
-                return [run]
-            return []
+            return [run] if table == "bot_runs" else []
 
         async def create_trade(_run):
             return {"id": "trade-1", "state": "created"}
@@ -60,22 +67,64 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
         worker.trade_patch = trade_patch
         worker.set_run = set_run
         worker.request = request
-        run = {
-            "id": "run-1", "user_id": "user-1", "account_id": "VRTC123",
-            "currency": "USD", "config": {
-                "id": "bot-1", "name": "Demo", "symbol": "1HZ100V",
-                "contractType": "DIGITEVEN", "duration": 1, "durationUnit": "t",
-                "stakeStrategy": {"type": "fixed", "amount": 1},
-                "stopConditions": [{"type": "tradeCount", "max": 1}],
-                "cooldownSeconds": 1, "maxTradesPerDay": 1,
-            },
-        }
         await worker.execute_run(run)
         await worker.close()
         assert request_calls == ["proposal", "buy"]
         assert ("trade", "buy_pending") in events
         assert ("trade", "outcome_unknown") in events
         assert any(event[0] == "run" and event[1] == "reconciliation_required" for event in events)
+
+    asyncio.run(scenario())
+
+
+def test_settlement_records_broker_financials_and_stops_at_trade_limit(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        events = []
+        run = {
+            "id": "run-2", "status": "running", "started_at": "2026-10-17T04:00:00+00:00",
+            "config": {"stopConditions": [{"type": "tradeCount", "max": 1}],
+                       "maxTradesPerDay": 1, "maxConsecutiveLosses": 3},
+        }
+        trade = {"id": "trade-2", "contract_id": "12345", "state": "open"}
+
+        class SettledSocket:
+            async def send(self, _payload):
+                return None
+
+            async def recv(self):
+                return json.dumps({"proposal_open_contract": {
+                    "contract_id": 12345, "is_sold": True, "status": "won",
+                    "payout": 1.95, "profit": 0.95,
+                }})
+
+        async def trade_patch(_trade_id, body):
+            events.append(("trade", body))
+            return {"id": "trade-2", **body}
+
+        async def rows(table, _params):
+            if table == "bot_runs":
+                return [{"trade_count": 0, "wins": 0, "losses": 0, "realized_pnl": 0,
+                         "config": run["config"], "status": "running"}]
+            return [{"profit": 0.95, "state": "settled"}]
+
+        async def set_run(_run_id, status, **fields):
+            events.append(("run", status, fields))
+
+        async def patch_one(_table, _params, _body):
+            return {"id": "run-2"}
+
+        worker.trade_patch = trade_patch
+        worker.rows = rows
+        worker.set_run = set_run
+        worker.patch_one = patch_one
+        keep_running = await worker.monitor_contract(SettledSocket(), run, trade)
+        await worker.close()
+        settlement = next(body for kind, body in events if kind == "trade" and body.get("state") == "settled")
+        assert settlement["payout"] == 1.95
+        assert settlement["profit"] == 0.95
+        assert keep_running is False
+        assert any(event[0] == "run" and event[1] == "stopped" for event in events)
 
     asyncio.run(scenario())
 
@@ -87,7 +136,7 @@ def test_stale_worker_with_inflight_trade_requires_reconciliation(monkeypatch):
         stale = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
         events = []
 
-        async def rows(table, params):
+        async def rows(table, _params):
             if table == "bot_runs":
                 return [{"id": "run-1", "status": "running", "heartbeat_at": stale}]
             return [{"id": "trade-1", "state": "buy_pending", "contract_id": None}]
