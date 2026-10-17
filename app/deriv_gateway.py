@@ -143,6 +143,51 @@ async def _delete_credential(user_id: str) -> None:
         raise HTTPException(status_code=503, detail="Could not revoke the stored Deriv credential.")
 
 
+async def _store_account_links(user_id: str, account_ids: list[str]) -> None:
+    """Upsert verified Deriv account IDs into deriv_account_links for ownership checks."""
+    if not account_ids:
+        return
+    url, service_key = _credential_store_config()
+    rows = [{"user_id": user_id, "deriv_account_id": aid} for aid in account_ids]
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.post(
+                f"{url}/rest/v1/deriv_account_links",
+                params={"on_conflict": "user_id,deriv_account_id"},
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=ignore-duplicates,return=minimal",
+                },
+                json=rows,
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not store Deriv account links.")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not store Deriv account links.")
+
+
+async def _delete_account_links(user_id: str) -> None:
+    """Remove all deriv_account_links rows for a user on disconnect or revoke."""
+    url, service_key = _credential_store_config()
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.delete(
+                f"{url}/rest/v1/deriv_account_links",
+                params={"user_id": f"eq.{user_id}"},
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not remove Deriv account links.")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not remove Deriv account links.")
+
+
 class CredentialTransfer(BaseModel):
     user_id: StrictStr = Field(min_length=1, max_length=128)
     access_token: SecretStr = Field(min_length=1, max_length=4096)
@@ -296,6 +341,9 @@ async def exchange_oauth_code(
         raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
 
     await _store_credential(body.user_id, access_token, expires_in)
+    # Write account ownership links so _linked_account_ids() can verify them.
+    account_ids = [a["account_id"] for a in accounts]
+    await _store_account_links(body.user_id, account_ids)
     return {"accounts": accounts, "expires_in": expires_in}
 
 
@@ -304,7 +352,12 @@ async def transfer_credentials(
     body: CredentialTransfer,
     x_tradebridge_bridge_token: Annotated[str | None, Header()] = None,
 ) -> None:
-    """Trusted Next.js OAuth callback transfers a token; token is never returned."""
+    """Trusted Next.js OAuth callback transfers a token; token is never returned.
+
+    Note: this endpoint transfers a credential only — it does not have access to
+    the account list, so it cannot populate deriv_account_links. Account links are
+    written by POST /internal/oauth/exchange which has the full account payload.
+    """
     _require_bridge_secret(x_tradebridge_bridge_token)
     await _store_credential(body.user_id, body.access_token.get_secret_value(), body.expires_in)
 
@@ -316,6 +369,7 @@ async def revoke_transferred_credentials(
 ) -> None:
     _require_bridge_secret(x_tradebridge_bridge_token)
     await _delete_credential(user_id)
+    await _delete_account_links(user_id)
 
 
 async def _owned_credential(user_id: str) -> Credential:
@@ -516,6 +570,7 @@ async def activate_account_session(
 @router.delete("/session", status_code=204)
 async def disconnect_deriv(user_id: Annotated[str, Depends(current_user)]) -> None:
     await _delete_credential(user_id)
+    await _delete_account_links(user_id)
 
 
 _ALLOWED_CLIENT_REQUESTS = {

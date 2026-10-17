@@ -1,12 +1,14 @@
 # TradeBridge AI
 
-A Python research API for descriptive market-tick analysis. It does not place trades or claim a predictive edge.
+A Python research API and authenticated Deriv session gateway with an inline Demo bot executor.
+It does not support real-account trading.
 
 ## Requirements
 
 - Python 3.11 or newer
-- An always-on ASGI host for Deriv WebSocket sessions (not a serverless function runtime)
-- Supabase Auth and the `deriv_account_links` table for authenticated account ownership checks
+- An always-on ASGI host with outbound HTTPS and WebSocket access to `api.derivws.com`
+  (not a serverless function runtime — active WebSocket connections close on process restart)
+- A Supabase project with the migrations applied (see below)
 
 ## Local setup
 
@@ -22,15 +24,46 @@ Create a local `.env` file (never commit it):
 ```dotenv
 TRADEBRIDGE_API_TOKEN=GENERATE_A_LONG_RANDOM_SERVER_TO_SERVER_TOKEN
 SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SERVICE_ROLE_KEY
+DERIV_OAUTH_CLIENT_ID=YOUR_DERIV_OAUTH_CLIENT_ID
+DERIV_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/deriv/callback
+TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
+TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
+TRADEBRIDGE_ALLOWED_ORIGINS=https://YOUR_FRONTEND_HOST,http://localhost:3000
+TRADEBRIDGE_DEMO_MAX_STAKE=1000
 DERIV_SYMBOL=1HZ100V
 ```
 
-Generate a strong token locally (do not reuse a password): `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+Generate a strong token: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
 
-The analysis endpoints require `Authorization: Bearer <TRADEBRIDGE_API_TOKEN>`. The token must be stored only in server-side environment variables and supplied by a trusted backend; never embed it in browser JavaScript or a public mobile app. If a browser client needs the API, route requests through an authenticated TradeBridge server-side endpoint. The service returns 503 for analysis requests if the token is not configured, rather than running unauthenticated.
+Generate a Fernet key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 
-The Supabase service-role key bypasses Row Level Security. Keep it only in server-side environment variables or deployment secret settings; never put it in browser code or expose it in API responses. Prefer a dedicated, least-privilege database access design when practical.
+The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value in Next.js. Never
+expose it through `NEXT_PUBLIC_*`. The service-role key bypasses Supabase RLS — keep it
+only in server-side environment variables.
+
+## Supabase migrations
+
+Two tables are required. Apply the migration before starting the service:
+
+```powershell
+# With the Supabase CLI:
+supabase db push
+
+# Or directly with psql:
+psql $DATABASE_URL -f supabase/migrations/20261017000001_deriv_credentials.sql
+```
+
+Tables created:
+
+| Table | Purpose |
+|---|---|
+| `public.deriv_backend_credentials` | Fernet-encrypted Deriv OAuth tokens, keyed by user ID |
+| `public.deriv_account_links` | Maps app user IDs to verified Deriv account IDs |
+
+Both tables have RLS enabled with no browser-accessible policies. Only the service-role key
+(used server-side) can read or write them.
 
 ## Run and test
 
@@ -39,53 +72,75 @@ python -m pytest -q
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `/docs` for interactive API documentation. Supply the bearer token in the Authorize dialog to call analysis endpoints.
+Open `/docs` for interactive API documentation. Supply the bearer token in the Authorize
+dialog to call analysis endpoints.
 
 ## Endpoints
 
-- `GET /health` — public liveness only; does not reveal secret configuration.
-- `POST /analysis/digits` — authenticated descriptive analysis of a supplied array of digits.
-- `GET /analysis/digits/latest?symbol=1HZ100V&limit=1000` — authenticated query of stored ticks from `public.market_ticks`; accepted limits are 10–10,000 rows.
+### Public
 
-The API bounds request size, database result count, and upstream request timeout. Configure additional rate limiting and request-body limits at the API gateway or deployment platform; do not rely on in-process limits for a serverless or multi-worker deployment.
+- `GET /health` — liveness check; does not reveal secret configuration.
+
+### Analysis (server-to-server bearer auth via `TRADEBRIDGE_API_TOKEN`)
+
+- `POST /analysis/digits` — descriptive analysis of a supplied digit array.
+- `GET /analysis/digits/latest?symbol=1HZ100V&limit=1000` — analysis of stored ticks
+  from `public.market_ticks` (populated externally).
+
+### Deriv session gateway (Supabase JWT auth)
+
+- `POST /deriv/internal/oauth/exchange` — trusted Next.js callback: exchanges OAuth
+  code + PKCE verifier; FastAPI stores the encrypted token and writes `deriv_account_links`.
+- `POST /deriv/internal/credentials` — legacy credential transfer (token only; does not
+  write account links — use the OAuth exchange endpoint instead).
+- `GET /deriv/session` — safe session status; never returns credentials.
+- `DELETE /deriv/session` — disconnect; removes credential and account links.
+- `POST /deriv/accounts` — ownership-filtered account list.
+- `POST /deriv/ws-ticket` — issue a 30-second single-use WebSocket ticket.
+- `WS /deriv/ws?account_id=...` — authenticated Demo-only manual trading proxy.
+- `WS /deriv/live/market` — public market-data proxy; no persistence.
+
+### Bot executor (Supabase JWT auth, ticket-based WS auth)
+
+- `WS /bots/run?account_id=...` — inline Demo bot executor.
+  - Authenticate first with `POST /deriv/ws-ticket`.
+  - Connect with the ticket in the `sec-websocket-protocol` header.
+  - Send a `DemoBotConfig` JSON object as the first message after connection.
+  - Receive structured JSON events: `started`, `trade_opened`, `trade_settled`, `error`, `done`.
+  - Send `{"action": "stop"}` to stop gracefully after the current trade.
 
 ## Architecture
 
-TradeBridge browser -> authenticated FastAPI HTTP/WebSocket gateway -> Deriv OAuth/Options APIs. Live market ticks and history are forwarded in memory only and are not written to the database. Legacy analysis endpoints remain separate from this migration and may read historical rows that already exist in `public.market_ticks`.
+```
+Browser / Next.js
+  │
+  ├─ POST /deriv/internal/oauth/exchange
+  │    └─ FastAPI: PKCE code exchange → encrypt token → store credential + account links
+  │
+  ├─ POST /deriv/ws-ticket  →  30-second one-use ticket
+  │
+  └─ WS /bots/run?account_id=VRTC123
+       └─ FastAPI inline bot executor:
+            ├─ Validate ticket + Deriv credential + account ownership
+            ├─ Open Deriv Demo WebSocket via OTP
+            ├─ asyncio bot loop (bot_state TradeState machine):
+            │    CREATED → REQUESTING_PROPOSAL → BUY_PENDING → OPEN → SETTLING → SETTLED
+            │    Stop conditions checked after every settled trade
+            │    Cooldown between trades (exits immediately on stop signal)
+            ├─ Stream JSON events to frontend
+            └─ {"action":"stop"} → graceful stop after current trade
+```
+
+Live market ticks and history are forwarded in memory only. Bot execution is Demo-only;
+real-account execution is explicitly blocked at every validation layer.
+
+Active bot runs are tracked in-memory per process. A run stops if the server restarts.
+For multi-worker deployments, keep a single ASGI worker until WebSocket tickets and active
+run tracking are backed by a shared store (e.g. Redis or Supabase).
 
 ## Interpretation
 
-Frequency summaries and chi-square statistics are descriptive diagnostics, not trading signals. They do not prove future outcomes are predictable. Strategy claims require pre-registered hypotheses, adequate sample sizes, chronological train/validation/test splits, and realistic payout/cost modelling.
-
-## FastAPI-owned Deriv gateway
-
-This service can own Deriv OAuth code exchange, in-memory credential custody, account lookup, Demo-only authenticated trading WebSockets, and ephemeral public market-data WebSockets.
-
-Configure these server-only environment variables before enabling the frontend migration:
-
-```dotenv
-DERIV_OAUTH_CLIENT_ID=YOUR_DERIV_OAUTH_CLIENT_ID
-DERIV_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/deriv/callback
-TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
-TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
-TRADEBRIDGE_ALLOWED_ORIGINS=https://YOUR_FRONTEND_HOST,http://localhost:3000
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SERVICE_ROLE_KEY
-TRADEBRIDGE_DEMO_MAX_STAKE=1000
-```
-
-The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value configured in Next.js. Never expose it through `NEXT_PUBLIC_*`. The OAuth redirect URI must exactly match the callback URL registered with Deriv. Account lookup fails closed unless it can verify the account IDs against `public.deriv_account_links`.
-
-- `POST /deriv/internal/oauth/exchange` — trusted Next.js callback sends the OAuth code and PKCE verifier; FastAPI exchanges them and keeps the access token server-side.
-- `POST /deriv/accounts` — authenticated, ownership-filtered account list.
-- `GET /deriv/session` and `DELETE /deriv/session` — authenticated safe session status and disconnect.
-- `POST /deriv/ws-ticket` — issue a 30-second single-use WebSocket ticket after Supabase session validation.
-- `WS /deriv/ws?account_id=...` — authenticated Demo-only Options WebSocket proxy with server-side stake, contract, duration, and sell-request validation.
-- `WS /deriv/live/market` — public market-data WebSocket proxy; no live tick persistence.
-
-Deriv OAuth credentials are encrypted at rest in `public.deriv_backend_credentials`; the Fernet key must be generated locally and stored only in the backend's secret environment, separate from Supabase. Active WebSocket connections still close on process restart and clients must reconnect. Keep a single ASGI worker/replica until one-time WebSocket tickets are backed by a shared store; otherwise a ticket issued on one worker may arrive at another worker. The credential table migration must be applied before enabling the backend. Real-account execution is explicitly blocked. Treat this as a migration candidate until automated tests and the end-to-end Deriv workflow are verified.
-
-## Bot execution status
-
-The standalone bot worker and its worker-specific tests have been removed from this repository. Bot execution is therefore not operational through a background worker. The bot-control API may still contain routes that depend on a worker heartbeat; those routes should fail closed until bot execution is redesigned so **FastAPI is the only component that communicates with Deriv**. Do not start or enable automated bot trading, and keep Real-account automation disabled. The worker removal does not delete database tables or change the Supabase schema.
+Frequency summaries and chi-square statistics are descriptive diagnostics, not trading
+signals. They do not prove future outcomes are predictable. Strategy claims require
+pre-registered hypotheses, adequate sample sizes, chronological train/validation/test
+splits, and realistic payout/cost modelling.

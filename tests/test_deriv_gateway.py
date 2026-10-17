@@ -179,3 +179,84 @@ def test_credential_cipher_encrypts_and_round_trips_token(monkeypatch):
     encrypted = cipher.encrypt(token.encode("utf-8"))
     assert token.encode("utf-8") not in encrypted
     assert cipher.decrypt(encrypted).decode("utf-8") == token
+
+
+def test_oauth_exchange_writes_account_links(monkeypatch, credential_store):
+    """exchange_oauth_code must call _store_account_links after storing the credential."""
+    monkeypatch.setenv("TRADEBRIDGE_SESSION_BRIDGE_TOKEN", "bridge-secret")
+    monkeypatch.setenv("DERIV_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("DERIV_OAUTH_REDIRECT_URI", "https://app.example/api/auth/deriv/callback")
+
+    stored_links: list[tuple[str, list[str]]] = []
+
+    async def fake_store_links(user_id: str, account_ids: list[str]) -> None:
+        stored_links.append((user_id, account_ids))
+
+    monkeypatch.setattr(deriv_gateway, "_store_account_links", fake_store_links)
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def __init__(self, data):
+            self._data = data
+
+        def json(self):
+            return self._data
+
+    import httpx as _httpx
+
+    call_count = 0
+
+    async def fake_post(self_client, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if "oauth2/token" in url:
+            return FakeResponse({"access_token": "deriv-token", "expires_in": 3600})
+        return FakeResponse({})
+
+    async def fake_get(self_client, url, **kwargs):
+        return FakeResponse({"accounts": [{"account_id": "VRTC123", "account_type": "demo"}]})
+
+    monkeypatch.setattr(_httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(_httpx.AsyncClient, "get", fake_get)
+
+    response = client.post(
+        "/deriv/internal/oauth/exchange",
+        headers={"X-Tradebridge-Bridge-Token": "bridge-secret"},
+        json={
+            "user_id": "user-1",
+            "code": "auth-code",
+            "code_verifier": "a" * 43,
+            "redirect_uri": "https://app.example/api/auth/deriv/callback",
+        },
+    )
+    assert response.status_code == 200
+    assert len(stored_links) == 1
+    assert stored_links[0][0] == "user-1"
+    assert "VRTC123" in stored_links[0][1]
+
+
+def test_account_links_removed_on_disconnect(monkeypatch, credential_store):
+    """DELETE /deriv/session must remove both the credential and account links."""
+    deleted_creds: list[str] = []
+    deleted_links: list[str] = []
+
+    async def fake_delete_cred(user_id: str) -> None:
+        deleted_creds.append(user_id)
+
+    async def fake_delete_links(user_id: str) -> None:
+        deleted_links.append(user_id)
+
+    monkeypatch.setattr(deriv_gateway, "_delete_credential", fake_delete_cred)
+    monkeypatch.setattr(deriv_gateway, "_delete_account_links", fake_delete_links)
+
+    main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "user-1"
+    try:
+        response = client.delete("/deriv/session")
+    finally:
+        main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
+
+    assert response.status_code == 204
+    assert "user-1" in deleted_creds
+    assert "user-1" in deleted_links

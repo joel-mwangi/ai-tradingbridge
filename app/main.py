@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
 from app.deriv_gateway import router as deriv_router
-from app.bot_control import router as bot_router
+from app.bot_runner import router as bot_runner_router
 
 app = FastAPI(
     title="TradeBridge AI",
@@ -20,7 +20,7 @@ app = FastAPI(
 )
 
 app.include_router(deriv_router)
-app.include_router(bot_router)
+app.include_router(bot_runner_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
