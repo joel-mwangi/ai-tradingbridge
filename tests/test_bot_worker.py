@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from types import SimpleNamespace
 
 from app.bot_worker import DurableBotWorker
@@ -9,7 +10,9 @@ from app.bot_worker import DurableBotWorker
 def make_worker(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-test-key")
-    return DurableBotWorker()
+    worker = DurableBotWorker()
+    worker.last_heartbeat = time.time()
+    return worker
 
 
 def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
@@ -348,5 +351,44 @@ def test_worker_restart_preserves_stop_request_with_open_contract(monkeypatch):
 
         assert events and events[0][1] == "reconciliation_required"
         assert "stop request" in (events[0][2] or "").lower()
+
+    asyncio.run(scenario())
+
+
+
+def test_stale_worker_heartbeat_blocks_new_purchase(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        worker.last_heartbeat = time.time() - 60
+        try:
+            await worker.may_submit_buy("run-stale")
+        except Exception as exc:
+            assert "heartbeat" in str(exc).lower()
+        else:
+            raise AssertionError("stale worker heartbeat must block new purchases")
+        await worker.close()
+
+    asyncio.run(scenario())
+
+
+def test_stop_requested_after_proposal_blocks_purchase(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        events = []
+
+        async def rows(table, _params):
+            if table == "bot_runs":
+                return [{"status": "stopping", "stop_reason": "User requested stop."}]
+            return []
+
+        async def set_run(run_id, status, **fields):
+            events.append((run_id, status, fields.get("stop_reason")))
+
+        worker.rows = rows
+        worker.set_run = set_run
+        allowed = await worker.may_submit_buy("run-stop")
+        assert allowed is False
+        assert events and events[0][1] == "stopped"
+        await worker.close()
 
     asyncio.run(scenario())
