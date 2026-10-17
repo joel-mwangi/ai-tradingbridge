@@ -10,11 +10,13 @@ from app.bot_state import (
 
 
 def test_buy_requires_a_proposal_id_and_proposal_stage():
-    snapshot = TradeSnapshot(TradeState.REQUESTING_PROPOSAL)
-    assert not may_submit_buy(snapshot)
-    quoted = transition(snapshot, TradeState.BUY_PENDING, proposal_id="proposal-123")
-    # Once the buy attempt has been persisted, it must not be sent a second time.
-    assert not may_submit_buy(quoted)
+    waiting = TradeSnapshot(TradeState.REQUESTING_PROPOSAL)
+    assert not may_submit_buy(waiting)
+    quoted = TradeSnapshot(TradeState.REQUESTING_PROPOSAL, proposal_id="proposal-123")
+    assert may_submit_buy(quoted)
+    # Persist the buy attempt before sending it; a retry is no longer allowed.
+    buy_pending = transition(quoted, TradeState.BUY_PENDING)
+    assert not may_submit_buy(buy_pending)
 
 
 def test_buy_ack_must_include_contract_before_open_state():
