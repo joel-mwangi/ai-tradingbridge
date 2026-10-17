@@ -143,12 +143,18 @@ def test_stale_worker_with_inflight_trade_requires_reconciliation(monkeypatch):
         async def set_run(run_id, status, **fields):
             events.append((run_id, status, fields.get("stop_reason")))
 
+        async def trade_patch(trade_id, body):
+            events.append(("trade", body.get("state"), body.get("error_message")))
+            return {"id": trade_id, **body}
+
         worker.rows = rows
         worker.set_run = set_run
+        worker.trade_patch = trade_patch
         await worker.recover_stale_runs()
         await worker.close()
-        assert events and events[0][1] == "reconciliation_required"
-        assert "manual reconciliation" in (events[0][2] or "")
+        assert any(event[0] == "trade" and event[1] == "outcome_unknown" for event in events)
+        assert any(event[0] == "run" and event[1] == "reconciliation_required" for event in events)
+        assert any("manual reconciliation" in (event[2] or "") for event in events if event[0] == "run")
 
     asyncio.run(scenario())
 
