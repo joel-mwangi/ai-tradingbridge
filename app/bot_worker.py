@@ -189,6 +189,61 @@ class DurableBotWorker:
             raise WorkerError("Could not persist trade ledger update.")
         return row
 
+    async def sync_run_totals(self, run_id: str) -> dict[str, Any]:
+        """Rebuild run counters from settled ledger rows; safe to repeat after a crash."""
+        settled = await self.rows("bot_trades", {
+            "select": "profit,state", "run_id": f"eq.{run_id}",
+            "state": "eq.settled", "limit": "1000",
+        })
+        profits = [float(row.get("profit") or 0) for row in settled]
+        updated = await self.patch_one("bot_runs", {"id": f"eq.{run_id}"}, {
+            "trade_count": len(profits),
+            "wins": sum(1 for profit in profits if profit > 0),
+            "losses": sum(1 for profit in profits if profit <= 0),
+            "realized_pnl": sum(profits),
+            "heartbeat_at": utc_now(),
+            "updated_at": utc_now(),
+        })
+        if updated is None:
+            raise WorkerError("Could not reconcile run counters from the settled trade ledger.")
+        return updated
+
+    async def risk_stop_reason(self, run: dict[str, Any]) -> str | None:
+        config = run.get("config") or {}
+        count = int(run.get("trade_count") or 0)
+        pnl = float(run.get("realized_pnl") or 0)
+        if count >= int(config.get("maxTradesPerDay") or 20):
+            return "Maximum trade count reached."
+        for condition in config.get("stopConditions", []):
+            kind = condition.get("type")
+            if kind == "tradeCount" and count >= int(condition.get("max") or 1):
+                return "Configured trade-count limit reached."
+            if kind == "loss" and pnl <= -float(condition.get("limit") or 0):
+                return "Configured loss limit reached."
+            if kind == "profit" and pnl >= float(condition.get("target") or 0):
+                return "Configured profit target reached."
+            if kind == "time":
+                try:
+                    started_at = datetime.fromisoformat(str(run.get("started_at")).replace("Z", "+00:00")).timestamp()
+                except (TypeError, ValueError):
+                    started_at = time.time()
+                if time.time() - started_at >= float(condition.get("seconds") or 0):
+                    return "Configured time limit reached."
+        max_consecutive = int(config.get("maxConsecutiveLosses") or 3)
+        recent = await self.rows("bot_trades", {
+            "select": "profit,state", "run_id": f"eq.{run['id']}",
+            "state": "eq.settled", "order": "settled_at.desc", "limit": str(max_consecutive),
+        })
+        consecutive_losses = 0
+        for settled in recent:
+            if float(settled.get("profit") or 0) <= 0:
+                consecutive_losses += 1
+            else:
+                break
+        if consecutive_losses >= max_consecutive:
+            return "Maximum consecutive-loss limit reached."
+        return None
+
     async def monitor_contract(self, ws, run: dict[str, Any], trade: dict[str, Any]) -> bool:
         contract_id = trade.get("contract_id")
         if not contract_id:
@@ -212,51 +267,11 @@ class DurableBotWorker:
                         "state": "settled", "payout": payout, "profit": profit,
                         "broker_status": str(contract.get("status") or "sold"), "settled_at": utc_now(),
                     })
-                    runs = await self.rows("bot_runs", {"select": "trade_count,wins,losses,realized_pnl,config,status",
-                                                          "id": f"eq.{run['id']}", "limit": "1"})
-                    if not runs:
-                        return False
-                    latest = runs[0]
-                    config = latest["config"]
-                    count = int(latest.get("trade_count") or 0) + 1
-                    wins = int(latest.get("wins") or 0) + int(profit > 0)
-                    losses = int(latest.get("losses") or 0) + int(profit <= 0)
-                    pnl = float(latest.get("realized_pnl") or 0) + profit
-                    # Update counters without overwriting a concurrent user stop request.
-                    await self.patch_one("bot_runs", {"id": f"eq.{run['id']}"}, {
-                        "trade_count": count, "wins": wins, "losses": losses,
-                        "realized_pnl": pnl, "heartbeat_at": utc_now(), "updated_at": utc_now(),
-                        "version": int(run.get("version") or 0) + 1,
-                    })
-                    stop_conditions = config.get("stopConditions", [])
-                    should_stop = count >= int(config.get("maxTradesPerDay") or 20)
-                    for condition in stop_conditions:
-                        kind = condition.get("type")
-                        if kind == "tradeCount" and count >= int(condition.get("max") or 1): should_stop = True
-                        if kind == "loss" and pnl <= -float(condition.get("limit") or 0): should_stop = True
-                        if kind == "profit" and pnl >= float(condition.get("target") or 0): should_stop = True
-                        if kind == "time":
-                            try:
-                                started_at = datetime.fromisoformat(str(run.get("started_at")).replace("Z", "+00:00")).timestamp()
-                            except (TypeError, ValueError):
-                                started_at = time.time()
-                            if time.time() - started_at >= float(condition.get("seconds") or 0): should_stop = True
-                    max_consecutive = int(config.get("maxConsecutiveLosses") or 3)
-                    recent = await self.rows("bot_trades", {
-                        "select": "profit,state", "run_id": f"eq.{run['id']}",
-                        "state": "eq.settled", "order": "settled_at.desc", "limit": str(max_consecutive),
-                    })
-                    consecutive_losses = 0
-                    for settled in recent:
-                        if float(settled.get("profit") or 0) <= 0:
-                            consecutive_losses += 1
-                        else:
-                            break
-                    if consecutive_losses >= max_consecutive:
-                        should_stop = True
-                    if latest.get("status") == "stopping" or should_stop:
+                    latest = await self.sync_run_totals(str(run["id"]))
+                    stop_reason = await self.risk_stop_reason(latest)
+                    if latest.get("status") == "stopping" or stop_reason:
                         await self.set_run(run["id"], "stopped", ended_at=utc_now(),
-                                           stop_reason="Stop requested or configured risk limit reached.")
+                                           stop_reason=latest.get("stop_reason") if latest.get("status") == "stopping" else stop_reason)
                         return False
                     return True
         except (TimeoutError, websockets.ConnectionClosed, OSError):
@@ -426,6 +441,16 @@ class DurableBotWorker:
                     # Known contract ID is sufficient to resume monitoring, never to place a replacement buy.
                     await self.set_run(run["id"], "queued",
                                        stop_reason="Worker restarted; resuming monitoring of the known contract.")
+                elif trade.get("state") == "settled":
+                    # A crash may happen after recording settlement but before updating run totals.
+                    latest = await self.sync_run_totals(str(run["id"]))
+                    stop_reason = await self.risk_stop_reason(latest)
+                    if latest.get("status") == "stopping" or stop_reason:
+                        await self.set_run(run["id"], "stopped", ended_at=utc_now(),
+                                           stop_reason=latest.get("stop_reason") if latest.get("status") == "stopping" else f"Recovered settlement: {stop_reason}")
+                    else:
+                        await self.set_run(run["id"], "queued",
+                                           stop_reason="Recovered settled ledger and reconciled run counters; continuing safely.")
                 elif trade.get("state") in ACTIVE_TRADE_STATES:
                     if trade.get("state") == "buy_pending" and not trade.get("contract_id"):
                         await self.trade_patch(trade["id"], {
