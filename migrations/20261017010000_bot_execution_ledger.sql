@@ -53,6 +53,7 @@ create table if not exists public.bot_trades (
   broker_status text,
   error_code text,
   error_message text,
+  monitor_attempts integer not null default 0 check (monitor_attempts >= 0),
   proposal_requested_at timestamptz,
   buy_requested_at timestamptz,
   opened_at timestamptz,
