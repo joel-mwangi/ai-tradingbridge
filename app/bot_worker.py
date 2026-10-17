@@ -185,7 +185,7 @@ class DurableBotWorker:
                 contract = msg.get("proposal_open_contract")
                 if not isinstance(contract, dict) or str(contract.get("contract_id")) != str(contract_id):
                     continue
-                await self.set_run(run["id"], "running")
+                await self.patch_one("bot_runs", {"id": f"eq.{run['id']}"}, {"heartbeat_at": utc_now(), "updated_at": utc_now()})
                 if contract.get("is_sold") or contract.get("status") in {"won", "lost", "sold"}:
                     payout = float(contract.get("payout") or 0)
                     profit = float(contract.get("profit") or 0)
@@ -281,7 +281,12 @@ class DurableBotWorker:
                     }
                     if config.get("barrier") is not None:
                         proposal_payload["barrier"] = str(config["barrier"])
-                    proposal = await self.request(ws, proposal_payload, timeout=15)
+                    try:
+                        proposal = await self.request(ws, proposal_payload, timeout=15)
+                    except Exception as exc:
+                        # Proposal requests have no purchase side effect; a timeout is safe to fail.
+                        await self.trade_patch(trade["id"], {"state": "failed", "error_message": f"Proposal failed before buy ({type(exc).__name__})."})
+                        raise
                     proposal_obj = proposal.get("proposal") or {}
                     proposal_id = proposal_obj.get("id")
                     ask_price = float(proposal_obj.get("ask_price") or 0)
