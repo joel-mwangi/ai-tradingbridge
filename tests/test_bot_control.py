@@ -48,3 +48,34 @@ def test_bot_run_control_requires_fixed_stake_and_tick_duration():
         },
     )
     assert response.status_code == 401
+
+
+def test_bot_run_queue_requires_a_fresh_worker_heartbeat(monkeypatch):
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+    from fastapi import HTTPException
+    import app.bot_control as control
+
+    async def fresh(_method, _table, **_kwargs):
+        return [{"last_seen_at": datetime.now(timezone.utc).isoformat()}]
+
+    async def stale(_method, _table, **_kwargs):
+        return [{"last_seen_at": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()}]
+
+    async def missing(_method, _table, **_kwargs):
+        return []
+
+    monkeypatch.setattr(control, "_db_request", fresh)
+    asyncio.run(control._require_live_worker())
+
+    monkeypatch.setattr(control, "_db_request", stale)
+    with pytest.raises(HTTPException) as stale_error:
+        asyncio.run(control._require_live_worker())
+    assert stale_error.value.status_code == 503
+
+    monkeypatch.setattr(control, "_db_request", missing)
+    with pytest.raises(HTTPException) as missing_error:
+        asyncio.run(control._require_live_worker())
+    assert missing_error.value.status_code == 503
