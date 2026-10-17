@@ -154,6 +154,31 @@ def test_stale_worker_with_inflight_trade_requires_reconciliation(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_stale_worker_with_known_contract_requeues_monitoring_not_buy(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+        events = []
+
+        async def rows(table, _params):
+            if table == "bot_runs":
+                return [{"id": "run-3", "status": "running", "heartbeat_at": stale}]
+            return [{"id": "trade-3", "state": "outcome_unknown", "contract_id": "12345"}]
+
+        async def set_run(run_id, status, **fields):
+            events.append((run_id, status, fields.get("stop_reason")))
+
+        worker.rows = rows
+        worker.set_run = set_run
+        await worker.recover_stale_runs()
+        await worker.close()
+        assert events and events[0][1] == "queued"
+        assert "known contract" in (events[0][2] or "")
+
+    asyncio.run(scenario())
+
+
 def test_worker_requires_explicit_server_credentials(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
