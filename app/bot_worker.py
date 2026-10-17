@@ -20,9 +20,13 @@ from urllib.parse import urlparse
 
 import httpx
 import websockets
+from dotenv import load_dotenv
 from fastapi import HTTPException
 
 from app.deriv_gateway import _linked_account_ids, _load_credential
+
+# Load local .env for Windows/local runs; deployed environment variables take precedence.
+load_dotenv()
 
 LOG = logging.getLogger("tradebridge.bot_worker")
 TERMINAL_RUNS = {"stopped", "completed", "failed", "interrupted"}
