@@ -226,11 +226,15 @@ def test_known_contract_disconnect_requeues_monitoring_without_new_buy(monkeypat
         async def set_run(run_id, status, **fields):
             events.append(("run", status, fields.get("stop_reason")))
 
+        async def rows(table, _params):
+            return [{"status": "running"}] if table == "bot_runs" else []
+
         async def patch_one(_table, _params, _body):
             return {"id": "run-known"}
 
         worker.trade_patch = trade_patch
         worker.set_run = set_run
+        worker.rows = rows
         worker.patch_one = patch_one
         keep_running = await worker.monitor_contract(DisconnectedSocket(), run, trade)
         await worker.close()
