@@ -371,9 +371,18 @@ class DurableBotWorker:
                 continue
             trades = await self.rows("bot_trades", {"select": "*", "run_id": f"eq.{run['id']}",
                                                     "order": "created_at.desc", "limit": "1"})
-            if trades and trades[0].get("state") in ACTIVE_TRADE_STATES:
-                await self.set_run(run["id"], "reconciliation_required",
-                                   stop_reason="Stale worker heartbeat with unresolved trade; manual reconciliation required.")
+            if trades:
+                trade = trades[0]
+                if trade.get("state") in {"open", "settling", "outcome_unknown"} and trade.get("contract_id"):
+                    # Known contract ID is sufficient to resume monitoring, never to place a replacement buy.
+                    await self.set_run(run["id"], "queued",
+                                       stop_reason="Worker restarted; resuming monitoring of the known contract.")
+                elif trade.get("state") in ACTIVE_TRADE_STATES:
+                    await self.set_run(run["id"], "reconciliation_required",
+                                       stop_reason="Stale worker heartbeat with ambiguous purchase; manual reconciliation required.")
+                else:
+                    await self.set_run(run["id"], "interrupted", ended_at=utc_now(),
+                                       stop_reason="Worker heartbeat expired before a trade was in flight.")
             else:
                 await self.set_run(run["id"], "interrupted", ended_at=utc_now(),
                                    stop_reason="Worker heartbeat expired before a trade was in flight.")
