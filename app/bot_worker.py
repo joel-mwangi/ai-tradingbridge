@@ -303,6 +303,7 @@ class DurableBotWorker:
                         return
                     # The known contract is conclusively settled; continue through the
                     # normal risk-gated loop using a fresh authenticated Demo session.
+                    trade["state"] = "settled"
                 if trade.get("state") not in {"settled", "failed"}:
                     await self.set_run(run_id, "reconciliation_required",
                                        stop_reason="Existing trade state requires reconciliation.")
