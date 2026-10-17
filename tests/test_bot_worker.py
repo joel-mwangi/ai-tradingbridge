@@ -273,3 +273,40 @@ def test_run_totals_are_rebuilt_from_settled_ledger_idempotently(monkeypatch):
         assert writes[0]["trade_count"] == writes[1]["trade_count"] == 3
 
     asyncio.run(scenario())
+
+
+def test_restart_after_settlement_reconciles_totals_before_resuming(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+        events = []
+
+        async def rows(table, _params):
+            if table == "bot_runs":
+                return [{"id": "run-settled", "status": "running", "heartbeat_at": stale}]
+            return [{"id": "trade-settled", "state": "settled", "contract_id": "12345"}]
+
+        async def sync_run_totals(run_id):
+            events.append(("sync", run_id))
+            return {"id": run_id, "status": "running", "trade_count": 1, "wins": 1,
+                    "losses": 0, "realized_pnl": 0.95, "config": {"stopConditions": []}}
+
+        async def risk_stop_reason(_run):
+            return None
+
+        async def set_run(run_id, status, **fields):
+            events.append(("run", status, fields.get("stop_reason")))
+
+        worker.rows = rows
+        worker.sync_run_totals = sync_run_totals
+        worker.risk_stop_reason = risk_stop_reason
+        worker.set_run = set_run
+        await worker.recover_stale_runs()
+        await worker.close()
+
+        assert ("sync", "run-settled") in events
+        assert any(event[0] == "run" and event[1] == "queued" for event in events)
+        assert any("reconciled run counters" in (event[2] or "") for event in events if event[0] == "run")
+
+    asyncio.run(scenario())
