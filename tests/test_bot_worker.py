@@ -22,7 +22,7 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
         request_calls = []
         run = {
             "id": "run-1", "user_id": "user-1", "account_id": "VRTC123",
-            "currency": "USD", "config": {
+            "status": "running", "currency": "USD", "config": {
                 "id": "bot-1", "name": "Demo", "symbol": "1HZ100V",
                 "contractType": "DIGITEVEN", "duration": 1, "durationUnit": "t",
                 "stakeStrategy": {"type": "fixed", "amount": 1},
