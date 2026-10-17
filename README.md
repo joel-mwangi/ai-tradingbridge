@@ -57,7 +57,6 @@ TradeBridge browser -> authenticated FastAPI HTTP/WebSocket gateway -> Deriv OAu
 
 Frequency summaries and chi-square statistics are descriptive diagnostics, not trading signals. They do not prove future outcomes are predictable. Strategy claims require pre-registered hypotheses, adequate sample sizes, chronological train/validation/test splits, and realistic payout/cost modelling.
 
-
 ## FastAPI-owned Deriv gateway
 
 This service can own Deriv OAuth code exchange, in-memory credential custody, account lookup, Demo-only authenticated trading WebSockets, and ephemeral public market-data WebSockets.
@@ -87,30 +86,6 @@ The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value configur
 
 Deriv OAuth credentials are encrypted at rest in `public.deriv_backend_credentials`; the Fernet key must be generated locally and stored only in the backend's secret environment, separate from Supabase. Active WebSocket connections still close on process restart and clients must reconnect. Keep a single ASGI worker/replica until one-time WebSocket tickets are backed by a shared store; otherwise a ticket issued on one worker may arrive at another worker. The credential table migration must be applied before enabling the backend. Real-account execution is explicitly blocked. Treat this as a migration candidate until automated tests and the end-to-end Deriv workflow are verified.
 
+## Bot execution status
 
-## Demo bot execution (implementation candidate; deployment not verified)
-
-- `app/bot_state.py` defines legal durable trade transitions.
-- `app/bot_control.py` exposes authenticated `/bots/runs` create/list/detail/stop endpoints. Run creation fails closed unless the worker heartbeat is fresh and the linked Deriv account is verified as Demo.
-- `app/bot_worker.py` is the separately runnable persistent worker: `python -m app.bot_worker`. It claims queued runs, persists the trade ledger before side effects, requests proposals, buys only after validation, monitors settlement, and records broker-confirmed payout/profit.
-- The shared run/trade/worker-heartbeat schema is defined by TradeBridge's canonical migration: `joel-mwangi/tradebridge/supabase/migrations/20261017010000_bot_execution_ledger.sql`. Do not maintain or apply a second copy from this repository.
-- Ambiguous buy acknowledgements become `outcome_unknown` / `reconciliation_required`; the worker does not retry that purchase. A known contract ID can be re-monitored after a restart.
-
-This code is still a PR candidate, not a verified production service. The migration has not been confirmed applied to the correct TradeBridge Supabase project, the worker has not been deployed to a persistent host, and a live controlled Demo lifecycle has not passed. Do not treat API acceptance or CI as proof of real broker execution. Real-account automated execution must remain disabled.
-
-
-## Durable Demo bot execution (separate worker)
-
-Automated bot runs are server-authoritative and Demo-only. The FastAPI control API stores run commands in `bot_runs`; a separate persistent process consumes them and writes each broker interaction to `bot_trades`. The worker must run on a long-lived host, not inside a Vercel request handler.
-
-Start the worker with:
-
-```bash
-python -m app.bot_worker
-```
-
-Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and the same `TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY` used by FastAPI. The worker obtains an account-scoped Demo Options WebSocket URL from Deriv using the stored server-side OAuth credential. It does not accept Real accounts and it rechecks that the account remains linked to the user before execution.
-
-The API will not queue a new run unless `bot_worker_heartbeats` has a recent heartbeat. If a buy request may have reached Deriv but its acknowledgement is missing, the worker records `outcome_unknown` and never resubmits that purchase. Known contract IDs can be re-monitored after transient disconnects; repeated monitoring failures or unknown purchase outcomes remain locked for reconciliation.
-
-Apply the canonical migration from `joel-mwangi/tradebridge/supabase/migrations/20261017010000_bot_execution_ledger.sql` once to the confirmed TradeBridge Supabase project. The migration is owned by TradeBridge; this repository owns the worker implementation only. Do not apply it to Azimart or keep a duplicate migration here. Before enabling the UI in a deployed environment, run the Python test suite and controlled Demo end-to-end tests for proposal/buy, uncertain acknowledgement, disconnect, settlement, stop, and worker restart. Real-account automated execution remains disabled.
+The standalone bot worker and its worker-specific tests have been removed from this repository. Bot execution is therefore not operational through a background worker. The bot-control API may still contain routes that depend on a worker heartbeat; those routes should fail closed until bot execution is redesigned so **FastAPI is the only component that communicates with Deriv**. Do not start or enable automated bot trading, and keep Real-account automation disabled. The worker removal does not delete database tables or change the Supabase schema.
