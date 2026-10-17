@@ -31,7 +31,9 @@ def test_uncertain_buy_ack_is_persisted_and_never_retried(monkeypatch):
             return FakeSocket()
 
         async def rows(table, _params):
-            return [] if table == "bot_trades" else []
+            if table == "bot_runs":
+                return [run]
+            return []
 
         async def create_trade(_run):
             return {"id": "trade-1", "state": "created"}
