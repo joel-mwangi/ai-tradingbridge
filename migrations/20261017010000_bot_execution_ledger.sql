@@ -28,6 +28,12 @@ create unique index if not exists bot_runs_one_active_per_bot_account
   on public.bot_runs(user_id, account_id, bot_id)
   where status in ('queued', 'running', 'stopping', 'reconciliation_required');
 
+-- Enforce account-wide exclusivity at the database boundary as well as in the API.
+-- This prevents two distinct bot IDs from racing into concurrent execution on one account.
+create unique index if not exists bot_runs_one_active_per_account
+  on public.bot_runs(user_id, account_id)
+  where status in ('queued', 'running', 'stopping', 'reconciliation_required');
+
 create index if not exists bot_runs_user_created_at
   on public.bot_runs(user_id, created_at desc);
 
