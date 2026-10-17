@@ -281,7 +281,7 @@ class DurableBotWorker:
                 if trade.get("state") in {"open", "settling", "outcome_unknown"} and trade.get("contract_id"):
                     ws = await self.open_socket(run, credential)
                     try:
-                            should_continue = await self.monitor_contract(ws, run, trade)
+                        should_continue = await self.monitor_contract(ws, run, trade)
                     finally:
                         await ws.close()
                     if not should_continue:
