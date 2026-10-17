@@ -203,8 +203,12 @@ class DurableBotWorker:
                     wins = int(latest.get("wins") or 0) + int(profit > 0)
                     losses = int(latest.get("losses") or 0) + int(profit <= 0)
                     pnl = float(latest.get("realized_pnl") or 0) + profit
-                    await self.set_run(run["id"], "running", trade_count=count, wins=wins, losses=losses,
-                                       realized_pnl=pnl, version=int(run.get("version") or 0) + 1)
+                    # Update counters without overwriting a concurrent user stop request.
+                    await self.patch_one("bot_runs", {"id": f"eq.{run['id']}"}, {
+                        "trade_count": count, "wins": wins, "losses": losses,
+                        "realized_pnl": pnl, "heartbeat_at": utc_now(), "updated_at": utc_now(),
+                        "version": int(run.get("version") or 0) + 1,
+                    })
                     stop_conditions = config.get("stopConditions", [])
                     should_stop = count >= int(config.get("maxTradesPerDay") or 20)
                     for condition in stop_conditions:
