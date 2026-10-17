@@ -88,10 +88,12 @@ The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value configur
 Deriv OAuth credentials are encrypted at rest in `public.deriv_backend_credentials`; the Fernet key must be generated locally and stored only in the backend's secret environment, separate from Supabase. Active WebSocket connections still close on process restart and clients must reconnect. Keep a single ASGI worker/replica until one-time WebSocket tickets are backed by a shared store; otherwise a ticket issued on one worker may arrive at another worker. The credential table migration must be applied before enabling the backend. Real-account execution is explicitly blocked. Treat this as a migration candidate until automated tests and the end-to-end Deriv workflow are verified.
 
 
-## Demo bot execution migration (in progress)
+## Demo bot execution (implementation candidate; deployment not verified)
 
-The durable bot state-machine core is introduced in `app/bot_state.py`. It is deliberately separate from broker I/O: a future persistent worker must persist each transition before sending a side-effecting request, and it must reconcile an `outcome_unknown` trade against Deriv before another purchase is allowed.
+- `app/bot_state.py` defines legal durable trade transitions.
+- `app/bot_control.py` exposes authenticated `/bots/runs` create/list/detail/stop endpoints. Run creation fails closed unless the worker heartbeat is fresh and the linked Deriv account is verified as Demo.
+- `app/bot_worker.py` is the separately runnable persistent worker: `python -m app.bot_worker`. It claims queued runs, persists the trade ledger before side effects, requests proposals, buys only after validation, monitors settlement, and records broker-confirmed payout/profit.
+- `migrations/20261017010000_bot_execution_ledger.sql` creates run, trade, and worker-heartbeat tables with RLS enabled and no browser write policies.
+- Ambiguous buy acknowledgements become `outcome_unknown` / `reconciliation_required`; the worker does not retry that purchase. A known contract ID can be re-monitored after a restart.
 
-The proposed database schema is in `migrations/20261017010000_bot_execution_ledger.sql`. It creates a durable run ledger and a per-trade broker ledger, adds a unique active-run guard per user/account/bot, and enables RLS without client policies so browser clients cannot write execution records directly.
-
-**Important: this is not yet an active execution worker.** The existing browser bot runner still depends on the open TradeBridge tab and shared WebSocket. Do not deploy this migration alone expecting background trading. The next implementation step is a persistent ASGI worker and authenticated run-control API, followed by frontend integration. Real-account execution must remain disabled.
+This code is still a PR candidate, not a verified production service. The migration has not been confirmed applied to the correct TradeBridge Supabase project, the worker has not been deployed to a persistent host, and a live controlled Demo lifecycle has not passed. Do not treat API acceptance or CI as proof of real broker execution. Real-account automated execution must remain disabled.
