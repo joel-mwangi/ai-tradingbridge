@@ -170,6 +170,28 @@ class DurableBotWorker:
                 raise WorkerError(f"Deriv rejected {next(iter(payload))}: {error.get('message', 'unknown error')}")
             return msg
 
+    def worker_heartbeat_healthy(self) -> bool:
+        """Fail closed if the durable worker heartbeat is missing or stale."""
+        return self.last_heartbeat > 0 and time.time() - self.last_heartbeat <= 30
+
+    async def may_submit_buy(self, run_id: str) -> bool:
+        """Recheck liveness and durable run status immediately before any purchase."""
+        if not self.worker_heartbeat_healthy():
+            raise WorkerError("Worker heartbeat is missing or stale; new purchases are paused.")
+        current = await self.rows("bot_runs", {
+            "select": "status,stop_reason", "id": f"eq.{run_id}", "limit": "1",
+        })
+        if not current:
+            raise WorkerError("Run disappeared before purchase; execution blocked.")
+        status = current[0].get("status")
+        if status == "stopping":
+            await self.set_run(run_id, "stopped", ended_at=utc_now(),
+                               stop_reason=current[0].get("stop_reason") or "User requested stop before purchase.")
+            return False
+        if status != "running":
+            raise WorkerError(f"Run is no longer running ({status}); purchase blocked.")
+        return True
+
     async def create_trade(self, run: dict[str, Any]) -> dict[str, Any]:
         config = run["config"]
         key = uuid.uuid4().hex
@@ -334,6 +356,8 @@ class DurableBotWorker:
             ws = await self.open_socket(run, credential)
             try:
                 while not self.stopping.is_set():
+                    # Existing contracts may still be monitored after heartbeat loss,
+                    # but a new purchase must never be initiated by a stale worker.
                     current = await self.rows("bot_runs", {"select": "*", "id": f"eq.{run_id}", "limit": "1"})
                     if not current:
                         return
@@ -364,6 +388,14 @@ class DurableBotWorker:
                     if not proposal_id or ask_price <= 0:
                         await self.trade_patch(trade["id"], {"state": "failed", "error_message": "Invalid proposal response."})
                         raise WorkerError("Deriv returned an invalid proposal.")
+                    # A stop request or stale worker heartbeat can arrive while the
+                    # proposal is in flight. Recheck before the side-effecting buy.
+                    if not await self.may_submit_buy(run_id):
+                        await self.trade_patch(trade["id"], {
+                            "state": "failed",
+                            "error_message": "Purchase prevented because the run was stopped before buy.",
+                        })
+                        return
                     await self.trade_patch(trade["id"], {"state": "buy_pending", "proposal_id": str(proposal_id),
                                                          "buy_requested_at": utc_now()})
                     try:
