@@ -193,7 +193,7 @@ class DurableBotWorker:
                 if not isinstance(contract, dict) or str(contract.get("contract_id")) != str(contract_id):
                     continue
                 await self.patch_one("bot_runs", {"id": f"eq.{run['id']}"}, {"heartbeat_at": utc_now(), "updated_at": utc_now()})
-                if contract.get("is_sold") or contract.get("status") in {"won", "lost", "sold"}:
+                if contract.get("is_sold") or contract.get("is_expired") or contract.get("status") in {"won", "lost", "sold", "expired", "cancelled"}:
                     payout = float(contract.get("payout") or 0)
                     profit = float(contract.get("profit") or 0)
                     await self.trade_patch(trade["id"], {
