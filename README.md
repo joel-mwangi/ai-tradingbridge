@@ -97,3 +97,20 @@ Deriv OAuth credentials are encrypted at rest in `public.deriv_backend_credentia
 - Ambiguous buy acknowledgements become `outcome_unknown` / `reconciliation_required`; the worker does not retry that purchase. A known contract ID can be re-monitored after a restart.
 
 This code is still a PR candidate, not a verified production service. The migration has not been confirmed applied to the correct TradeBridge Supabase project, the worker has not been deployed to a persistent host, and a live controlled Demo lifecycle has not passed. Do not treat API acceptance or CI as proof of real broker execution. Real-account automated execution must remain disabled.
+
+
+## Durable Demo bot execution (separate worker)
+
+Automated bot runs are server-authoritative and Demo-only. The FastAPI control API stores run commands in `bot_runs`; a separate persistent process consumes them and writes each broker interaction to `bot_trades`. The worker must run on a long-lived host, not inside a Vercel request handler.
+
+Start the worker with:
+
+```bash
+python -m app.bot_worker
+```
+
+Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and the same `TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY` used by FastAPI. The worker obtains an account-scoped Demo Options WebSocket URL from Deriv using the stored server-side OAuth credential. It does not accept Real accounts and it rechecks that the account remains linked to the user before execution.
+
+The API will not queue a new run unless `bot_worker_heartbeats` has a recent heartbeat. If a buy request may have reached Deriv but its acknowledgement is missing, the worker records `outcome_unknown` and never resubmits that purchase. Known contract IDs can be re-monitored after transient disconnects; repeated monitoring failures or unknown purchase outcomes remain locked for reconciliation.
+
+Apply `migrations/20261017010000_bot_execution_ledger.sql` only to the confirmed TradeBridge Supabase project. Do not apply it to Azimart. Before enabling the UI in a deployed environment, run the Python test suite and controlled Demo end-to-end tests for proposal/buy, uncertain acknowledgement, disconnect, settlement, stop, and worker restart. Real-account automated execution remains disabled.
