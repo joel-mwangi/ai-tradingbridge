@@ -86,7 +86,7 @@ class DurableBotWorker:
         for run in queued:
             claimed = await self.patch_one("bot_runs", {
                 "id": f"eq.{run['id']}", "status": "eq.queued",
-            }, {"status": "running", "started_at": utc_now(), "heartbeat_at": utc_now(),
+            }, {"status": "running", "started_at": run.get("started_at") or utc_now(), "heartbeat_at": utc_now(),
                 "stop_reason": None, "version": int(run.get("version") or 0) + 1})
             if claimed:
                 LOG.info("claimed run_id=%s worker_id=%s", claimed["id"], self.worker_id)
