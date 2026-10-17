@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
@@ -51,6 +52,22 @@ async def _db_request(method: str, table: str, *, params: dict[str, str] | None 
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Bot storage is unavailable.")
+
+
+async def _require_live_worker() -> None:
+    """Refuse to queue a run unless the persistent worker has a fresh heartbeat."""
+    rows = await _db_request("GET", "bot_worker_heartbeats", params={
+        "select": "last_seen_at", "order": "last_seen_at.desc", "limit": "1",
+    })
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=503, detail="Automated execution worker is offline; no run was queued.")
+    try:
+        seen = datetime.fromisoformat(str(rows[0]["last_seen_at"]).replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=503, detail="Worker health could not be verified; no run was queued.")
+    if age < -5 or age > 45:
+        raise HTTPException(status_code=503, detail="Automated execution worker is offline or stale; no run was queued.")
 
 
 class FixedStakeConfig(BaseModel):
@@ -113,6 +130,7 @@ async def create_run(body: CreateRunRequest, user_id: Annotated[str, Depends(cur
     if not ACCOUNT_ID_RE.fullmatch(body.account_id):
         raise HTTPException(status_code=422, detail="Invalid account identifier.")
     body.config.validate_contract()
+    await _require_live_worker()
     # Fail closed when the persistent worker is not actually online; do not create queued runs that can never execute.
     live_after = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
     workers = await _db_request("GET", "bot_worker_heartbeats", params={
