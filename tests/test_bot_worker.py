@@ -113,10 +113,20 @@ def test_settlement_records_broker_financials_and_stops_at_trade_limit(monkeypat
         async def patch_one(_table, _params, _body):
             return {"id": "run-2"}
 
+        async def sync_run_totals(_run_id):
+            return {"id": run["id"], "trade_count": 1, "wins": 1, "losses": 0,
+                    "realized_pnl": 0.95, "config": run["config"], "status": "running",
+                    "started_at": run["started_at"]}
+
+        async def risk_stop_reason(_latest):
+            return "Configured trade-count limit reached."
+
         worker.trade_patch = trade_patch
         worker.rows = rows
         worker.set_run = set_run
         worker.patch_one = patch_one
+        worker.sync_run_totals = sync_run_totals
+        worker.risk_stop_reason = risk_stop_reason
         keep_running = await worker.monitor_contract(SettledSocket(), run, trade)
         await worker.close()
         settlement = next(body for kind, body in events if kind == "trade" and body.get("state") == "settled")
@@ -228,5 +238,38 @@ def test_known_contract_disconnect_requeues_monitoring_without_new_buy(monkeypat
         assert ("trade", "outcome_unknown", 1) in events
         assert any(event[0] == "run" and event[1] == "queued" for event in events)
         assert not any(event[0] == "run" and event[1] == "reconciliation_required" for event in events)
+
+    asyncio.run(scenario())
+
+
+def test_run_totals_are_rebuilt_from_settled_ledger_idempotently(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        writes = []
+
+        async def rows(table, _params):
+            assert table == "bot_trades"
+            return [
+                {"profit": "0.95", "state": "settled"},
+                {"profit": "-1.00", "state": "settled"},
+                {"profit": "0.00", "state": "settled"},
+            ]
+
+        async def patch_one(table, _params, body):
+            writes.append(body)
+            return {"id": "run-rebuild", **body, "config": {}, "status": "running"}
+
+        worker.rows = rows
+        worker.patch_one = patch_one
+        first = await worker.sync_run_totals("run-rebuild")
+        second = await worker.sync_run_totals("run-rebuild")
+        await worker.close()
+
+        assert first["trade_count"] == second["trade_count"] == 3
+        assert first["wins"] == second["wins"] == 1
+        assert first["losses"] == second["losses"] == 2
+        assert round(float(first["realized_pnl"]), 2) == round(float(second["realized_pnl"]), 2) == -0.05
+        assert len(writes) == 2
+        assert writes[0]["trade_count"] == writes[1]["trade_count"] == 3
 
     asyncio.run(scenario())
