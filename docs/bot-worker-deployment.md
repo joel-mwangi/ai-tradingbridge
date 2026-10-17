@@ -8,7 +8,7 @@ The worker is a separate, long-lived Python process. Do not run it as a request 
 - The same Supabase project as the FastAPI backend.
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured only in the backend/worker environment.
 - `TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY`, OAuth settings, and allowed-origin configuration required by the existing Deriv gateway.
-- A database migration applied to the correct Supabase project before starting the worker.
+- The canonical TradeBridge migration `supabase/migrations/20261017010000_bot_execution_ledger.sql` applied to the verified Supabase project before starting the worker. This repository does not own or duplicate database migrations.
 - Process supervision and restart policy, structured logs without tokens, and monitoring for runs stuck in `running` or `reconciliation_required`.
 
 ## Run control API
