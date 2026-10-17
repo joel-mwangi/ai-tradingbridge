@@ -53,6 +53,23 @@ async def _db_request(method: str, table: str, *, params: dict[str, str] | None 
         raise HTTPException(status_code=503, detail="Bot storage is unavailable.")
 
 
+async def _require_account_execution_clear(user_id: str, account_id: str) -> None:
+    """Prevent concurrent bots and preserve reconciliation locks across all bot IDs."""
+    rows = await _db_request("GET", "bot_runs", params={
+        "select": "id,status,bot_id", "user_id": f"eq.{user_id}",
+        "account_id": f"eq.{account_id}",
+        "status": "in.(queued,running,stopping,reconciliation_required)",
+        "limit": "1",
+    })
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=503, detail="Could not verify account execution state.")
+    if rows:
+        status = rows[0].get("status")
+        if status == "reconciliation_required":
+            raise HTTPException(status_code=409, detail="This account has an unresolved contract. Reconcile it before starting any bot.")
+        raise HTTPException(status_code=409, detail="Another bot run is active or queued for this account.")
+
+
 async def _require_live_worker() -> None:
     """Refuse to queue a run unless the persistent worker has a fresh heartbeat."""
     rows = await _db_request("GET", "bot_worker_heartbeats", params={
@@ -167,6 +184,9 @@ async def create_run(body: CreateRunRequest, user_id: Annotated[str, Depends(cur
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=502, detail="Could not verify the Deriv account.")
 
+    # The UI is not a security boundary: enforce one active run per account
+    # on the server and reject any unresolved purchase before creating a run.
+    await _require_account_execution_clear(user_id, body.account_id)
     run = {
         "user_id": user_id, "account_id": body.account_id, "bot_id": body.config.id,
         "config": body.config.model_dump(), "status": "queued", "currency": str(account.get("currency") or "USD"),
