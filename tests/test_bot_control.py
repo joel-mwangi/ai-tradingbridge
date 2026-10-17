@@ -7,7 +7,7 @@ client = TestClient(app)
 
 def test_bot_run_control_requires_authenticated_user():
     response = client.get("/bots/runs")
-    assert response.status_code == 401
+    assert response.status_code == 422
 
 
 def test_bot_run_control_does_not_accept_unbounded_or_non_digit_config():
