@@ -324,3 +324,29 @@ def test_supabase_service_role_headers_are_not_defaulted_on_upstream_http_client
         assert "Authorization" not in worker.http.headers
 
     asyncio.run(scenario())
+
+
+def test_worker_restart_preserves_stop_request_with_open_contract(monkeypatch):
+    async def scenario():
+        worker = make_worker(monkeypatch)
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+        events = []
+
+        async def rows(table, _params):
+            if table == "bot_runs":
+                return [{"id": "run-stop", "status": "stopping", "heartbeat_at": stale}]
+            return [{"id": "trade-open", "state": "open", "contract_id": "12345"}]
+
+        async def set_run(run_id, status, **fields):
+            events.append((run_id, status, fields.get("stop_reason")))
+
+        worker.rows = rows
+        worker.set_run = set_run
+        await worker.recover_stale_runs()
+        await worker.close()
+
+        assert events and events[0][1] == "reconciliation_required"
+        assert "stop request" in (events[0][2] or "").lower()
+
+    asyncio.run(scenario())
