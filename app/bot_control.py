@@ -190,11 +190,24 @@ async def stop_run(run_id: str, user_id: Annotated[str, Depends(current_user)]) 
     })
     if not isinstance(rows, list) or not rows:
         raise HTTPException(status_code=404, detail="Run not found.")
-    status = rows[0].get("status")
-    if status not in {"queued", "running", "reconciliation_required"}:
-        return {"run_id": run_id, "status": status, "changed": False}
+    current_status = rows[0].get("status")
+    # An ambiguous purchase is a safety lock, not a state the user can clear by
+    # pressing Stop. Broker reconciliation is required before another run.
+    if current_status == "reconciliation_required":
+        return {"run_id": run_id, "status": current_status, "changed": False,
+                "note": "Reconcile the unresolved Deriv contract before clearing this safety lock."}
+    if current_status == "queued":
+        updated = await _db_request("PATCH", "bot_runs", params={
+            "id": f"eq.{run_id}", "user_id": f"eq.{user_id}", "status": "eq.queued", "select": "id,status",
+        }, payload={"status": "stopped", "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "stop_reason": "User stopped the run before execution."}, prefer="return=representation")
+        if not isinstance(updated, list) or not updated:
+            raise HTTPException(status_code=409, detail="Run state changed concurrently; refresh before retrying.")
+        return {"run_id": run_id, "status": "stopped", "changed": True}
+    if current_status != "running":
+        return {"run_id": run_id, "status": current_status, "changed": False}
     updated = await _db_request("PATCH", "bot_runs", params={
-        "id": f"eq.{run_id}", "user_id": f"eq.{user_id}", "status": f"eq.{status}", "select": "id,status",
+        "id": f"eq.{run_id}", "user_id": f"eq.{user_id}", "status": "eq.running", "select": "id,status",
     }, payload={"status": "stopping", "stop_reason": "User requested stop."}, prefer="return=representation")
     if not isinstance(updated, list) or not updated:
         raise HTTPException(status_code=409, detail="Run state changed concurrently; refresh before retrying.")
