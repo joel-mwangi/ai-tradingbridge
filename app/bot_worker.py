@@ -212,7 +212,25 @@ class DurableBotWorker:
                         if kind == "tradeCount" and count >= int(condition.get("max") or 1): should_stop = True
                         if kind == "loss" and pnl <= -float(condition.get("limit") or 0): should_stop = True
                         if kind == "profit" and pnl >= float(condition.get("target") or 0): should_stop = True
-                        if kind == "time" and time.time() - float(run.get("_worker_started", time.time())) >= float(condition.get("seconds") or 0): should_stop = True
+                        if kind == "time":
+                            try:
+                                started_at = datetime.fromisoformat(str(run.get("started_at")).replace("Z", "+00:00")).timestamp()
+                            except (TypeError, ValueError):
+                                started_at = time.time()
+                            if time.time() - started_at >= float(condition.get("seconds") or 0): should_stop = True
+                    max_consecutive = int(config.get("maxConsecutiveLosses") or 3)
+                    recent = await self.rows("bot_trades", {
+                        "select": "profit,state", "run_id": f"eq.{run['id']}",
+                        "state": "eq.settled", "order": "settled_at.desc", "limit": str(max_consecutive),
+                    })
+                    consecutive_losses = 0
+                    for settled in recent:
+                        if float(settled.get("profit") or 0) <= 0:
+                            consecutive_losses += 1
+                        else:
+                            break
+                    if consecutive_losses >= max_consecutive:
+                        should_stop = True
                     if latest.get("status") == "stopping" or should_stop:
                         await self.set_run(run["id"], "stopped", ended_at=utc_now(),
                                            stop_reason="Stop requested or configured risk limit reached.")
@@ -249,7 +267,7 @@ class DurableBotWorker:
                     await self.set_run(run_id, "reconciliation_required",
                                        stop_reason="Ambiguous buy after worker restart; manual broker reconciliation required.")
                     return
-                if trade.get("state") in {"open", "settling"} and trade.get("contract_id"):
+                if trade.get("state") in {"open", "settling", "outcome_unknown"} and trade.get("contract_id"):
                     ws = await self.open_socket(credential.access_token)
                     try:
                         await self.monitor_contract(ws, run, trade)
