@@ -45,11 +45,9 @@ class DurableBotWorker:
         self.worker_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:10]}"
         if not self.supabase_url or not self.service_key:
             raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
-        self.http = httpx.AsyncClient(timeout=10.0, headers={
-            "apikey": self.service_key,
-            "Authorization": f"Bearer {self.service_key}",
-            "Content-Type": "application/json",
-        })
+        # Keep the reusable HTTP client free of database credentials: it also calls Deriv.
+        # Supabase service-role headers are attached only inside db(), never to upstream requests.
+        self.http = httpx.AsyncClient(timeout=10.0)
         self.stopping = asyncio.Event()
         self.last_heartbeat = 0.0
 
@@ -59,7 +57,11 @@ class DurableBotWorker:
 
     async def db(self, method: str, table: str, *, params: dict[str, str] | None = None,
                  body: Any = None, prefer: str | None = None) -> Any:
-        headers = {}
+        headers = {
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {self.service_key}",
+            "Content-Type": "application/json",
+        }
         if prefer:
             headers["Prefer"] = prefer
         response = await self.http.request(method, f"{self.supabase_url}/rest/v1/{table}",
