@@ -51,6 +51,7 @@ class DurableBotWorker:
             "Content-Type": "application/json",
         })
         self.stopping = asyncio.Event()
+        self.last_heartbeat = 0.0
 
     async def close(self) -> None:
         self.stopping.set()
@@ -440,11 +441,19 @@ class DurableBotWorker:
                 await self.set_run(run["id"], "interrupted", ended_at=utc_now(),
                                    stop_reason="Worker heartbeat expired before a trade was in flight.")
 
+    async def write_heartbeat(self) -> None:
+        await self.db("POST", "bot_worker_heartbeats", params={"on_conflict": "worker_id"},
+                      body={"worker_id": self.worker_id, "last_seen_at": utc_now()},
+                      prefer="resolution=merge-duplicates,return=minimal")
+        self.last_heartbeat = time.time()
+
     async def heartbeat_forever(self) -> None:
         while not self.stopping.is_set():
-            await self.db("POST", "bot_worker_heartbeats", params={"on_conflict": "worker_id"},
-                          body={"worker_id": self.worker_id, "last_seen_at": utc_now()},
-                          prefer="resolution=merge-duplicates,return=minimal")
+            try:
+                await self.write_heartbeat()
+            except Exception:
+                self.last_heartbeat = 0.0
+                LOG.exception("worker heartbeat failed; execution paused")
             try:
                 await asyncio.wait_for(self.stopping.wait(), timeout=10)
             except asyncio.TimeoutError:
@@ -452,10 +461,15 @@ class DurableBotWorker:
 
     async def run_forever(self) -> None:
         LOG.info("worker started worker_id=%s", self.worker_id)
+        # Do not start consuming jobs until durable liveness is confirmed.
+        await self.write_heartbeat()
         heartbeat_task = asyncio.create_task(self.heartbeat_forever(), name="bot-worker-heartbeat")
         try:
             while not self.stopping.is_set():
                 try:
+                    if time.time() - self.last_heartbeat > 30:
+                        await asyncio.sleep(min(5, max(1, self.poll_seconds)))
+                        continue
                     await self.recover_stale_runs()
                     run = await self.claim_next()
                     if run:
