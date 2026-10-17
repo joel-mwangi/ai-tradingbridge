@@ -79,3 +79,36 @@ def test_bot_run_queue_requires_a_fresh_worker_heartbeat(monkeypatch):
     with pytest.raises(HTTPException) as missing_error:
         asyncio.run(control._require_live_worker())
     assert missing_error.value.status_code == 503
+
+
+
+def test_account_wide_execution_guard_blocks_another_bot(monkeypatch):
+    import asyncio
+    import pytest
+    from fastapi import HTTPException
+    import app.bot_control as control
+
+    async def active_run(_method, _table, **_kwargs):
+        return [{"id": "run-active", "status": "running", "bot_id": "different-bot"}]
+
+    monkeypatch.setattr(control, "_db_request", active_run)
+    with pytest.raises(HTTPException) as blocked:
+        asyncio.run(control._require_account_execution_clear("user-1", "VRTC123"))
+    assert blocked.value.status_code == 409
+    assert "Another bot run" in blocked.value.detail
+
+
+def test_reconciliation_lock_blocks_every_bot_for_account(monkeypatch):
+    import asyncio
+    import pytest
+    from fastapi import HTTPException
+    import app.bot_control as control
+
+    async def unresolved_run(_method, _table, **_kwargs):
+        return [{"id": "run-unknown", "status": "reconciliation_required", "bot_id": "old-bot"}]
+
+    monkeypatch.setattr(control, "_db_request", unresolved_run)
+    with pytest.raises(HTTPException) as blocked:
+        asyncio.run(control._require_account_execution_clear("user-1", "VRTC123"))
+    assert blocked.value.status_code == 409
+    assert "unresolved contract" in blocked.value.detail
