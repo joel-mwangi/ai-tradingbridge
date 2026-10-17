@@ -361,10 +361,32 @@ class DurableBotWorker:
         except Exception as exc:
             LOG.exception("run failed run_id=%s", run_id)
             try:
-                await self.set_run(run_id, "failed", ended_at=utc_now(),
-                                   stop_reason=f"Worker stopped safely: {type(exc).__name__}.")
+                # A generic exception after a side-effect may have started must not
+                # mark the run safely failed and unlock another purchase.
+                latest = await self.rows("bot_trades", {
+                    "select": "*", "run_id": f"eq.{run_id}",
+                    "order": "created_at.desc", "limit": "1",
+                })
+                if latest and latest[0].get("state") in ACTIVE_TRADE_STATES:
+                    trade = latest[0]
+                    if trade.get("state") == "buy_pending" and not trade.get("contract_id"):
+                        await self.trade_patch(trade["id"], {
+                            "state": "outcome_unknown",
+                            "error_message": f"Worker exception after buy intent ({type(exc).__name__}); reconcile with Deriv.",
+                        })
+                        await self.set_run(run_id, "reconciliation_required", ended_at=utc_now(),
+                                           stop_reason="Purchase outcome uncertain; new trades are locked pending reconciliation.")
+                    elif trade.get("contract_id"):
+                        await self.set_run(run_id, "queued",
+                                           stop_reason="Worker interrupted while a known contract existed; resuming monitoring only.")
+                    else:
+                        await self.set_run(run_id, "reconciliation_required", ended_at=utc_now(),
+                                           stop_reason="Worker interrupted during an unresolved trade; manual reconciliation required.")
+                else:
+                    await self.set_run(run_id, "failed", ended_at=utc_now(),
+                                       stop_reason=f"Worker stopped safely: {type(exc).__name__}.")
             except Exception:
-                LOG.exception("could not persist failure run_id=%s", run_id)
+                LOG.exception("could not persist failure/recovery state run_id=%s", run_id)
 
     async def recover_stale_runs(self) -> None:
         # Never auto-resume a run whose worker heartbeat is stale: a crash can occur
