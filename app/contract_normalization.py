@@ -65,9 +65,16 @@ def normalize_settlement(
     explicit_payout = parse_deriv_number(contract.get("payout"))
     sell_price = parse_deriv_number(contract.get("sell_price"))
 
-    if status == "lost" and explicit_profit is None:
+    if status == "lost":
+        # A provider-confirmed loss has no payout; never surface a potential payout.
         payout = 0.0
-        profit = -stake
+        if explicit_profit is not None:
+            if explicit_profit >= 0:
+                # Contradictory terminal fields are not safe to reconcile automatically.
+                return None
+            profit = explicit_profit
+        else:
+            profit = -stake
     else:
         if status == "sold" or is_deriv_true(contract.get("is_sold")):
             payout = sell_price if sell_price is not None else explicit_payout
