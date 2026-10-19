@@ -19,6 +19,7 @@ import websockets.legacy.client as ws_client
 
 from app.bot_schema import DemoBotConfig
 from app.bot_state import TradeSnapshot, TradeState, may_start_next_trade, transition
+from app.contract_normalization import is_terminal_contract, normalize_settlement, parse_deriv_number
 
 
 @dataclass
@@ -86,10 +87,8 @@ async def run_bot(
                         if cid and cid in contract_futures:
                             fut = contract_futures[cid]
                             if not fut.done():
-                                # Consider the contract settled when Deriv marks it sold/expired.
-                                status = poc.get("status", "")
-                                is_sold = poc.get("is_sold", False)
-                                if is_sold or status in ("sold", "expired", "won", "lost"):
+                                # Resolve only on a provider-confirmed terminal contract state.
+                                if is_terminal_contract(poc):
                                     fut.set_result(msg)
         except Exception:
             pass
@@ -232,8 +231,13 @@ async def run_bot(
                 stop_reason = "missing_contract_id"
                 return BotResult(stop_reason, trade_count, total_profit)
 
-            snap = transition(snap, TradeState.OPEN, contract_id=contract_id)
-            await send_event({"event": "trade_opened", "contract_id": contract_id, "stake": ask_price})
+            # Prefer the broker-confirmed purchase price over the proposal quote.
+            actual_stake = parse_deriv_number(buy_data.get("buy_price"))
+            if actual_stake is None or actual_stake <= 0:
+                actual_stake = ask_price
+
+            snap = transition(snap, TradeState.OPEN, contract_id=contract_id, stake=actual_stake)
+            await send_event({"event": "trade_opened", "contract_id": contract_id, "stake": actual_stake})
 
             # ── STEP 3: Subscribe to contract updates and wait for settlement ────
             contract_future: asyncio.Future[dict] = loop.create_future()
@@ -272,13 +276,22 @@ async def run_bot(
                 contract_futures.pop(contract_id, None)
 
             poc = settlement_msg.get("proposal_open_contract") or {}
-            # sell_price is the actual payout received; fall back to payout field.
-            try:
-                payout = float(poc.get("sell_price") or poc.get("payout") or 0)
-            except (TypeError, ValueError):
-                payout = 0.0
-            profit = round(payout - ask_price, 8)
+            settlement = normalize_settlement(poc, stake=actual_stake)
+            if settlement is None:
+                # Do not invent zero values or advance the bot after an ambiguous
+                # terminal response. A later reconciliation must establish the result.
+                snap = transition(snap, TradeState.OUTCOME_UNKNOWN)
+                await send_event({
+                    "event": "error",
+                    "reason": "settlement_values_missing",
+                    "state": "outcome_unknown",
+                    "contract_id": contract_id,
+                })
+                stop_reason = "settlement_values_missing"
+                return BotResult(stop_reason, trade_count, total_profit)
 
+            payout = settlement["payout"]
+            profit = settlement["profit"]
             snap = transition(snap, TradeState.SETTLED, payout=payout, profit=profit)
             assert may_start_next_trade(snap), "State machine invariant violated after SETTLED"
 
@@ -289,9 +302,11 @@ async def run_bot(
             await send_event({
                 "event": "trade_settled",
                 "contract_id": contract_id,
-                "stake": ask_price,
+                "stake": actual_stake,
                 "payout": payout,
                 "profit": profit,
+                "outcome": settlement["outcome"],
+                "provider_status": settlement["provider_status"],
                 "trade_count": trade_count,
                 "total_profit": total_profit,
                 "consecutive_losses": consecutive_losses,
