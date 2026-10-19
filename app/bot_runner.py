@@ -123,6 +123,13 @@ async def bot_run_websocket(websocket: WebSocket) -> None:
                 await websocket.close(code=4403)
                 return
 
+            # Currency must come from the verified provider account, never the browser config.
+            account_currency = account.get("currency")
+            if not isinstance(account_currency, str) or not account_currency.isalpha() or not 3 <= len(account_currency) <= 10:
+                await websocket.close(code=1011)
+                return
+            account_currency = account_currency.upper()
+
             linked_ids = await _linked_account_ids(user_id, [account_id])
             if account_id not in linked_ids:
                 await websocket.close(code=4403)
@@ -218,7 +225,7 @@ async def bot_run_websocket(websocket: WebSocket) -> None:
         ) as upstream:
             stop_listener = asyncio.create_task(listen_for_stop())
             try:
-                result = await run_bot(config, upstream, send_event, stop_signal)
+                result = await run_bot(config, upstream, send_event, stop_signal, currency=account_currency)
             finally:
                 stop_listener.cancel()
                 try:
