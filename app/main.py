@@ -13,6 +13,9 @@ from app.analysis import analyze_digits
 from app.deriv_gateway import router as deriv_router
 from app.bot_runner import router as bot_runner_router
 
+
+
+
 app = FastAPI(
     title="TradeBridge AI",
     description="Authenticated Deriv session gateway with legacy descriptive analysis endpoints",
@@ -66,6 +69,12 @@ def require_api_token(
             detail="Invalid or missing API token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+@app.get("/")
+def home():
+    return {"status": "ok"}
+
+
 
 
 @app.get("/health")
