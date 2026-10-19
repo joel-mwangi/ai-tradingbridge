@@ -240,6 +240,35 @@ def test_loss_limit_stop_condition():
     assert result.total_profit == pytest.approx(-1.0, abs=1e-6)
 
 
+
+def test_losing_contract_does_not_use_potential_payout_as_actual_return():
+    """A zero sell price must not fall back to a potentially positive payout."""
+    config = _make_config(
+        stopConditions=[
+            {"type": "loss", "limit": 0.5},
+            {"type": "tradeCount", "max": 10},
+        ],
+        cooldownSeconds=1,
+    )
+    responses = _one_trade_responses(1, 2, 3, sell_price=0.0, status="lost")
+    # Simulate a provider payload that also contains a positive payout field.
+    responses[-1]["proposal_open_contract"]["payout"] = 46.13
+    upstream = MockUpstream(responses)
+    events: list[dict] = []
+    stop = asyncio.Event()
+
+    async def send_event(e: dict) -> None:
+        events.append(e)
+
+    result = asyncio.run(run_bot(config, upstream, send_event, stop))
+
+    assert result.stop_reason == "loss_limit"
+    assert result.total_profit == pytest.approx(-1.0, abs=1e-6)
+    settled = next(event for event in events if event["event"] == "trade_settled")
+    assert settled["payout"] == 0.0
+    assert settled["profit"] == pytest.approx(-1.0, abs=1e-6)
+    assert settled["outcome"] == "lost"
+
 def test_consecutive_loss_stop():
     """Bot stops when maxConsecutiveLosses is reached."""
     config = _make_config(
