@@ -34,6 +34,7 @@ async def run_bot(
     upstream: ws_client.WebSocketClientProtocol,
     send_event: Callable[[dict], Awaitable[None]],
     stop_signal: asyncio.Event,
+    currency: str = "USD",
 ) -> BotResult:
     """Run the bot loop until a stop condition is met or stop_signal is set.
 
@@ -133,7 +134,7 @@ async def run_bot(
                 "amount": config.stakeStrategy.amount,
                 "basis": "stake",
                 "contract_type": config.contractType,
-                "currency": "USD",
+                "currency": currency,
                 "duration": config.duration,
                 "duration_unit": config.durationUnit,
                 "symbol": config.symbol,
