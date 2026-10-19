@@ -67,6 +67,26 @@ def test_early_sale_preserves_explicit_zero_sell_price():
     }
 
 
+def test_losing_contract_uses_zero_actual_payout_even_if_provider_profit_is_present():
+    result = normalize_settlement(
+        {"status": "lost", "payout": "46.13", "profit": "-25"},
+        stake=25.0,
+    )
+    assert result == {
+        "provider_status": "lost",
+        "payout": 0.0,
+        "profit": -25.0,
+        "outcome": "lost",
+    }
+
+
+def test_contradictory_loss_profit_is_not_normalized():
+    assert normalize_settlement(
+        {"status": "lost", "payout": "46.13", "profit": "21.13"},
+        stake=25.0,
+    ) is None
+
+
 def test_explicit_profit_is_preferred_when_payout_is_missing():
     result = normalize_settlement({"status": "won", "profit": "21.13"}, stake=25.0)
     assert result == {
