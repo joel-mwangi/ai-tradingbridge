@@ -147,6 +147,22 @@ def _one_trade_responses(
 # Tests
 # ---------------------------------------------------------------------------
 
+def test_proposal_uses_verified_account_currency():
+    """The proposal currency must follow the verified account, not a hardcoded USD."""
+    config = _make_config(stopConditions=[{"type": "tradeCount", "max": 1}])
+    upstream = MockUpstream(_one_trade_responses())
+    events: list[dict] = []
+
+    async def send_event(e: dict) -> None:
+        events.append(e)
+
+    result = asyncio.run(run_bot(config, upstream, send_event, asyncio.Event(), currency="EUR"))
+
+    proposal = next(json.loads(raw) for raw in upstream.sent if "proposal" in json.loads(raw))
+    assert proposal["currency"] == "EUR"
+    assert result.trade_count == 1
+
+
 def test_single_trade_full_cycle():
     """A single winning trade emits the correct events and returns BotResult."""
     config = _make_config(stopConditions=[{"type": "tradeCount", "max": 1}])
