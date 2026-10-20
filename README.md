@@ -1,7 +1,7 @@
 # TradeBridge AI
 
-A Python research API and authenticated Deriv session gateway with an inline Demo bot executor.
-It does not support real-account trading.
+A Python research API and authenticated Deriv session gateway for manual Demo trading.
+Automated bot execution has been removed. Real-account trading is not supported.
 
 ## Requirements
 
@@ -90,43 +90,22 @@ dialog to call analysis endpoints.
 - `WS /deriv/ws?account_id=...` — authenticated Demo-only manual trading proxy.
 - `WS /deriv/live/market` — public market-data proxy; no persistence.
 
-### Bot executor (Supabase JWT auth, ticket-based WS auth)
-
-- `WS /bots/run?account_id=...` — inline Demo bot executor.
-  - Authenticate first with `POST /deriv/ws-ticket`.
-  - Connect with the ticket in the `sec-websocket-protocol` header.
-  - Send a `DemoBotConfig` JSON object as the first message after connection.
-  - Receive structured JSON events: `started`, `trade_opened`, `trade_settled`, `error`, `done`.
-  - Send `{"action": "stop"}` to stop gracefully after the current trade.
-
 ## Architecture
 
 ```
 Browser / Next.js
-  │
-  ├─ POST /deriv/internal/oauth/exchange
-  │    └─ FastAPI: PKCE code exchange → encrypt token → store credential + account links
-  │
-  ├─ POST /deriv/ws-ticket  →  30-second one-use ticket
-  │
-  └─ WS /bots/run?account_id=VRTC123
-       └─ FastAPI inline bot executor:
-            ├─ Validate ticket + Deriv credential + account ownership
-            ├─ Open Deriv Demo WebSocket via OTP
-            ├─ asyncio bot loop (bot_state TradeState machine):
-            │    CREATED → REQUESTING_PROPOSAL → BUY_PENDING → OPEN → SETTLING → SETTLED
-            │    Stop conditions checked after every settled trade
-            │    Cooldown between trades (exits immediately on stop signal)
-            ├─ Stream JSON events to frontend
-            └─ {"action":"stop"} → graceful stop after current trade
+  ├─ OAuth callback → POST /deriv/internal/oauth/exchange
+  │    └─ FastAPI exchanges PKCE code, encrypts token, stores credential/account links
+  ├─ POST /deriv/ws-ticket → short-lived, single-use WebSocket ticket
+  ├─ WS /deriv/ws?account_id=... → authenticated Demo-only manual trading proxy
+  └─ WS /deriv/live/market → public market-data proxy
+
+FastAPI also exposes authenticated descriptive digit-analysis endpoints. No bot runner,
+strategy executor, bot configuration API, or automated order loop is registered.
 ```
 
-Live market ticks and history are forwarded in memory only. Bot execution is Demo-only;
-real-account execution is explicitly blocked at every validation layer.
-
-Active bot runs are tracked in-memory per process. A run stops if the server restarts.
-For multi-worker deployments, keep a single ASGI worker until WebSocket tickets and active
-run tracking are backed by a shared store (e.g. Redis or Supabase).
+Live market ticks and history are forwarded in memory only. Real-account execution remains
+explicitly blocked at the gateway validation layer.
 
 ## Interpretation
 
