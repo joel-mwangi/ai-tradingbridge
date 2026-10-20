@@ -1,0 +1,109 @@
+"""Backend-owned descriptive digit-frequency snapshots for live market ticks.
+
+These are TradeBridge-calculated frequencies from observed ticks, not official
+Deriv Digit Analytics values and not trading signals.
+"""
+from __future__ import annotations
+
+from collections import Counter, deque
+from dataclasses import dataclass, field
+import math
+from typing import Any, Iterable
+
+WINDOW_SIZES = (50, 100, 250, 500, 1000)
+MAX_POINTS = max(WINDOW_SIZES)
+
+
+def extract_last_digit(quote: Any, pip_size: Any = None) -> int | None:
+    """Extract the final displayed decimal digit without guessing lost precision."""
+    if isinstance(quote, bool) or not isinstance(quote, (str, int, float)):
+        return None
+    try:
+        value = float(quote)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value):
+        return None
+
+    raw = str(quote)
+    precision = (
+        int(pip_size)
+        if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12
+        else len(raw.split(".", 1)[1]) if isinstance(quote, str) and "." in raw else None
+    )
+    if precision is None or not 0 <= precision <= 12:
+        return None
+    formatted = f"{value:.{precision}f}"
+    fraction = formatted.split(".", 1)[1] if "." in formatted else ""
+    char = fraction[precision - 1] if precision else formatted[-1]
+    digit = int(char)
+    return digit if 0 <= digit <= 9 else None
+
+
+@dataclass
+class DigitFrequencyWindow:
+    """A bounded, per-connection/per-market window of actual observed tick points."""
+    points: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_POINTS))
+
+    def seed_history(
+        self,
+        prices: Iterable[Any],
+        times: Iterable[Any],
+        pip_size: Any = None,
+    ) -> None:
+        self.points.clear()
+        for price, epoch in zip(prices, times):
+            try:
+                timestamp = float(epoch)
+                numeric_price = float(price)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
+                continue
+            self.points.append({
+                "time": timestamp,
+                "price": numeric_price,
+                "last_digit": extract_last_digit(price, pip_size),
+            })
+
+    def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> None:
+        try:
+            timestamp = float(epoch)
+            numeric_price = float(quote)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
+            return
+        digit = extract_last_digit(quote, pip_size)
+        point = {"time": timestamp, "price": numeric_price, "last_digit": digit}
+        # Avoid double-counting a history/live overlap when it is the newest point.
+        if self.points and self.points[-1] == point:
+            return
+        self.points.append(point)
+
+    def snapshot(self, symbol: str, calculated_at: float | None = None) -> dict[str, Any]:
+        points = list(self.points)
+        by_window: dict[str, dict[str, Any]] = {}
+        for size in WINDOW_SIZES:
+            window = points[-size:]
+            valid = [p["last_digit"] for p in window if type(p.get("last_digit")) is int and 0 <= p["last_digit"] <= 9]
+            counts = Counter(valid)
+            total = len(valid)
+            by_window[str(size)] = {
+                "window_size": size,
+                "sample_size": total,
+                "counts": {str(digit): counts[digit] for digit in range(10)},
+                "percentages": {
+                    str(digit): round(counts[digit] / total * 100, 1) if total else None
+                    for digit in range(10)
+                },
+            }
+        latest = points[-1] if points else None
+        return {
+            "source": "tradebridge_backend_tick_frequency",
+            "symbol": symbol,
+            "calculated_at": calculated_at,
+            "latest_tick_epoch": latest["time"] if latest else None,
+            "windows": by_window,
+            "warning": "Locally calculated observed-tick frequencies; not official Deriv Digit Analytics and not a prediction.",
+        }
