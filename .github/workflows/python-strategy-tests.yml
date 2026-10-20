@@ -6,6 +6,7 @@ on:
       - "app/strategy/**"
       - "tests/test_digit_strategy.py"
       - "tests/test_feed_health.py"
+      - "tests/test_strategy_session.py"
       - ".github/workflows/python-strategy-tests.yml"
       - "requirements.txt"
   pull_request:
@@ -34,4 +35,4 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest
       - name: Run digit strategy tests
-        run: python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py -v
+        run: python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py -v
