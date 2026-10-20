@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.strategy.digit_strategy import (
-    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,\n    evaluate_stability, evaluate_thresholds, validate_initial_observation_window,
+    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,\n    choose_group_from_timestamped_observations, evaluate_stability, evaluate_thresholds,\n    validate_initial_observation_window,
 )
 
 
@@ -107,6 +107,34 @@ class InitialWindowValidationTests(unittest.TestCase):
             self.evaluated
         )
         self.assertFalse(ok)
+
+
+class TimestampedSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.started = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
+        self.evaluated = self.started + timedelta(seconds=10)
+        # Under qualifies uniquely (digit 0 is lowest); Over fails threshold.
+        first = {0: 7.0, 1: 8.0, 2: 8.1, 3: 8.2, 4: 8.3,
+                 5: 10.5, 6: 8.0, 7: 8.0, 8: 8.0, 9: 8.0}
+        second = dict(first)
+        self.observations = [
+            TimestampedPercentageObservation(self.started + timedelta(seconds=1), first),
+            TimestampedPercentageObservation(self.started + timedelta(seconds=9), second),
+        ]
+
+    def test_valid_window_reaches_group_selection(self):
+        result = choose_group_from_timestamped_observations(
+            self.observations, self.started, self.evaluated
+        )
+        self.assertEqual(result.decision, Decision.SELECT_UNDER)
+        self.assertEqual(result.trigger_digit, 0)
+
+    def test_short_window_cannot_select_group(self):
+        result = choose_group_from_timestamped_observations(
+            self.observations, self.started, self.started + timedelta(seconds=9)
+        )
+        self.assertEqual(result.decision, Decision.INVALID_DATA)
+        self.assertIsNone(result.trigger_digit)
 
 
 class StabilityTests(unittest.TestCase):
