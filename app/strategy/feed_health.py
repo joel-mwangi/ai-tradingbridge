@@ -90,10 +90,10 @@ class PercentageFeedHealth:
         now: datetime,
     ) -> FeedHealthResult:
         """Accept only a complete, fresh, ordered snapshot for this market."""
-        if self.state is FeedState.DISCONNECTED:
+        if self.state is not FeedState.HEALTHY:
             return FeedHealthResult(
                 False, self.state,
-                "Feed is disconnected; reconnect and rebuild the observation window.",
+                "Feed is not healthy; explicitly reset after recovery and rebuild the observation window.",
             )
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             return self._reject("Current time must be timezone-aware.")
