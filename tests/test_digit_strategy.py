@@ -3,7 +3,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.strategy.digit_strategy import (
-    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,\n    choose_group_from_timestamped_observations, evaluate_stability, evaluate_thresholds,\n    validate_initial_observation_window,
+    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,
+    choose_group_from_timestamped_observations, evaluate_stability, evaluate_thresholds,
+    validate_initial_observation_window,
 )
 
 
