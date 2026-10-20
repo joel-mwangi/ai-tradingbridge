@@ -17,10 +17,13 @@ class DigitStrategySessionTests(unittest.TestCase):
         }
 
     def snapshot(self, observed_seconds, event_id):
+        return self.snapshot_with(observed_seconds, event_id, self.percentages)
+
+    def snapshot_with(self, observed_seconds, event_id, percentages):
         observed = self.start + timedelta(seconds=observed_seconds)
         return PercentageSnapshot(
             "verified-feed-v1", "R_100", observed, observed + timedelta(milliseconds=100),
-            self.percentages, event_id,
+            percentages, event_id,
         )
 
     def test_start_resets_all_session_local_state(self):
@@ -59,6 +62,44 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.session.start(self.start)
         result = self.session.evaluate(self.start + timedelta(seconds=9))
         self.assertEqual(result.state, SessionState.OBSERVING)
+        self.assertIsNone(self.session.selected_group)
+
+    def test_neither_qualifies_then_rolling_window_selects_group(self):
+        self.session.start(self.start)
+        neither = dict(self.percentages)
+        neither.update({0: 10.1, 1: 10.2, 2: 8.1, 3: 8.2, 4: 8.3})
+        self.session.add_snapshot(self.snapshot_with(1, "r1", neither), self.start + timedelta(seconds=1, milliseconds=100))
+        self.session.add_snapshot(self.snapshot_with(9, "r2", neither), self.start + timedelta(seconds=9, milliseconds=100))
+        first = self.session.evaluate(self.start + timedelta(seconds=10))
+        self.assertEqual(first.state, SessionState.WAITING_FOR_MORE_DATA)
+        self.assertIsNone(self.session.selected_group)
+
+        qualifying = dict(self.percentages)
+        self.session.add_snapshot(self.snapshot_with(11, "r3", qualifying), self.start + timedelta(seconds=11, milliseconds=100))
+        self.assertEqual(self.session.state, SessionState.WAITING_FOR_MORE_DATA)
+        self.session.add_snapshot(self.snapshot_with(19, "r4", qualifying), self.start + timedelta(seconds=19, milliseconds=100))
+        result = self.session.add_snapshot(
+            self.snapshot_with(21, "r5", qualifying),
+            self.start + timedelta(seconds=21, milliseconds=100),
+        )
+        self.assertEqual(result.state, SessionState.SELECTED)
+        self.assertEqual(self.session.selected_group, Group.UNDER)
+        self.assertEqual(self.session.trigger_digit, 0)
+        self.assertTrue(all(item.observed_at >= self.start + timedelta(seconds=11) for item in self.session.observations))
+
+    def test_rolling_window_does_not_reuse_expired_observations(self):
+        self.session.start(self.start)
+        neither = dict(self.percentages)
+        neither.update({0: 10.1, 1: 10.2})
+        self.session.add_snapshot(self.snapshot_with(1, "x1", neither), self.start + timedelta(seconds=1, milliseconds=100))
+        self.session.add_snapshot(self.snapshot_with(9, "x2", neither), self.start + timedelta(seconds=9, milliseconds=100))
+        self.session.evaluate(self.start + timedelta(seconds=10))
+        result = self.session.add_snapshot(
+            self.snapshot_with(21, "x3", self.percentages),
+            self.start + timedelta(seconds=21, milliseconds=100),
+        )
+        self.assertEqual(result.state, SessionState.WAITING_FOR_MORE_DATA)
+        self.assertEqual(len(self.session.observations), 1)
         self.assertIsNone(self.session.selected_group)
 
     def test_feed_rejection_blocks_session(self):
