@@ -1,8 +1,9 @@
 import math
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from app.strategy.digit_strategy import (
-    Decision, Group, PatternTracker, choose_group, evaluate_stability, evaluate_thresholds,
+    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,\n    evaluate_stability, evaluate_thresholds, validate_initial_observation_window,
 )
 
 
@@ -44,6 +45,68 @@ class ThresholdTests(unittest.TestCase):
         p[7] = math.nan
         result = choose_group(p, [{d: 8.0 for d in range(10)}])
         self.assertEqual(result.decision, Decision.INVALID_DATA)
+
+
+class InitialWindowValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.started = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
+        self.values = percentages()
+        self.observations = [
+            TimestampedPercentageObservation(self.started + timedelta(seconds=1), self.values),
+            TimestampedPercentageObservation(self.started + timedelta(seconds=9), self.values),
+        ]
+        self.evaluated = self.started + timedelta(seconds=10)
+
+    def test_valid_initial_window_passes(self):
+        ok, _ = validate_initial_observation_window(
+            self.observations, self.started, self.evaluated
+        )
+        self.assertTrue(ok)
+
+    def test_window_must_reach_ten_seconds(self):
+        ok, _ = validate_initial_observation_window(
+            self.observations, self.started, self.started + timedelta(seconds=9)
+        )
+        self.assertFalse(ok)
+
+    def test_single_snapshot_cannot_pass_as_stable(self):
+        ok, _ = validate_initial_observation_window(
+            self.observations[:1], self.started, self.evaluated
+        )
+        self.assertFalse(ok)
+
+    def test_duplicate_timestamps_fail(self):
+        duplicate = [
+            self.observations[0],
+            TimestampedPercentageObservation(self.observations[0].observed_at, self.values),
+        ]
+        ok, _ = validate_initial_observation_window(duplicate, self.started, self.evaluated)
+        self.assertFalse(ok)
+
+    def test_out_of_window_snapshot_fails(self):
+        late = [
+            self.observations[0],
+            TimestampedPercentageObservation(self.started + timedelta(seconds=11), self.values),
+        ]
+        ok, _ = validate_initial_observation_window(late, self.started, self.evaluated)
+        self.assertFalse(ok)
+
+    def test_incomplete_snapshot_fails(self):
+        incomplete = dict(self.values)
+        del incomplete[9]
+        rows = [
+            self.observations[0],
+            TimestampedPercentageObservation(self.started + timedelta(seconds=9), incomplete),
+        ]
+        ok, _ = validate_initial_observation_window(rows, self.started, self.evaluated)
+        self.assertFalse(ok)
+
+    def test_naive_timestamps_fail(self):
+        ok, _ = validate_initial_observation_window(
+            self.observations, datetime(2026, 10, 20, 10, 0),
+            self.evaluated
+        )
+        self.assertFalse(ok)
 
 
 class StabilityTests(unittest.TestCase):
