@@ -923,7 +923,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 symbol = tick.get("underlying_symbol") or tick.get("symbol")
                                 if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
                                     tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                                    pip_size = tick.get("pip_size")
+                                    pip_size = tick.get("pip_size", provider_message.get("pip_size"))
                                     if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
                                         pip_size_by_symbol[symbol] = pip_size
                                     tracker.add_tick(
