@@ -1,0 +1,44 @@
+import pytest
+
+from app.market_analysis import DigitFrequencyWindow, extract_last_digit
+
+
+@pytest.mark.parametrize(("quote", "pip_size", "expected"), [
+    ("123.456", 3, 6),
+    ("123.450", 3, 0),
+    ("100.09", 2, 9),
+    (123.45, 2, 5),
+    (123, None, None),
+    ("not-a-price", 2, None),
+    ("1.2", 13, None),
+])
+def test_extract_last_digit_preserves_provider_precision(quote, pip_size, expected):
+    assert extract_last_digit(quote, pip_size) == expected
+
+
+def test_frequency_windows_return_counts_and_percentages():
+    window = DigitFrequencyWindow()
+    window.seed_history(["1.1", "1.2", "1.1", "1.3"], [1, 2, 3, 4], 1)
+    result = window.snapshot("R_100")
+    summary = result["windows"]["50"]
+    assert summary["sample_size"] == 4
+    assert summary["counts"]["1"] == 2
+    assert summary["percentages"]["1"] == 50.0
+    assert sum(summary["counts"].values()) == summary["sample_size"]
+
+
+def test_window_rolls_over_and_skips_invalid_digits_in_denominator():
+    window = DigitFrequencyWindow()
+    window.seed_history(["1.1", "1.2", "1.3"], [1, 2, 3], 1)
+    window.add_tick("1.4", 4, 1)
+    window.add_tick("1.5", 5, 1)
+    summary = window.snapshot("R_100")["windows"]["50"]
+    assert summary["sample_size"] == 5
+    assert summary["counts"]["5"] == 1
+
+
+def test_latest_duplicate_history_live_tick_is_not_counted_twice():
+    window = DigitFrequencyWindow()
+    window.seed_history(["1.2"], [123], 1)
+    window.add_tick("1.2", 123, 1)
+    assert window.snapshot("R_100")["windows"]["50"]["sample_size"] == 1
