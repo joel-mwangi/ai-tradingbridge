@@ -6,6 +6,7 @@ Percentage observations must come from a verified upstream Digit Analytics sourc
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Sequence
@@ -26,6 +27,71 @@ class Decision(str, Enum):
     SELECT_UNDER = "select_under"
     SELECT_OVER = "select_over"
     INVALID_DATA = "invalid_data"
+
+
+@dataclass(frozen=True)
+class TimestampedPercentageObservation:
+    """One complete percentage snapshot from an upstream source.
+
+    The timestamp must be the source event time, not a synthetic heartbeat.
+    """
+    observed_at: datetime
+    percentages: Mapping[int, float]
+
+
+def validate_initial_observation_window(
+    observations: Sequence[TimestampedPercentageObservation],
+    started_at: datetime,
+    evaluated_at: datetime,
+    window_seconds: float = 10.0,
+) -> tuple[bool, str]:
+    """Validate evidence for the initial 10-second window; never invent updates.
+
+    This validates event timestamps and completeness, not source authenticity.
+    The caller must only pass observations from a verified upstream source.
+    At least two distinct snapshots are required so a single value cannot
+    appear stable by having a zero spread.
+    """
+    if (
+        not isinstance(started_at, datetime)
+        or not isinstance(evaluated_at, datetime)
+        or started_at.tzinfo is None
+        or started_at.utcoffset() is None
+        or evaluated_at.tzinfo is None
+        or evaluated_at.utcoffset() is None
+    ):
+        return False, "Session start and evaluation timestamps must be timezone-aware."
+    if not math.isfinite(window_seconds) or window_seconds <= 0:
+        return False, "Window duration must be a positive finite number."
+
+    start_utc = started_at.astimezone(timezone.utc)
+    evaluated_utc = evaluated_at.astimezone(timezone.utc)
+    boundary = start_utc + timedelta(seconds=window_seconds)
+    if evaluated_utc < boundary:
+        return False, "The initial observation window has not elapsed."
+    if len(observations) < 2:
+        return False, "At least two real percentage updates are required."
+
+    previous_timestamp = None
+    for index, observation in enumerate(observations):
+        if not isinstance(observation, TimestampedPercentageObservation):
+            return False, f"Observation {index} is not a timestamped percentage snapshot."
+        timestamp = observation.observed_at
+        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            return False, f"Observation {index} must have a timezone-aware source timestamp."
+        timestamp = timestamp.astimezone(timezone.utc)
+        if timestamp < start_utc or timestamp > boundary:
+            return False, f"Observation {index} falls outside the initial window."
+        if previous_timestamp is not None and timestamp <= previous_timestamp:
+            return False, "Observation timestamps must be strictly increasing."
+        values = observation.percentages
+        if not ALL_DIGITS.issubset(values):
+            return False, f"Observation {index} must contain all ten digit percentages."
+        if any(not _valid_percentage(values[d]) for d in ALL_DIGITS):
+            return False, f"Observation {index} contains an invalid percentage."
+        previous_timestamp = timestamp
+
+    return True, "Initial observation window has valid timestamped percentage snapshots."
 
 
 @dataclass(frozen=True)
