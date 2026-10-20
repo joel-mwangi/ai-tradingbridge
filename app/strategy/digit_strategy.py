@@ -270,3 +270,33 @@ class PatternTracker:
 
         self.progress = 1 if digit == self.trigger_digit else 0
         return False
+
+def choose_group_from_timestamped_observations(
+    observations: Sequence[TimestampedPercentageObservation],
+    started_at: datetime,
+    evaluated_at: datetime,
+    window_seconds: float = 10.0,
+) -> QualificationResult:
+    """Validate the initial window before evaluating thresholds and stability.
+
+    This convenience entry point accepts only explicitly timestamped snapshots.
+    It does not establish source authenticity; callers must provide observations
+    from a verified source. No trade execution is performed.
+    """
+    valid, reason = validate_initial_observation_window(
+        observations, started_at, evaluated_at, window_seconds
+    )
+    if not valid:
+        invalid_under = GroupEvaluation(
+            Group.UNDER, False, False, False, reason
+        )
+        invalid_over = GroupEvaluation(
+            Group.OVER, False, False, False, reason
+        )
+        return QualificationResult(
+            Decision.INVALID_DATA, invalid_under, invalid_over, reason=reason
+        )
+
+    snapshots = [observation.percentages for observation in observations]
+    latest = snapshots[-1]
+    return choose_group(latest, snapshots)
