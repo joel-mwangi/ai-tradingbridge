@@ -24,6 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, SecretStr, StrictStr, field_validator
 import websockets
 from cryptography.fernet import Fernet, InvalidToken
+from app.market_analysis import DigitFrequencyWindow
 
 router = APIRouter(prefix="/deriv", tags=["deriv"])
 bearer = HTTPBearer(auto_error=False)
@@ -851,6 +852,9 @@ async def live_market_proxy(websocket: WebSocket) -> None:
         return
     await websocket.accept()
     subscribed_symbols: set[str] = set()
+    history_requests: dict[int, str] = {}
+    frequency_by_symbol: dict[str, DigitFrequencyWindow] = {}
+    pip_size_by_symbol: dict[str, int] = {}
     allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
     try:
         async with websockets.connect(
@@ -885,10 +889,50 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 subscribed_symbols.discard(symbol)
                                 await websocket.send_json({"error": {"code": "SUBSCRIPTION_LIMIT", "message": "Too many active subscriptions."}})
                                 continue
+                    if isinstance(message.get("ticks_history"), str) and isinstance(message.get("req_id"), int):
+                        history_requests[message["req_id"]] = message["ticks_history"]
                     await upstream.send(json.dumps(message, separators=(",", ":")))
 
             async def upstream_to_client() -> None:
                 async for raw in upstream:
+                    try:
+                        provider_message = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        provider_message = None
+
+                    if isinstance(provider_message, dict):
+                        msg_type = provider_message.get("msg_type")
+                        if msg_type == "history":
+                            req_id = provider_message.get("req_id")
+                            symbol = history_requests.pop(req_id, None) if isinstance(req_id, int) else None
+                            history = provider_message.get("history")
+                            if symbol and isinstance(history, dict):
+                                pip_size = provider_message.get("pip_size")
+                                if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                    pip_size_by_symbol[symbol] = pip_size
+                                tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                tracker.seed_history(
+                                    history.get("prices") or [],
+                                    history.get("times") or [],
+                                    pip_size_by_symbol.get(symbol),
+                                )
+                                provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                        elif msg_type == "tick":
+                            tick = provider_message.get("tick")
+                            if isinstance(tick, dict):
+                                symbol = tick.get("underlying_symbol") or tick.get("symbol")
+                                if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
+                                    tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                    pip_size = tick.get("pip_size", provider_message.get("pip_size"))
+                                    if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                        pip_size_by_symbol[symbol] = pip_size
+                                    tracker.add_tick(
+                                        tick.get("quote"),
+                                        tick.get("epoch"),
+                                        pip_size_by_symbol.get(symbol),
+                                    )
+                                    provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                        raw = json.dumps(provider_message, separators=(",", ":"))
                     await websocket.send_text(raw)
 
             tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
