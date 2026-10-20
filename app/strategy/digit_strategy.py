@@ -5,6 +5,7 @@ Percentage observations must come from a verified upstream Digit Analytics sourc
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Sequence
@@ -49,14 +50,27 @@ def digits_for(group: Group) -> frozenset[int]:
     return UNDER_DIGITS if group is Group.UNDER else OVER_DIGITS
 
 
-def evaluate_thresholds(percentages: Mapping[int, float], group: Group) -> tuple[bool, str]:
+def _valid_percentage(value: object) -> bool:
+    """Accept finite real percentage values only; bool is not a percentage."""
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(number) and 0.0 <= number <= 100.0
+
+
+def evaluate_thresholds(
+    percentages: Mapping[int, float], group: Group
+) -> tuple[bool, str]:
     """Pass if fewer than two digits are >=10% and none is >=10.5%."""
     digits = digits_for(group)
     if not digits.issubset(percentages):
         return False, "Missing one or more digit percentages."
+    if any(not _valid_percentage(percentages[d]) for d in digits):
+        return False, "Percentages must be finite numbers between 0 and 100."
     values = [float(percentages[d]) for d in digits]
-    if any(not 0 <= value <= 100 for value in values):
-        return False, "Percentages must be between 0 and 100."
     if any(value >= 10.5 for value in values):
         return False, "At least one digit is at or above 10.5%."
     if sum(value >= 10.0 for value in values) > 1:
@@ -70,13 +84,15 @@ def evaluate_stability(
     max_spread: float = 0.5,
 ) -> tuple[bool, str]:
     """Require each group's digit to have a max-minus-min spread <= 0.5 pp."""
+    if not _valid_percentage(max_spread):
+        return False, "Maximum spread must be a finite number between 0 and 100."
     if not observations:
         return False, "No percentage observations."
     digits = digits_for(group)
     for index, row in enumerate(observations):
         if not digits.issubset(row):
             return False, f"Observation {index} is missing group percentages."
-        if any(not 0 <= float(row[d]) <= 100 for d in digits):
+        if any(not _valid_percentage(row[d]) for d in digits):
             return False, f"Observation {index} contains an invalid percentage."
     for digit in sorted(digits):
         values = [float(row[digit]) for row in observations]
@@ -104,12 +120,15 @@ def choose_group(
     observations: Sequence[Mapping[int, float]],
 ) -> QualificationResult:
     """Select only if exactly one group qualifies and its lowest digit is unique."""
-    invalid_under = GroupEvaluation(Group.UNDER, False, False, False, "Incomplete data.")
-    invalid_over = GroupEvaluation(Group.OVER, False, False, False, "Incomplete data.")
-    if not ALL_DIGITS.issubset(percentages):
+    invalid_under = GroupEvaluation(Group.UNDER, False, False, False, "Incomplete or invalid data.")
+    invalid_over = GroupEvaluation(Group.OVER, False, False, False, "Incomplete or invalid data.")
+    if (
+        not ALL_DIGITS.issubset(percentages)
+        or any(not _valid_percentage(percentages[d]) for d in ALL_DIGITS)
+    ):
         return QualificationResult(
             Decision.INVALID_DATA, invalid_under, invalid_over,
-            reason="All ten current digit percentages are required.",
+            reason="All ten current digit percentages must be finite values from 0 to 100.",
         )
 
     under = evaluate_group(percentages, observations, Group.UNDER)
@@ -154,14 +173,14 @@ class PatternTracker:
     completed_patterns: int = 0
 
     def __post_init__(self) -> None:
-        if self.trigger_digit not in digits_for(self.selected_group):
-            raise ValueError("Trigger digit must belong to the selected group.")
+        if type(self.trigger_digit) is not int or self.trigger_digit not in digits_for(self.selected_group):
+            raise ValueError("Trigger digit must be an integer belonging to the selected group.")
 
     def reset(self) -> None:
         self.progress = 0
 
     def on_tick(self, digit: int) -> bool:
-        if digit not in ALL_DIGITS:
+        if type(digit) is not int or digit not in ALL_DIGITS:
             raise ValueError("Last digit must be an integer from 0 to 9.")
         selected = digits_for(self.selected_group)
         opposite = OVER_DIGITS if self.selected_group is Group.UNDER else UNDER_DIGITS
