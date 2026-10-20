@@ -51,7 +51,12 @@ class DigitFrequencyWindow:
         times: Iterable[Any],
         pip_size: Any = None,
     ) -> None:
-        self.points.clear()
+        # Merge history with any live ticks that arrived while the history
+        # request was in flight, avoiding an exact history/live overlap.
+        merged: dict[tuple[float, float, int | None], dict[str, Any]] = {}
+        for point in self.points:
+            key = (point["time"], point["price"], point["last_digit"])
+            merged[key] = point
         for price, epoch in zip(prices, times):
             try:
                 timestamp = float(epoch)
@@ -60,11 +65,17 @@ class DigitFrequencyWindow:
                 continue
             if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
                 continue
-            self.points.append({
+            point = {
                 "time": timestamp,
                 "price": numeric_price,
                 "last_digit": extract_last_digit(price, pip_size),
-            })
+            }
+            key = (point["time"], point["price"], point["last_digit"])
+            merged[key] = point
+        self.points = deque(
+            sorted(merged.values(), key=lambda point: point["time"])[-MAX_POINTS:],
+            maxlen=MAX_POINTS,
+        )
 
     def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> None:
         try:
