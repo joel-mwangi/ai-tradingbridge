@@ -5,7 +5,7 @@ This package is an isolated, side-effect-free Python rules engine. It does not c
 ## Files
 - `digit_strategy.py`: percentage thresholds, stability spread, group selection, lowest-digit trigger selection, tick-sequence recognition, and validation for timestamped initial-window snapshots.
 - `feed_health.py`: fail-closed validation for normalized percentage snapshots, including configured freshness, source/market matching, event ordering, duplicates, and disconnect/recovery state. This is not a Deriv adapter and does not prove source authenticity.
-- `session.py`: isolated session lifecycle for fresh-session resets, initial-window evaluation, group selection, and pattern tracking. It does not place trades.
+- `session.py`: isolated session lifecycle for fresh-session resets, initial-window evaluation, rolling 10-second reassessment when no unique group qualifies, group selection, and pattern tracking. It does not place trades.
 - `../../tests/test_digit_strategy.py`: automated unit tests.
 
 ## Run tests from the repository root
@@ -22,11 +22,10 @@ python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/te
 - snapshots have strictly increasing, timezone-aware source timestamps within the initial window;
 - every snapshot contains all ten finite digit percentages in the 0–100 range.
 
-This is a validation helper only. It does **not** verify that the upstream source is Deriv Digit Analytics, prove that no updates were missed, or define a post-window rolling policy. The caller must not synthesize updates or use an unverified source.
+This is a validation helper only. It does **not** verify that the upstream source is Deriv Digit Analytics or prove that no updates were missed. When neither group qualifies or both qualify, the session reassesses on each new real percentage snapshot using the latest rolling 10-second window; expired observations are excluded. The caller must not synthesize updates or use an unverified source.
 
 ## Deliberately not implemented yet
 - Deriv Digit Analytics feed integration (must be verified; a locally computed tick histogram is not automatically equivalent).
-- Strategy session orchestration and post-initial-10-second window policy.
 - Live safety-breach predicate.
 - Trade submission/settlement integration.
 - Tie-break for equal lowest percentages.
