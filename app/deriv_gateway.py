@@ -854,6 +854,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
     subscribed_symbols: set[str] = set()
     history_requests: dict[int, str] = {}
     frequency_by_symbol: dict[str, DigitFrequencyWindow] = {}
+    pip_size_by_symbol: dict[str, int] = {}
     allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
     try:
         async with websockets.connect(
@@ -906,29 +907,31 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             symbol = history_requests.pop(req_id, None) if isinstance(req_id, int) else None
                             history = provider_message.get("history")
                             if symbol and isinstance(history, dict):
+                                pip_size = provider_message.get("pip_size")
+                                if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                    pip_size_by_symbol[symbol] = pip_size
                                 tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
                                 tracker.seed_history(
                                     history.get("prices") or [],
                                     history.get("times") or [],
-                                    provider_message.get("pip_size"),
+                                    pip_size_by_symbol.get(symbol),
                                 )
-                                provider_message["digit_frequency"] = tracker.snapshot(
-                                    symbol, float(__import__("time").time())
-                                )
+                                provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
                         elif msg_type == "tick":
                             tick = provider_message.get("tick")
                             if isinstance(tick, dict):
                                 symbol = tick.get("underlying_symbol") or tick.get("symbol")
                                 if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
                                     tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                    pip_size = tick.get("pip_size")
+                                    if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                        pip_size_by_symbol[symbol] = pip_size
                                     tracker.add_tick(
                                         tick.get("quote"),
                                         tick.get("epoch"),
-                                        tick.get("pip_size"),
+                                        pip_size_by_symbol.get(symbol),
                                     )
-                                    provider_message["digit_frequency"] = tracker.snapshot(
-                                        symbol, float(__import__("time").time())
-                                    )
+                                    provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
                         raw = json.dumps(provider_message, separators=(",", ":"))
                     await websocket.send_text(raw)
 
