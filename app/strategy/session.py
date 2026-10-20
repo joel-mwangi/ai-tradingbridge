@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Sequence
 
 from app.strategy.digit_strategy import (
     Decision,
@@ -82,7 +81,7 @@ class DigitStrategySession:
     def add_snapshot(
         self, snapshot: PercentageSnapshot, now: datetime
     ) -> SessionUpdate:
-        if self.state is not SessionState.OBSERVING or self.started_at is None:
+        if self.state not in (SessionState.OBSERVING, SessionState.WAITING_FOR_MORE_DATA) or self.started_at is None:
             return SessionUpdate(self.state, "Session is not accepting observations.")
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             self.state = SessionState.BLOCKED
@@ -94,19 +93,21 @@ class DigitStrategySession:
             return SessionUpdate(self.state, f"Feed rejected snapshot: {health.reason}")
 
         observed_at = health.snapshot.observed_at.astimezone(timezone.utc)
-        window_end = self.started_at + timedelta(seconds=self.window_seconds)
-        if observed_at < self.started_at or observed_at > window_end:
+        if observed_at < self.started_at:
             self.state = SessionState.BLOCKED
-            return SessionUpdate(self.state, "Snapshot falls outside the session's initial observation window.")
+            return SessionUpdate(self.state, "Snapshot predates this strategy session.")
 
         self.observations.append(
             TimestampedPercentageObservation(observed_at, dict(health.snapshot.percentages))
         )
+        if self.state is SessionState.WAITING_FOR_MORE_DATA:
+            # Reassess on each new real percentage event, never on ticks.
+            return self.evaluate(now)
         return SessionUpdate(self.state, "Fresh timestamped snapshot recorded.")
 
     def evaluate(self, now: datetime) -> SessionUpdate:
-        if self.state is not SessionState.OBSERVING or self.started_at is None:
-            return SessionUpdate(self.state, "Session is not ready for initial-window evaluation.", self.qualification)
+        if self.state not in (SessionState.OBSERVING, SessionState.WAITING_FOR_MORE_DATA) or self.started_at is None:
+            return SessionUpdate(self.state, "Session is not ready for percentage-window evaluation.", self.qualification)
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             self.state = SessionState.BLOCKED
             return SessionUpdate(self.state, "Evaluation timestamp must be timezone-aware.")
@@ -114,8 +115,37 @@ class DigitStrategySession:
         if now_utc < self.started_at + timedelta(seconds=self.window_seconds):
             return SessionUpdate(self.state, "Initial observation window has not elapsed.")
 
+        if self.state is SessionState.OBSERVING:
+            window_start = self.started_at
+            window_end = self.started_at + timedelta(seconds=self.window_seconds)
+            if now_utc < window_end:
+                return SessionUpdate(self.state, "Initial observation window has not elapsed.")
+            # Initial qualification uses only events from the first window.
+            window_observations = [
+                item for item in self.observations
+                if window_start <= item.observed_at.astimezone(timezone.utc) <= window_end
+            ]
+        else:
+            # Rolling reassessment excludes expired observations.
+            window_start = now_utc - timedelta(seconds=self.window_seconds)
+            window_observations = [
+                item for item in self.observations
+                if window_start <= item.observed_at.astimezone(timezone.utc) <= now_utc
+            ]
+            self.observations = window_observations
+
+        if len(window_observations) < 2:
+            if self.state is SessionState.OBSERVING:
+                self.state = SessionState.BLOCKED
+                return SessionUpdate(self.state, "Initial window needs at least two real percentage updates.")
+            return SessionUpdate(
+                self.state,
+                "Waiting for at least two real percentage updates inside the rolling 10-second window.",
+                self.qualification,
+            )
+
         result = choose_group_from_timestamped_observations(
-            self.observations, self.started_at, now_utc, self.window_seconds
+            window_observations, window_start, now_utc, self.window_seconds
         )
         self.qualification = result
         if result.decision is Decision.SELECT_UNDER:
@@ -127,7 +157,11 @@ class DigitStrategySession:
             return SessionUpdate(self.state, result.reason, result)
         else:
             self.state = SessionState.WAITING_FOR_MORE_DATA
-            return SessionUpdate(self.state, result.reason, result)
+            return SessionUpdate(
+                self.state,
+                f"{result.reason} Reassessing on each new percentage snapshot using a rolling {self.window_seconds:g}-second window.",
+                result,
+            )
 
         self.trigger_digit = result.trigger_digit
         self.pattern_tracker = PatternTracker(self.selected_group, self.trigger_digit)
