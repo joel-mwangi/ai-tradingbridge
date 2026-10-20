@@ -26,11 +26,12 @@ def extract_last_digit(quote: Any, pip_size: Any = None) -> int | None:
         return None
 
     raw = str(quote)
-    precision = (
-        int(pip_size)
-        if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12
-        else len(raw.split(".", 1)[1]) if isinstance(quote, str) and "." in raw else None
-    )
+    if pip_size is not None:
+        if type(pip_size) is not int or not 0 <= pip_size <= 12:
+            return None
+        precision = pip_size
+    else:
+        precision = len(raw.split(".", 1)[1]) if isinstance(quote, str) and "." in raw else None
     if precision is None or not 0 <= precision <= 12:
         return None
     formatted = f"{value:.{precision}f}"
