@@ -88,7 +88,7 @@ During these 10 seconds:
 4. Apply both the percentage-threshold test and the stability-spread test.
 5. Do not submit a trade during this initial assessment.
 
-If data is incomplete or stale, the algorithm must fail closed for qualification: it must not claim that a group is stable based on missing updates.
+If data is incomplete or stale, the algorithm must fail closed for qualification: it must not claim that a group is stable based on missing updates. If neither group qualifies after the initial window, reassess using a rolling 10-second window whenever a new valid percentage snapshot arrives; exclude observations older than the current window. If both qualify, use the same rolling-window reassessment rather than arbitrarily selecting a group.
 
 ## 5. Digit groups
 
@@ -151,7 +151,7 @@ Under and Over are evaluated independently against the same percentage stream.
 | Fail | Fail | Continue observing until a group qualifies |
 | Pass | Pass | Do not trade yet; wait for another valid percentage observation and reassess |
 
-If both qualify, do not arbitrarily choose one. Continue observing and reevaluate. The implementation must define a consistent timestamp/window policy for this continuing observation; see **Open decisions** below.
+If both qualify, do not arbitrarily choose one. Continue observing and reevaluate. The implementation uses the latest rolling 10-second window for continuing observation. Reassessment is triggered by each new valid percentage snapshot; expired observations are excluded.
 
 Once exactly one group qualifies, select the digit with the lowest percentage in that group and store it as `triggerDigit`.
 
@@ -356,14 +356,14 @@ ON USER START:
     keep tracking every submitted contract until settlement is recorded
 ```
 
-This pseudocode intentionally leaves the live safety-breach predicate, percentage-window policy after the initial 10 seconds, lowest-percentage tie-break, and trade-to-trade wait policy explicit as unresolved decisions.
+This pseudocode intentionally leaves the live safety-breach predicate, lowest-percentage tie-break, and trade-to-trade wait policy explicit as unresolved decisions.
 
 ## 15. Unresolved decisions before implementation
 
 These questions must be answered rather than silently filled in by code:
 
 1. **Lowest-percentage tie:** what should happen if two or more digits in the chosen group have the same lowest percentage?
-2. **Post-window stability:** after the first 10 seconds, when neither group qualifies or both qualify, should stability use a rolling 10-second window, a new 10-second window, or another explicitly defined window?
+2. **Post-window stability:** resolved — use a rolling 10-second window, reassessed on each new valid percentage snapshot when neither or both groups qualify.
 3. **Live safety breach:** which percentage limits trigger a stop after group selection, and do they apply to the selected group or both groups?
 4. **Trade sequencing:** should the next purchase begin after the previous purchase is acknowledged, or only after the previous contract settles? Both are sequential; they have materially different exposure and timing.
 5. **Data quality/connection loss:** how long may percentage data or ticks be stale before the strategy pauses, and what recovery condition permits it to continue?
