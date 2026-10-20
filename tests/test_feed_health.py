@@ -94,6 +94,23 @@ class PercentageFeedHealthTests(unittest.TestCase):
         )
         self.assertTrue(self.monitor.accept(fresh, self.now).accepted)
 
+
+    def test_unhealthy_feed_requires_explicit_reset(self):
+        stale = PercentageSnapshot(
+            self.snapshot.source_id, self.snapshot.market_id,
+            self.now - timedelta(seconds=8), self.now - timedelta(seconds=7),
+            self.snapshot.percentages, "evt-stale",
+        )
+        self.assertFalse(self.monitor.accept(stale, self.now).accepted)
+        self.assertFalse(self.monitor.accept(self.snapshot, self.now).accepted)
+        self.monitor.reset_after_reconnect()
+        fresh = PercentageSnapshot(
+            self.snapshot.source_id, self.snapshot.market_id,
+            self.now - timedelta(milliseconds=200), self.now - timedelta(milliseconds=100),
+            self.snapshot.percentages, "evt-fresh",
+        )
+        self.assertTrue(self.monitor.accept(fresh, self.now).accepted)
+
     def test_requires_explicit_positive_freshness_limit(self):
         with self.assertRaises(ValueError):
             PercentageFeedHealth("feed", "R_100", float("nan"))
