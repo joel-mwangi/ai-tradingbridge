@@ -4,11 +4,12 @@ This package is an isolated, side-effect-free Python rules engine. It does not c
 
 ## Files
 - `digit_strategy.py`: percentage thresholds, stability spread, group selection, lowest-digit trigger selection, tick-sequence recognition, and validation for timestamped initial-window snapshots.
+- `feed_health.py`: fail-closed validation for normalized percentage snapshots, including configured freshness, source/market matching, event ordering, duplicates, and disconnect/recovery state. This is not a Deriv adapter and does not prove source authenticity.
 - `../../tests/test_digit_strategy.py`: automated unit tests.
 
 ## Run tests from the repository root
 ```powershell
-python -m unittest tests.test_digit_strategy -v
+python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py -v
 ```
 
 ## Timestamped initial-window validation
