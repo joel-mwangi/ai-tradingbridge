@@ -113,3 +113,12 @@ Frequency summaries and chi-square statistics are descriptive diagnostics, not t
 signals. They do not prove future outcomes are predictable. Strategy claims require
 pre-registered hypotheses, adequate sample sizes, chronological train/validation/test
 splits, and realistic payout/cost modelling.
+
+
+## Backend digit frequency
+
+The public `/deriv/live/market` WebSocket enriches Deriv history/tick responses with a `digit_frequency` object. The backend computes counts and one-decimal percentages over the last 50, 100, 250, 500 and 1,000 observed tick points. Each window counts only points for which last-digit extraction is valid. The snapshot identifies its source as `tradebridge_backend_tick_frequency` and includes the market symbol, calculation timestamp, latest tick timestamp, sample size, counts and percentages.
+
+The frontend must render these backend values rather than independently recomputing the displayed digit percentages. They are TradeBridge-calculated observed-tick frequencies, **not official Deriv Digit Analytics percentages**, and are not evidence that any digit predicts the next outcome.
+
+The strategy adapter `app.strategy.market_frequency_adapter.to_percentage_snapshot` converts the backend's 1,000-tick window into the existing fail-closed strategy feed format. The strategy still requires an explicitly configured `PercentageFeedHealth` monitor and a fresh observation window. This adapter does not start a strategy session, place orders, or enable trade execution. Live strategy orchestration remains separate.
