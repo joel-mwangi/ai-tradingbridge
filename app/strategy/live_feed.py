@@ -20,6 +20,7 @@ class LiveStrategyFeed:
 
     def __init__(self) -> None:
         self.symbol: str | None = None
+        self.window_size: int = 1000
         self.session: DigitStrategySession | None = None
         self.feed_health: PercentageFeedHealth | None = None
 
@@ -38,11 +39,14 @@ class LiveStrategyFeed:
             raise ValueError("TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS must be a positive finite number.")
         return value
 
-    def start(self, symbol: str) -> dict[str, Any]:
+    def start(self, symbol: str, window_size: int = 1000) -> dict[str, Any]:
         if not isinstance(symbol, str) or not symbol.strip():
             raise ValueError("A valid market symbol is required to start strategy observation.")
+        if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
+            raise ValueError("Strategy window_size must be one of 50, 100, 250, 500, or 1000 ticks.")
         now = self._now()
         self.symbol = symbol
+        self.window_size = window_size
         self.feed_health = PercentageFeedHealth(
             expected_source_id=SOURCE_ID,
             expected_market_id=symbol,
@@ -58,7 +62,7 @@ class LiveStrategyFeed:
         reason = (
             "Strategy started in observation-only mode. Waiting for a fresh "
             "TradeBridge backend frequency snapshot for the selected market "
-            "and 1,000-tick window; these are observed-tick frequencies, not "
+            f"and {self.window_size}-tick window; these are observed-tick frequencies, not "
             "official Deriv Digit Analytics percentages or predictions."
         )
         return self._status(reason)
@@ -82,14 +86,14 @@ class LiveStrategyFeed:
         if not isinstance(payload, Mapping) or payload.get("symbol") != self.symbol:
             return None
         windows = payload.get("windows")
-        summary = windows.get(STRATEGY_WINDOW) if isinstance(windows, Mapping) else None
+        summary = windows.get(str(self.window_size)) if isinstance(windows, Mapping) else None
         # Early history may contain fewer than two valid points. This is not a
         # bad feed event; wait for actual ticks to build a usable histogram.
         sample_size = summary.get("sample_size") if isinstance(summary, Mapping) else None
         if type(sample_size) is int and sample_size < 2:
             return None
         try:
-            snapshot = to_percentage_snapshot(payload, received_at=self._now())
+            snapshot = to_percentage_snapshot(payload, received_at=self._now(), window=str(self.window_size))
         except ValueError as exc:
             self.feed_health.mark_disconnected(f"Invalid percentage source event: {exc}")
             self.session.state = SessionState.BLOCKED
@@ -149,6 +153,7 @@ class LiveStrategyFeed:
             "feed_state": self.feed_health.state.value if self.feed_health else FeedState.DISCONNECTED.value,
             "observation_count": len(session.observations) if session else 0,
             "window_seconds": session.window_seconds if session else 10.0,
+            "digit_window_size": self.window_size,
             "qualification": self._qualification_summary(qualification or (session.qualification if session else None)),
             "execution_enabled": False,
         }
