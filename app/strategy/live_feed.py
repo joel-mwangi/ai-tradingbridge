@@ -105,6 +105,16 @@ class LiveStrategyFeed:
         update = self.session.on_tick(digit)
         return self._status(update.reason, update.qualification)
 
+    def reject_tick(self, reason: str) -> dict[str, Any] | None:
+        """Fail closed when a live tick is invalid, duplicate, or out of order."""
+        if self.feed_health is not None:
+            self.feed_health.mark_disconnected(reason)
+        if self.session is not None and self.session.state not in (SessionState.IDLE, SessionState.STOPPED):
+            self.session.state = SessionState.BLOCKED
+        if self.session is None:
+            return None
+        return self._status(f"Strategy blocked: {reason}")
+
     def disconnected(self, reason: str = "Live market transport disconnected.") -> dict[str, Any] | None:
         if self.feed_health is not None:
             self.feed_health.mark_disconnected(reason)
