@@ -977,7 +977,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                         and strategy_feed.session is not None
                                         and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
                                     )
-                                    if active_strategy and tick_result != "accepted":
+                                    if active_strategy and tick_result not in {"accepted", "history_overlap"}:
                                         reason = (
                                             "Duplicate live tick detected."
                                             if tick_result == "duplicate"
