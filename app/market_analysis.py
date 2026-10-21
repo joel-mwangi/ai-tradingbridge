@@ -46,14 +46,17 @@ class DigitFrequencyWindow:
     """A bounded, per-connection/per-market window of actual observed tick points."""
     points: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_POINTS))
 
+    @staticmethod
+    def _fallback_event_id(timestamp: float, numeric_price: float) -> str:
+        return f"{timestamp:.6f}:{numeric_price:.12g}"
+
     def seed_history(
         self,
         prices: Iterable[Any],
         times: Iterable[Any],
         pip_size: Any = None,
     ) -> None:
-        # Merge history with any live ticks that arrived while the history
-        # request was in flight, avoiding an exact history/live overlap.
+        # Merge history with live ticks that arrived while history was in flight.
         merged: dict[tuple[float, float, int | None], dict[str, Any]] = {}
         for point in self.points:
             key = (point["time"], point["price"], point["last_digit"])
@@ -70,21 +73,27 @@ class DigitFrequencyWindow:
                 "time": timestamp,
                 "price": numeric_price,
                 "last_digit": extract_last_digit(price, pip_size),
-                "event_id": f"{timestamp:.6f}:{numeric_price:.12g}",
+                "event_id": self._fallback_event_id(timestamp, numeric_price),
             }
             key = (point["time"], point["price"], point["last_digit"])
-            merged[key] = point
+            merged.setdefault(key, point)
         self.points = deque(
             sorted(merged.values(), key=lambda point: point["time"])[-MAX_POINTS:],
             maxlen=MAX_POINTS,
         )
 
-    def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> str:
-        """Append one strictly ordered live tick and report integrity failures.
+    def add_tick(
+        self,
+        quote: Any,
+        epoch: Any,
+        pip_size: Any = None,
+        source_event_id: Any = None,
+    ) -> str:
+        """Append an ordered live tick.
 
-        Returns accepted, duplicate, out_of_order, or invalid. Strategy callers
-        must block on duplicate/out-of-order live events rather than silently
-        advancing a pattern on a corrupted stream.
+        Equal provider timestamps are allowed when they identify distinct events:
+        epoch fields commonly have only one-second precision. Exact repeated event
+        IDs are duplicates; older timestamps are out of order.
         """
         try:
             timestamp = float(epoch)
@@ -96,18 +105,23 @@ class DigitFrequencyWindow:
         digit = extract_last_digit(quote, pip_size)
         if digit is None:
             return "invalid"
+
+        if isinstance(source_event_id, (str, int)) and not isinstance(source_event_id, bool) and str(source_event_id).strip():
+            event_id = f"provider:{str(source_event_id).strip()}"
+        else:
+            event_id = self._fallback_event_id(timestamp, numeric_price)
+
+        if any(point.get("event_id") == event_id for point in self.points):
+            return "duplicate"
+
         point = {
             "time": timestamp,
             "price": numeric_price,
             "last_digit": digit,
-            "event_id": f"{timestamp:.6f}:{numeric_price:.12g}",
+            "event_id": event_id,
         }
-        if self.points:
-            latest = self.points[-1]
-            if point["time"] == latest["time"] and point["price"] == latest["price"] and point["last_digit"] == latest["last_digit"]:
-                return "duplicate"
-            if timestamp <= latest["time"]:
-                return "out_of_order"
+        if self.points and timestamp < self.points[-1]["time"]:
+            return "out_of_order"
         self.points.append(point)
         return "accepted"
 
