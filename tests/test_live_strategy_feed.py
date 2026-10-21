@@ -33,32 +33,30 @@ def test_start_creates_fresh_observation_only_session():
     with patch.object(LiveStrategyFeed, "_now", return_value=now):
         runtime = LiveStrategyFeed()
         status = runtime.start("1HZ100V")
-    assert status["state"] == "blocked"
+    assert status["state"] == "observing"
     assert status["symbol"] == "1HZ100V"
     assert status["execution_enabled"] is False
     assert status["observation_count"] == 0
-    assert "no verified Deriv Digit Analytics percentage feed" in status["reason"]
-    assert "disconnected" == status["feed_state"]
+    assert "Waiting for a fresh TradeBridge backend frequency snapshot" in status["reason"]
 
 
-def test_unverified_tick_frequency_cannot_qualify_strategy_group():
+def test_backend_frequency_snapshot_is_consumed_in_observation_only_mode():
     start = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
     clock = [start]
     runtime = LiveStrategyFeed()
     with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: clock[0]):
         status = runtime.start("1HZ100V")
-
         clock[0] = start + timedelta(seconds=10)
         result = runtime.on_frequency(
             frequency_payload("1HZ100V", clock[0], start.timestamp() + 10)
         )
 
-    assert status["state"] == "blocked"
-    assert result is None
+    assert status["state"] == "observing"
+    assert result is not None
+    assert result["symbol"] == "1HZ100V"
+    assert result["execution_enabled"] is False
     assert runtime.session is not None
-    assert runtime.session.state is SessionState.BLOCKED
-    assert runtime.session.selected_group is None
-    assert runtime.session.observations == []
+    assert runtime.session.state is not SessionState.BLOCKED
     assert runtime._status("safety check")["execution_enabled"] is False
 
 
@@ -72,7 +70,7 @@ def test_history_event_before_start_does_not_enter_observation_window():
         )
     assert result is None
     assert runtime.session is not None
-    assert runtime.session.state is SessionState.BLOCKED
+    assert runtime.session.state is SessionState.OBSERVING
     assert runtime.session.observations == []
 
 
