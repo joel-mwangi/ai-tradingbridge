@@ -62,6 +62,10 @@ class LiveStrategyFeed:
         """Consume one real backend frequency event; ignore insufficient history."""
         if self.session is None or self.feed_health is None or self.symbol is None:
             return None
+        if self.session.state is SessionState.SELECTED:
+            # Percentage qualification is complete; live ticks, not repeated
+            # histogram snapshots, drive pattern tracking after selection.
+            return None
         if not isinstance(payload, Mapping) or payload.get("symbol") != self.symbol:
             return None
         windows = payload.get("windows")
