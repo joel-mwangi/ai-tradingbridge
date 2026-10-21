@@ -68,7 +68,8 @@ class LiveStrategyFeed:
         summary = windows.get(STRATEGY_WINDOW) if isinstance(windows, Mapping) else None
         # Early history may contain fewer than two valid points. This is not a
         # bad feed event; wait for actual ticks to build a usable histogram.
-        if isinstance(summary, Mapping) and summary.get("sample_size", 0) < 2:
+        sample_size = summary.get("sample_size") if isinstance(summary, Mapping) else None
+        if type(sample_size) is int and sample_size < 2:
             return None
         try:
             snapshot = to_percentage_snapshot(payload, received_at=self._now())
