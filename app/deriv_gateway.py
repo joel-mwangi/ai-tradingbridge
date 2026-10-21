@@ -885,8 +885,12 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
                                 await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
                                 continue
+                            window_size = control.get("window_size", 1000)
+                            if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
+                                continue
                             try:
-                                status = strategy_feed.start(symbol)
+                                status = strategy_feed.start(symbol, window_size=window_size)
                             except ValueError as exc:
                                 await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
                                 continue
@@ -897,7 +901,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             while history_req_id in history_requests:
                                 history_req_id = secrets.randbelow(1_000_000) + 8_000_000
                             history_requests[history_req_id] = symbol
-                            await upstream.send(json.dumps({"ticks_history": symbol, "count": 1000, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
+                            await upstream.send(json.dumps({"ticks_history": symbol, "count": window_size, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
                             # Do not create a second upstream tick stream when the UI
                             # already subscribed to this symbol or Start is pressed again.
                             if not already_subscribed:

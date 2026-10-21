@@ -5,11 +5,13 @@ from app.strategy.live_feed import LiveStrategyFeed
 from app.strategy.session import SessionState
 
 
-def frequency_payload(symbol, timestamp, event_epoch):
+def frequency_payload(symbol, timestamp, event_epoch, window_size=1000):
     # Counts sum to 1,000 and percentages are derived from those counts.
     # Under uniquely qualifies; digit 4 is its lowest-frequency digit.
-    counts = {0: 99, 1: 98, 2: 97, 3: 97, 4: 95, 5: 101, 6: 102, 7: 103, 8: 104, 9: 104}
-    percentages = {str(d): round(counts[d] / 1000 * 100, 1) for d in range(10)}
+    base_counts = {0: 99, 1: 98, 2: 97, 3: 97, 4: 95, 5: 101, 6: 102, 7: 103, 8: 104, 9: 104}
+    counts = {d: round(base_counts[d] * window_size / 1000) for d in range(10)}
+    counts[0] += window_size - sum(counts.values())
+    percentages = {str(d): round(counts[d] / window_size * 100, 1) for d in range(10)}
     return {
         "source": "tradebridge_backend_tick_frequency",
         "symbol": symbol,
@@ -17,9 +19,9 @@ def frequency_payload(symbol, timestamp, event_epoch):
         "latest_tick_epoch": event_epoch,
         "latest_tick_event_id": f"{event_epoch:.6f}:123.45",
         "windows": {
-            "1000": {
-                "window_size": 1000,
-                "sample_size": 1000,
+            str(window_size): {
+                "window_size": window_size,
+                "sample_size": window_size,
                 "counts": {str(d): counts[d] for d in range(10)},
                 "percentages": percentages,
             }
@@ -33,32 +35,35 @@ def test_start_creates_fresh_observation_only_session():
     with patch.object(LiveStrategyFeed, "_now", return_value=now):
         runtime = LiveStrategyFeed()
         status = runtime.start("1HZ100V")
-    assert status["state"] == "blocked"
+    assert status["state"] == "observing"
     assert status["symbol"] == "1HZ100V"
     assert status["execution_enabled"] is False
+    assert status["digit_window_size"] == 1000
     assert status["observation_count"] == 0
-    assert "no verified Deriv Digit Analytics percentage feed" in status["reason"]
-    assert "disconnected" == status["feed_state"]
+    assert "Waiting for a fresh TradeBridge backend frequency snapshot" in status["reason"]
 
 
-def test_unverified_tick_frequency_cannot_qualify_strategy_group():
+def test_backend_frequency_snapshot_is_consumed_in_observation_only_mode():
     start = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
     clock = [start]
     runtime = LiveStrategyFeed()
     with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: clock[0]):
         status = runtime.start("1HZ100V")
-
+        clock[0] = start + timedelta(seconds=9)
+        runtime.on_frequency(
+            frequency_payload("1HZ100V", clock[0], start.timestamp() + 9)
+        )
         clock[0] = start + timedelta(seconds=10)
         result = runtime.on_frequency(
             frequency_payload("1HZ100V", clock[0], start.timestamp() + 10)
         )
 
-    assert status["state"] == "blocked"
-    assert result is None
+    assert status["state"] == "observing"
+    assert result is not None
+    assert result["symbol"] == "1HZ100V"
+    assert result["execution_enabled"] is False
     assert runtime.session is not None
-    assert runtime.session.state is SessionState.BLOCKED
-    assert runtime.session.selected_group is None
-    assert runtime.session.observations == []
+    assert runtime.session.state is not SessionState.BLOCKED
     assert runtime._status("safety check")["execution_enabled"] is False
 
 
@@ -72,7 +77,7 @@ def test_history_event_before_start_does_not_enter_observation_window():
         )
     assert result is None
     assert runtime.session is not None
-    assert runtime.session.state is SessionState.BLOCKED
+    assert runtime.session.state is SessionState.OBSERVING
     assert runtime.session.observations == []
 
 
@@ -99,3 +104,26 @@ def test_stop_prevents_future_strategy_processing():
     assert runtime.session is not None
     assert runtime.session.state is SessionState.STOPPED
     assert stopped["execution_enabled"] is False
+
+
+def test_strategy_uses_the_selected_digit_window_for_snapshots():
+    start = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
+    runtime = LiveStrategyFeed()
+    with patch.object(LiveStrategyFeed, "_now", return_value=start):
+        status = runtime.start("1HZ100V", window_size=100)
+        result = runtime.on_frequency(
+            frequency_payload("1HZ100V", start + timedelta(seconds=1), start.timestamp() + 1, window_size=100)
+        )
+    assert status["digit_window_size"] == 100
+    assert result is not None
+    assert result["execution_enabled"] is False
+
+
+def test_strategy_rejects_unsupported_selected_digit_window():
+    runtime = LiveStrategyFeed()
+    try:
+        runtime.start("1HZ100V", window_size=75)
+    except ValueError as exc:
+        assert "one of 50, 100, 250, 500, or 1000" in str(exc)
+    else:
+        raise AssertionError("Unsupported digit window should be rejected")
