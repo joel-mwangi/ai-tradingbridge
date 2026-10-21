@@ -94,6 +94,8 @@ class DigitFrequencyWindow:
         if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
             return "invalid"
         digit = extract_last_digit(quote, pip_size)
+        if digit is None:
+            return "invalid"
         point = {
             "time": timestamp,
             "price": numeric_price,
