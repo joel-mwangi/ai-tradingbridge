@@ -85,7 +85,7 @@ def test_history_arriving_before_live_tick_deduplicates_provider_id_overlap():
 
     # The provider ID differs from the synthetic history ID, but the tick
     # fingerprint matches the historical row.
-    assert window.add_tick("1.2", 123, 1, "provider-123") == "duplicate"
+    assert window.add_tick("1.2", 123, 1, "provider-123") == "history_overlap"
     assert window.add_tick("1.4", 125, 1, "provider-125") == "accepted"
     summary = window.snapshot("R_100")["windows"]["50"]
     assert summary["sample_size"] == 3
@@ -108,7 +108,7 @@ def test_history_arriving_after_live_tick_does_not_double_count_it():
 def test_identical_live_tick_after_history_overlap_is_consumed_only_once():
     window = DigitFrequencyWindow()
     window.seed_history(["1.2"], [123], 1)
-    assert window.add_tick("1.2", 123, 1, "provider-123") == "duplicate"
+    assert window.add_tick("1.2", 123, 1, "provider-123") == "history_overlap"
     # A second event with same second-resolution timestamp and quote is not
     # suppressed by the already-consumed overlap marker.
     assert window.add_tick("1.2", 123, 1, "provider-124") == "accepted"
