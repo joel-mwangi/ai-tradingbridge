@@ -1,33 +1,71 @@
-# TradeBridge Digit Strategy — Step 1
+# TradeBridge Digit Strategy
 
-This package is an isolated, side-effect-free Python rules engine. It does not connect to Deriv, FastAPI routes, a database, or the UI, and it cannot place trades.
+This package contains a rules engine and an observation-only live-feed bridge.
+It does not submit trades.
 
 ## Files
-- `digit_strategy.py`: percentage thresholds, stability spread, group selection, lowest-digit trigger selection, tick-sequence recognition, and validation for timestamped initial-window snapshots.
-- `feed_health.py`: fail-closed validation for normalized percentage snapshots, including configured freshness, source/market matching, event ordering, duplicates, and disconnect/recovery state. This is not a Deriv adapter and does not prove source authenticity.
-- `session.py`: isolated session lifecycle for fresh-session resets, initial-window evaluation, rolling 10-second reassessment when no unique group qualifies, group selection, and pattern tracking. It does not place trades.
-- `../../tests/test_digit_strategy.py`: automated unit tests.
+- `digit_strategy.py`: thresholds, stability spread, group selection, trigger digit, and pattern recognition.
+- `feed_health.py`: fail-closed source/market/freshness/order/duplicate validation.
+- `market_frequency_adapter.py`: normalizes backend `digit_frequency` payloads.
+- `session.py`: fresh-session lifecycle, initial 10-second observation window, rolling 10-second reassessment, group selection, and pattern tracking.
+- `live_feed.py`: binds actual live percentage snapshots and ticks to one isolated strategy session; reports state only.
 
-## Run tests from the repository root
-```powershell
-python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py -v
+## Percentage source
+
+The strategy input is `tradebridge_backend_tick_frequency`, using
+`windows["1000"]` from the backend's observed tick histogram. These are
+TradeBridge-calculated frequencies from up to the last 1,000 valid observed
+tick points, not official Deriv Digit Analytics percentages and not predictions.
+
+The adapter rejects unknown sources, missing symbols/windows, insufficient or
+impossible sample sizes, incomplete/non-finite/out-of-range percentages, and
+invalid timestamps. Each normalized snapshot uses the provider's latest tick epoch as its observation
+timestamp and carries a stable market-scoped event ID derived from that source
+tick's timestamp and quote. The server calculation timestamp is diagnostic only.
+Live ticks must be strictly time-ordered; duplicate or non-increasing events block
+the active strategy session. Every snapshot must
+pass `PercentageFeedHealth`; a matching source ID does not independently
+authenticate the transport.
+
+## Live market WebSocket control protocol
+
+The `/deriv/live/market` WebSocket accepts the following control messages,
+which are handled by TradeBridge and are not forwarded to Deriv:
+
+```json
+{"strategy":{"action":"start","symbol":"1HZ100V"}}
+{"strategy":{"action":"status"}}
+{"strategy":{"action":"stop"}}
 ```
 
-## Timestamped initial-window validation
+Start creates a fresh per-connection session, requests recent tick history to
+seed the frequency calculator, subscribes to live ticks for the chosen market,
+and begins the 10-second observation window. Historical seed data is never
+counted as a post-Start observation. Only subsequent live tick events with
+valid frequency snapshots can advance the strategy.
 
-`validate_initial_observation_window` checks that:
-- the session start and evaluation timestamps are timezone-aware;
-- the full configured initial window (10 seconds by default) has elapsed;
-- at least two actual source snapshots exist (one snapshot alone cannot prove stability);
-- snapshots have strictly increasing, timezone-aware source timestamps within the initial window;
-- every snapshot contains all ten finite digit percentages in the 0–100 range.
+The WebSocket sends `strategy_status` messages containing state, reason,
+selected group, trigger digit, feed state, observation count, qualification
+details, and `execution_enabled: false`. States include observing, selected,
+waiting_for_more_data, blocked, and stopped. A disconnect blocks the session;
+a new connection must start a fresh session and rebuild the full window.
 
-This is a validation helper only. It does **not** verify that the upstream source is Deriv Digit Analytics or prove that no updates were missed. When neither group qualifies or both qualify, the session reassesses on each new real percentage snapshot using the latest rolling 10-second window; expired observations are excluded. The caller must not synthesize updates or use an unverified source.
+Configure `TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS` to a positive finite
+value appropriate for the market's update cadence. It defaults to 5 seconds.
+Stale, duplicated, out-of-order, malformed, or wrong-market snapshots fail
+closed. Never synthesize percentage updates or silently switch source types.
 
-## Deliberately not implemented yet
-- Deriv Digit Analytics feed integration (must be verified; a locally computed tick histogram is not automatically equivalent).
+## Tests
+
+```powershell
+python -m pytest tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_live_strategy_feed.py -v
+```
+
+## Not implemented in this step
+
+- Frontend controls and display for `strategy_status`.
 - Live safety-breach predicate.
-- Trade submission/settlement integration.
+- Trade submission/settlement and purchase-acknowledgement reconciliation.
 - Tie-break for equal lowest percentages.
 
-No trade execution is implemented in this step. Real-account execution must remain disabled until separately reviewed safety and reconciliation controls are ready.
+No trade execution is implemented here. Real-account execution remains disabled.

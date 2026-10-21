@@ -138,6 +138,20 @@ class TimestampedSelectionTests(unittest.TestCase):
         self.assertEqual(result.decision, Decision.INVALID_DATA)
         self.assertIsNone(result.trigger_digit)
 
+    def test_equal_lowest_percentages_choose_smallest_digit(self):
+        first = {0: 7.0, 1: 7.0, 2: 8.0, 3: 8.2, 4: 8.3,
+                 5: 10.5, 6: 8.0, 7: 8.0, 8: 8.0, 9: 8.0}
+        second = dict(first)
+        observations = [
+            TimestampedPercentageObservation(self.started + timedelta(seconds=1), first),
+            TimestampedPercentageObservation(self.started + timedelta(seconds=9), second),
+        ]
+        result = choose_group_from_timestamped_observations(
+            observations, self.started, self.evaluated
+        )
+        self.assertEqual(result.decision, Decision.SELECT_UNDER)
+        self.assertEqual(result.trigger_digit, 0)
+
 
 class StabilityTests(unittest.TestCase):
     def test_spread_exactly_point_five_passes(self):

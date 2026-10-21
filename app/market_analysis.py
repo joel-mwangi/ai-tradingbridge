@@ -45,6 +45,13 @@ def extract_last_digit(quote: Any, pip_size: Any = None) -> int | None:
 class DigitFrequencyWindow:
     """A bounded, per-connection/per-market window of actual observed tick points."""
     points: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_POINTS))
+    # History has second-resolution timestamps but no event IDs. Keep unmatched
+    # history fingerprints so the first identical live event is not counted twice.
+    _history_overlap_pending: Counter[tuple[float, float, int | None]] = field(default_factory=Counter, repr=False)
+
+    @staticmethod
+    def _fallback_event_id(timestamp: float, numeric_price: float) -> str:
+        return f"{timestamp:.6f}:{numeric_price:.12g}"
 
     def seed_history(
         self,
@@ -52,12 +59,16 @@ class DigitFrequencyWindow:
         times: Iterable[Any],
         pip_size: Any = None,
     ) -> None:
-        # Merge history with any live ticks that arrived while the history
-        # request was in flight, avoiding an exact history/live overlap.
+        # Merge history with live ticks that arrived while history was in flight.
+        # Since the history response has no provider event IDs, retain one-shot
+        # fingerprints for history rows not already represented by live events.
         merged: dict[tuple[float, float, int | None], dict[str, Any]] = {}
+        live_counts: Counter[tuple[float, float, int | None]] = Counter()
         for point in self.points:
             key = (point["time"], point["price"], point["last_digit"])
             merged[key] = point
+            live_counts[key] += 1
+        self._history_overlap_pending.clear()
         for price, epoch in zip(prices, times):
             try:
                 timestamp = float(epoch)
@@ -70,28 +81,78 @@ class DigitFrequencyWindow:
                 "time": timestamp,
                 "price": numeric_price,
                 "last_digit": extract_last_digit(price, pip_size),
+                "event_id": self._fallback_event_id(timestamp, numeric_price),
             }
             key = (point["time"], point["price"], point["last_digit"])
-            merged[key] = point
+            if live_counts[key] > 0:
+                live_counts[key] -= 1
+                continue
+            if key not in merged:
+                merged[key] = point
+                self._history_overlap_pending[key] += 1
         self.points = deque(
             sorted(merged.values(), key=lambda point: point["time"])[-MAX_POINTS:],
             maxlen=MAX_POINTS,
         )
 
-    def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> None:
+    def add_tick(
+        self,
+        quote: Any,
+        epoch: Any,
+        pip_size: Any = None,
+        source_event_id: Any = None,
+    ) -> str:
+        """Append an ordered live tick.
+
+        Equal provider timestamps are allowed when they identify distinct events:
+        epoch fields commonly have only one-second precision. Exact repeated event
+        IDs are duplicates; older timestamps are out of order.
+        """
         try:
             timestamp = float(epoch)
             numeric_price = float(quote)
         except (TypeError, ValueError, OverflowError):
-            return
+            return "invalid"
         if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
-            return
+            return "invalid"
         digit = extract_last_digit(quote, pip_size)
-        point = {"time": timestamp, "price": numeric_price, "last_digit": digit}
-        # Avoid double-counting a history/live overlap when it is the newest point.
-        if self.points and self.points[-1] == point:
-            return
+        if digit is None:
+            return "invalid"
+
+        if isinstance(source_event_id, (str, int)) and not isinstance(source_event_id, bool) and str(source_event_id).strip():
+            event_id = f"provider:{str(source_event_id).strip()}"
+        else:
+            event_id = self._fallback_event_id(timestamp, numeric_price)
+
+        fingerprint = (timestamp, numeric_price, digit)
+        if any(point.get("event_id") == event_id for point in self.points):
+            # If this exact history-overlap event was already represented by a
+            # live point, consume its pending history marker as well.
+            if self._history_overlap_pending[fingerprint] > 0:
+                self._history_overlap_pending[fingerprint] -= 1
+                if self._history_overlap_pending[fingerprint] <= 0:
+                    del self._history_overlap_pending[fingerprint]
+            return "duplicate"
+
+        # Check history overlap before ordering: a historical tick may be
+        # older than the newest seeded row but still be a duplicate live event.
+        if self._history_overlap_pending[fingerprint] > 0:
+            self._history_overlap_pending[fingerprint] -= 1
+            if self._history_overlap_pending[fingerprint] <= 0:
+                del self._history_overlap_pending[fingerprint]
+            return "duplicate"
+
+        if self.points and timestamp < self.points[-1]["time"]:
+            return "out_of_order"
+
+        point = {
+            "time": timestamp,
+            "price": numeric_price,
+            "last_digit": digit,
+            "event_id": event_id,
+        }
         self.points.append(point)
+        return "accepted"
 
     def snapshot(self, symbol: str, calculated_at: float | None = None) -> dict[str, Any]:
         points = list(self.points)
@@ -116,6 +177,7 @@ class DigitFrequencyWindow:
             "symbol": symbol,
             "calculated_at": calculated_at,
             "latest_tick_epoch": latest["time"] if latest else None,
+            "latest_tick_event_id": latest["event_id"] if latest else None,
             "windows": by_window,
             "warning": "Locally calculated observed-tick frequencies; not official Deriv Digit Analytics and not a prediction.",
         }

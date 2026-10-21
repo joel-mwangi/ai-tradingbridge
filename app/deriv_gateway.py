@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, SecretStr, StrictStr, field_validator
 import websockets
 from cryptography.fernet import Fernet, InvalidToken
 from app.market_analysis import DigitFrequencyWindow
+from app.strategy.live_feed import LiveStrategyFeed
 
 router = APIRouter(prefix="/deriv", tags=["deriv"])
 bearer = HTTPBearer(auto_error=False)
@@ -855,6 +856,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
     history_requests: dict[int, str] = {}
     frequency_by_symbol: dict[str, DigitFrequencyWindow] = {}
     pip_size_by_symbol: dict[str, int] = {}
+    strategy_feed = LiveStrategyFeed()
     allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
     try:
         async with websockets.connect(
@@ -874,6 +876,39 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                         message = json.loads(raw)
                     except (json.JSONDecodeError, TypeError):
                         await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send valid JSON."}})
+                        continue
+                    if isinstance(message, dict) and isinstance(message.get("strategy"), dict):
+                        control = message["strategy"]
+                        action = control.get("action")
+                        if action == "start":
+                            symbol = control.get("symbol")
+                            if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
+                                continue
+                            try:
+                                status = strategy_feed.start(symbol)
+                            except ValueError as exc:
+                                await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
+                                continue
+                            already_subscribed = symbol in subscribed_symbols
+                            subscribed_symbols.add(symbol)
+                            frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                            history_req_id = secrets.randbelow(1_000_000) + 8_000_000
+                            while history_req_id in history_requests:
+                                history_req_id = secrets.randbelow(1_000_000) + 8_000_000
+                            history_requests[history_req_id] = symbol
+                            await upstream.send(json.dumps({"ticks_history": symbol, "count": 1000, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
+                            # Do not create a second upstream tick stream when the UI
+                            # already subscribed to this symbol or Start is pressed again.
+                            if not already_subscribed:
+                                await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+                            await websocket.send_json(status)
+                        elif action == "stop":
+                            await websocket.send_json(strategy_feed.stop())
+                        elif action == "status":
+                            await websocket.send_json(strategy_feed._status("Current strategy observation status."))
+                        else:
+                            await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
                         continue
                     if not isinstance(message, dict) or not set(message).intersection(allowed):
                         await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported market-data request."}})
@@ -917,21 +952,49 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                     pip_size_by_symbol.get(symbol),
                                 )
                                 provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                                # History seeds the rolling frequency calculator only.
+                                # It is not a post-Start percentage observation.
                         elif msg_type == "tick":
                             tick = provider_message.get("tick")
                             if isinstance(tick, dict):
                                 symbol = tick.get("underlying_symbol") or tick.get("symbol")
                                 if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
                                     tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                                    pip_size = tick.get("pip_size", provider_message.get("pip_size"))
+                                    pip_size = tick.get("pip_size")
+                                    if pip_size is None:
+                                        pip_size = provider_message.get("pip_size")
                                     if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
                                         pip_size_by_symbol[symbol] = pip_size
-                                    tracker.add_tick(
+                                    tick_result = tracker.add_tick(
                                         tick.get("quote"),
                                         tick.get("epoch"),
                                         pip_size_by_symbol.get(symbol),
+                                        tick.get("id"),
                                     )
                                     provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                                    active_strategy = (
+                                        strategy_feed.symbol == symbol
+                                        and strategy_feed.session is not None
+                                        and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
+                                    )
+                                    if active_strategy and tick_result != "accepted":
+                                        reason = (
+                                            "Duplicate live tick detected."
+                                            if tick_result == "duplicate"
+                                            else "Invalid or out-of-order live tick detected."
+                                        )
+                                        tick_status = strategy_feed.reject_tick(reason)
+                                        if tick_status:
+                                            await websocket.send_json(tick_status)
+                                    else:
+                                        was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
+                                        strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
+                                        if strategy_status:
+                                            await websocket.send_json(strategy_status)
+                                        if was_selected:
+                                            tick_status = strategy_feed.on_tick(symbol, tick, pip_size_by_symbol.get(symbol))
+                                            if tick_status:
+                                                await websocket.send_json(tick_status)
                         raw = json.dumps(provider_message, separators=(",", ":"))
                     await websocket.send_text(raw)
 
@@ -945,8 +1008,9 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                     if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
                         raise error
     except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
-        pass
+        strategy_feed.disconnected()
     except Exception:
+        strategy_feed.disconnected("Market feed failed unexpectedly.")
         try:
             await websocket.close(code=1011, reason="Market feed unavailable")
         except Exception:
