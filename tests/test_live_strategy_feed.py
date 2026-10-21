@@ -14,6 +14,7 @@ def frequency_payload(symbol, timestamp, event_epoch):
         "symbol": symbol,
         "calculated_at": timestamp.timestamp(),
         "latest_tick_epoch": event_epoch,
+        "latest_tick_event_id": f"{event_epoch:.6f}:123.45",
         "windows": {
             "1000": {
                 "window_size": 1000,
@@ -45,15 +46,15 @@ def test_live_percentage_events_select_group_after_real_ten_second_window():
         runtime.start("1HZ100V")
 
         clock[0] = start + timedelta(seconds=1)
-        first = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], 1))
+        first = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 1))
         assert first["state"] == "observing"
 
         clock[0] = start + timedelta(seconds=9, milliseconds=900)
-        second = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], 2))
+        second = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 9.9))
         assert second["state"] == "observing"
 
         clock[0] = start + timedelta(seconds=10)
-        third = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], 3))
+        third = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 10))
 
     assert third["state"] == "selected"
     assert third["selected_group"] == "under"
@@ -67,7 +68,7 @@ def test_history_event_before_start_does_not_enter_observation_window():
     with patch.object(LiveStrategyFeed, "_now", return_value=start):
         runtime.start("1HZ100V")
         result = runtime.on_frequency(
-            frequency_payload("1HZ100V", start - timedelta(seconds=2), 10)
+            frequency_payload("1HZ100V", start - timedelta(seconds=2), start.timestamp() - 2)
         )
     assert result is None
     assert runtime.session is not None
@@ -80,7 +81,7 @@ def test_wrong_market_events_are_ignored_not_mixed_into_session():
     runtime = LiveStrategyFeed()
     with patch.object(LiveStrategyFeed, "_now", return_value=start):
         runtime.start("1HZ100V")
-        result = runtime.on_frequency(frequency_payload("R_100", start, 11))
+        result = runtime.on_frequency(frequency_payload("R_100", start, start.timestamp()))
     assert result is None
     assert runtime.session is not None
     assert runtime.session.observations == []
@@ -92,7 +93,7 @@ def test_stop_prevents_future_strategy_processing():
     with patch.object(LiveStrategyFeed, "_now", return_value=start):
         runtime.start("1HZ100V")
         stopped = runtime.stop()
-        result = runtime.on_frequency(frequency_payload("1HZ100V", start + timedelta(seconds=1), 12))
+        result = runtime.on_frequency(frequency_payload("1HZ100V", start + timedelta(seconds=1), start.timestamp() + 1))
     assert stopped["state"] == "stopped"
     assert result is not None
     assert result["state"] == "stopped"
