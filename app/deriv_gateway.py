@@ -969,7 +969,10 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                         tick.get("quote"),
                                         tick.get("epoch"),
                                         pip_size_by_symbol.get(symbol),
-                                        tick.get("id"),
+                                        # Deriv's tick.id mirrors the subscription ID across
+                                        # the stream; it is not a unique tick event ID. Let
+                                        # DigitFrequencyWindow use epoch + quote identity.
+                                        None,
                                     )
                                     provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
                                     active_strategy = (
