@@ -11,6 +11,7 @@ def payload():
         "symbol": "1HZ100V",
         "calculated_at": 1_800_000_000.0,
         "latest_tick_epoch": 1_799_999_999,
+        "latest_tick_event_id": "1799999999.000000:123.45",
         "windows": {
             "1000": {
                 "window_size": 1000,
@@ -29,9 +30,9 @@ def test_converts_backend_frequency_into_strategy_snapshot():
     assert result.source_id == SOURCE_ID
     assert result.market_id == "1HZ100V"
     assert result.percentages[0] == 10.0
-    assert result.observed_at.timestamp() == 1_800_000_000.0
+    assert result.observed_at.timestamp() == 1_799_999_999.0
     assert result.received_at == received
-    assert result.event_id == "1HZ100V:1799999999.000000:1800000000.000000:1000"
+    assert result.event_id == "1HZ100V:1799999999.000000:123.45:1000"
 
 
 def test_uses_the_1000_observed_tick_window_by_default():
