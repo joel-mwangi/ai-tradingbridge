@@ -95,6 +95,7 @@ def test_stop_prevents_future_strategy_processing():
         stopped = runtime.stop()
         result = runtime.on_frequency(frequency_payload("1HZ100V", start + timedelta(seconds=1), start.timestamp() + 1))
     assert stopped["state"] == "stopped"
-    assert result is not None
-    assert result["state"] == "stopped"
-    assert result["execution_enabled"] is False
+    assert result is None
+    assert runtime.session is not None
+    assert runtime.session.state is SessionState.STOPPED
+    assert stopped["execution_enabled"] is False
