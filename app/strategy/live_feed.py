@@ -49,8 +49,20 @@ class LiveStrategyFeed:
             max_age_seconds=self._max_age_seconds(),
         )
         self.session = DigitStrategySession(feed_health=self.feed_health, window_seconds=10.0)
-        update = self.session.start(now)
-        return self._status(update.reason)
+        self.session.start(now)
+
+        # Fail closed until a supported source for Deriv's actual Digit
+        # Analytics percentages has been verified and implemented. The current
+        # adapter only derives frequencies from observed ticks, which is not
+        # an interchangeable source for the percentages shown in Deriv Trader.
+        reason = (
+            "Strategy blocked: no verified Deriv Digit Analytics percentage "
+            "feed is configured. TradeBridge-derived tick frequencies cannot "
+            "qualify a group; execution remains disabled."
+        )
+        self.feed_health.mark_disconnected(reason)
+        self.session.state = SessionState.BLOCKED
+        return self._status(reason)
 
     def stop(self) -> dict[str, Any]:
         if self.session is None:
@@ -61,6 +73,8 @@ class LiveStrategyFeed:
     def on_frequency(self, payload: Mapping[str, Any]) -> dict[str, Any] | None:
         """Consume one real backend frequency event; ignore insufficient history."""
         if self.session is None or self.feed_health is None or self.symbol is None:
+            return None
+        if self.session.state in (SessionState.BLOCKED, SessionState.STOPPED, SessionState.IDLE):
             return None
         if self.session.state is SessionState.SELECTED:
             # Percentage qualification is complete; live ticks, not repeated
