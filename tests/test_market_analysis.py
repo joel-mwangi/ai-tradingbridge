@@ -59,8 +59,8 @@ def test_distinct_live_ticks_with_same_second_timestamp_are_accepted():
     assert window.add_tick("1.2", 100, 1, "tick-B") == "accepted"
     summary = window.snapshot("R_100")["windows"]["50"]
     assert summary["sample_size"] == 2
-    assert summary["counts"]["1"] == 2
-    assert summary["counts"]["2"] == 0
+    assert summary["counts"]["1"] == 1
+    assert summary["counts"]["2"] == 1
     assert window.snapshot("R_100")["latest_tick_event_id"] == "provider:tick-B"
 
 
