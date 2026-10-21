@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from app.market_analysis import extract_last_digit
 from app.strategy.feed_health import FeedState, PercentageFeedHealth
-from app.strategy.market_frequency_adapter import SOURCE_ID, STRATEGY_WINDOW, to_percentage_snapshot
+from app.strategy.market_frequency_adapter import SOURCE_ID, to_percentage_snapshot
 from app.strategy.session import DigitStrategySession, SessionState
 
 
