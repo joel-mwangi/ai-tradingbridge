@@ -124,13 +124,19 @@ class DigitFrequencyWindow:
         else:
             event_id = self._fallback_event_id(timestamp, numeric_price)
 
+        fingerprint = (timestamp, numeric_price, digit)
         if any(point.get("event_id") == event_id for point in self.points):
+            # If this exact history-overlap event was already represented by a
+            # live point, consume its pending history marker as well.
+            if self._history_overlap_pending[fingerprint] > 0:
+                self._history_overlap_pending[fingerprint] -= 1
+                if self._history_overlap_pending[fingerprint] <= 0:
+                    del self._history_overlap_pending[fingerprint]
             return "duplicate"
 
         if self.points and timestamp < self.points[-1]["time"]:
             return "out_of_order"
 
-        fingerprint = (timestamp, numeric_price, digit)
         if self._history_overlap_pending[fingerprint] > 0:
             self._history_overlap_pending[fingerprint] -= 1
             if self._history_overlap_pending[fingerprint] <= 0:
