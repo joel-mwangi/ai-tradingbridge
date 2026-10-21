@@ -39,6 +39,7 @@ def test_uses_the_1000_observed_tick_window_by_default():
     assert STRATEGY_WINDOW == "1000"
     data = payload()
     data["windows"]["1000"]["sample_size"] = 1000
+    data["windows"]["1000"]["counts"] = {str(d): 100 for d in range(10)}
     assert to_percentage_snapshot(data).percentages[9] == 10.0
 
 
@@ -66,6 +67,34 @@ def test_rejects_invalid_digit_percentages(bad_value):
     data = payload()
     data["windows"]["1000"]["percentages"]["4"] = bad_value
     with pytest.raises(ValueError, match="Digit 4 percentage"):
+        to_percentage_snapshot(data)
+
+
+def test_rejects_counts_that_do_not_sum_to_sample_size():
+    data = payload()
+    data["windows"]["1000"]["counts"]["0"] = 9
+    with pytest.raises(ValueError, match="sum exactly to sample_size"):
+        to_percentage_snapshot(data)
+
+
+def test_rejects_percentages_inconsistent_with_counts():
+    data = payload()
+    data["windows"]["1000"]["percentages"]["0"] = 9.9
+    with pytest.raises(ValueError, match="does not match its count"):
+        to_percentage_snapshot(data)
+
+
+def test_rejects_invalid_count_values():
+    data = payload()
+    data["windows"]["1000"]["counts"]["0"] = True
+    with pytest.raises(ValueError, match="non-negative integer"):
+        to_percentage_snapshot(data)
+
+
+def test_rejects_inconsistent_window_size():
+    data = payload()
+    data["windows"]["1000"]["window_size"] = 500
+    with pytest.raises(ValueError, match="inconsistent window_size"):
         to_percentage_snapshot(data)
 
 
