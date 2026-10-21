@@ -134,13 +134,14 @@ class DigitFrequencyWindow:
                     del self._history_overlap_pending[fingerprint]
             return "duplicate"
 
-        # Check history overlap before ordering: a historical tick may be
-        # older than the newest seeded row but still be a duplicate live event.
+        # A history row can legitimately overlap the first live subscription
+        # events. Suppress that one-shot overlap without classifying it as a
+        # repeated live event; the strategy gateway must not block on this case.
         if self._history_overlap_pending[fingerprint] > 0:
             self._history_overlap_pending[fingerprint] -= 1
             if self._history_overlap_pending[fingerprint] <= 0:
                 del self._history_overlap_pending[fingerprint]
-            return "duplicate"
+            return "history_overlap"
 
         if self.points and timestamp < self.points[-1]["time"]:
             return "out_of_order"
