@@ -70,6 +70,7 @@ class DigitFrequencyWindow:
                 "time": timestamp,
                 "price": numeric_price,
                 "last_digit": extract_last_digit(price, pip_size),
+                "event_id": f"{timestamp:.6f}:{numeric_price:.12g}",
             }
             key = (point["time"], point["price"], point["last_digit"])
             merged[key] = point
@@ -78,20 +79,35 @@ class DigitFrequencyWindow:
             maxlen=MAX_POINTS,
         )
 
-    def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> None:
+    def add_tick(self, quote: Any, epoch: Any, pip_size: Any = None) -> str:
+        """Append one strictly ordered live tick and report integrity failures.
+
+        Returns accepted, duplicate, out_of_order, or invalid. Strategy callers
+        must block on duplicate/out-of-order live events rather than silently
+        advancing a pattern on a corrupted stream.
+        """
         try:
             timestamp = float(epoch)
             numeric_price = float(quote)
         except (TypeError, ValueError, OverflowError):
-            return
+            return "invalid"
         if not math.isfinite(timestamp) or not math.isfinite(numeric_price):
-            return
+            return "invalid"
         digit = extract_last_digit(quote, pip_size)
-        point = {"time": timestamp, "price": numeric_price, "last_digit": digit}
-        # Avoid double-counting a history/live overlap when it is the newest point.
-        if self.points and self.points[-1] == point:
-            return
+        point = {
+            "time": timestamp,
+            "price": numeric_price,
+            "last_digit": digit,
+            "event_id": f"{timestamp:.6f}:{numeric_price:.12g}",
+        }
+        if self.points:
+            latest = self.points[-1]
+            if point["time"] == latest["time"] and point["price"] == latest["price"] and point["last_digit"] == latest["last_digit"]:
+                return "duplicate"
+            if timestamp <= latest["time"]:
+                return "out_of_order"
         self.points.append(point)
+        return "accepted"
 
     def snapshot(self, symbol: str, calculated_at: float | None = None) -> dict[str, Any]:
         points = list(self.points)
@@ -116,6 +132,7 @@ class DigitFrequencyWindow:
             "symbol": symbol,
             "calculated_at": calculated_at,
             "latest_tick_epoch": latest["time"] if latest else None,
+            "latest_tick_event_id": latest["event_id"] if latest else None,
             "windows": by_window,
             "warning": "Locally calculated observed-tick frequencies; not official Deriv Digit Analytics and not a prediction.",
         }
