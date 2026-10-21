@@ -33,34 +33,33 @@ def test_start_creates_fresh_observation_only_session():
     with patch.object(LiveStrategyFeed, "_now", return_value=now):
         runtime = LiveStrategyFeed()
         status = runtime.start("1HZ100V")
-    assert status["state"] == "observing"
+    assert status["state"] == "blocked"
     assert status["symbol"] == "1HZ100V"
     assert status["execution_enabled"] is False
     assert status["observation_count"] == 0
+    assert "no verified Deriv Digit Analytics percentage feed" in status["reason"]
+    assert "disconnected" == status["feed_state"]
 
 
-def test_live_percentage_events_select_group_after_real_ten_second_window():
+def test_unverified_tick_frequency_cannot_qualify_strategy_group():
     start = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
     clock = [start]
     runtime = LiveStrategyFeed()
     with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: clock[0]):
-        runtime.start("1HZ100V")
-
-        clock[0] = start + timedelta(seconds=1)
-        first = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 1))
-        assert first["state"] == "observing"
-
-        clock[0] = start + timedelta(seconds=9, milliseconds=900)
-        second = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 9.9))
-        assert second["state"] == "observing"
+        status = runtime.start("1HZ100V")
 
         clock[0] = start + timedelta(seconds=10)
-        third = runtime.on_frequency(frequency_payload("1HZ100V", clock[0], start.timestamp() + 10))
+        result = runtime.on_frequency(
+            frequency_payload("1HZ100V", clock[0], start.timestamp() + 10)
+        )
 
-    assert third["state"] == "selected"
-    assert third["selected_group"] == "under"
-    assert third["trigger_digit"] == 4
-    assert third["execution_enabled"] is False
+    assert status["state"] == "blocked"
+    assert result is None
+    assert runtime.session is not None
+    assert runtime.session.state is SessionState.BLOCKED
+    assert runtime.session.selected_group is None
+    assert runtime.session.observations == []
+    assert runtime._status("safety check")["execution_enabled"] is False
 
 
 def test_history_event_before_start_does_not_enter_observation_window():
@@ -73,7 +72,7 @@ def test_history_event_before_start_does_not_enter_observation_window():
         )
     assert result is None
     assert runtime.session is not None
-    assert runtime.session.state is SessionState.OBSERVING
+    assert runtime.session.state is SessionState.BLOCKED
     assert runtime.session.observations == []
 
 
