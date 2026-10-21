@@ -19,8 +19,11 @@ tick points, not official Deriv Digit Analytics percentages and not predictions.
 
 The adapter rejects unknown sources, missing symbols/windows, insufficient or
 impossible sample sizes, incomplete/non-finite/out-of-range percentages, and
-invalid timestamps. Each normalized snapshot carries a market-scoped event ID
-derived from the latest observed tick and calculation time. Every snapshot must
+invalid timestamps. Each normalized snapshot uses the provider's latest tick epoch as its observation
+timestamp and carries a stable market-scoped event ID derived from that source
+tick's timestamp and quote. The server calculation timestamp is diagnostic only.
+Live ticks must be strictly time-ordered; duplicate or non-increasing events block
+the active strategy session. Every snapshot must
 pass `PercentageFeedHealth`; a matching source ID does not independently
 authenticate the transport.
 
