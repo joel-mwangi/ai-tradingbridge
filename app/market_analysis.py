@@ -45,6 +45,9 @@ def extract_last_digit(quote: Any, pip_size: Any = None) -> int | None:
 class DigitFrequencyWindow:
     """A bounded, per-connection/per-market window of actual observed tick points."""
     points: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_POINTS))
+    # History has second-resolution timestamps but no event IDs. Keep unmatched
+    # history fingerprints so the first identical live event is not counted twice.
+    _history_overlap_pending: Counter[tuple[float, float, int | None]] = field(default_factory=Counter, repr=False)
 
     @staticmethod
     def _fallback_event_id(timestamp: float, numeric_price: float) -> str:
@@ -57,10 +60,15 @@ class DigitFrequencyWindow:
         pip_size: Any = None,
     ) -> None:
         # Merge history with live ticks that arrived while history was in flight.
+        # Since the history response has no provider event IDs, retain one-shot
+        # fingerprints for history rows not already represented by live events.
         merged: dict[tuple[float, float, int | None], dict[str, Any]] = {}
+        live_counts: Counter[tuple[float, float, int | None]] = Counter()
         for point in self.points:
             key = (point["time"], point["price"], point["last_digit"])
             merged[key] = point
+            live_counts[key] += 1
+        self._history_overlap_pending.clear()
         for price, epoch in zip(prices, times):
             try:
                 timestamp = float(epoch)
@@ -76,7 +84,12 @@ class DigitFrequencyWindow:
                 "event_id": self._fallback_event_id(timestamp, numeric_price),
             }
             key = (point["time"], point["price"], point["last_digit"])
-            merged.setdefault(key, point)
+            if live_counts[key] > 0:
+                live_counts[key] -= 1
+                continue
+            if key not in merged:
+                merged[key] = point
+                self._history_overlap_pending[key] += 1
         self.points = deque(
             sorted(merged.values(), key=lambda point: point["time"])[-MAX_POINTS:],
             maxlen=MAX_POINTS,
@@ -114,14 +127,22 @@ class DigitFrequencyWindow:
         if any(point.get("event_id") == event_id for point in self.points):
             return "duplicate"
 
+        if self.points and timestamp < self.points[-1]["time"]:
+            return "out_of_order"
+
+        fingerprint = (timestamp, numeric_price, digit)
+        if self._history_overlap_pending[fingerprint] > 0:
+            self._history_overlap_pending[fingerprint] -= 1
+            if self._history_overlap_pending[fingerprint] <= 0:
+                del self._history_overlap_pending[fingerprint]
+            return "duplicate"
+
         point = {
             "time": timestamp,
             "price": numeric_price,
             "last_digit": digit,
             "event_id": event_id,
         }
-        if self.points and timestamp < self.points[-1]["time"]:
-            return "out_of_order"
         self.points.append(point)
         return "accepted"
 
