@@ -134,14 +134,16 @@ class DigitFrequencyWindow:
                     del self._history_overlap_pending[fingerprint]
             return "duplicate"
 
-        if self.points and timestamp < self.points[-1]["time"]:
-            return "out_of_order"
-
+        # Check history overlap before ordering: a historical tick may be
+        # older than the newest seeded row but still be a duplicate live event.
         if self._history_overlap_pending[fingerprint] > 0:
             self._history_overlap_pending[fingerprint] -= 1
             if self._history_overlap_pending[fingerprint] <= 0:
                 del self._history_overlap_pending[fingerprint]
             return "duplicate"
+
+        if self.points and timestamp < self.points[-1]["time"]:
+            return "out_of_order"
 
         point = {
             "time": timestamp,
