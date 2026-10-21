@@ -213,12 +213,10 @@ def choose_group(
     group_digits = sorted(digits_for(group))
     lowest_value = min(float(percentages[d]) for d in group_digits)
     lowest_digits = [d for d in group_digits if float(percentages[d]) == lowest_value]
-    if len(lowest_digits) != 1:
-        return QualificationResult(
-            Decision.OBSERVE, under, over,
-            reason=f"{group.value.title()} qualifies, but the lowest percentage is tied; no tie-break is defined.",
-        )
-    digit = lowest_digits[0]
+    # Deterministic tie-break: if multiple digits share the exact minimum,
+    # choose the numerically smallest digit. This avoids arbitrary ordering and
+    # keeps repeated evaluations reproducible.
+    digit = min(lowest_digits)
     decision = Decision.SELECT_UNDER if group is Group.UNDER else Decision.SELECT_OVER
     return QualificationResult(
         decision, under, over, trigger_digit=digit,
