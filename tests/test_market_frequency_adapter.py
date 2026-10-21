@@ -109,3 +109,23 @@ def test_rejects_invalid_source_timestamps(field):
 def test_rejects_naive_receipt_timestamp():
     with pytest.raises(ValueError, match="timezone-aware"):
         to_percentage_snapshot(payload(), datetime(2026, 10, 20, 12, 0))
+
+
+
+def test_converts_selected_100_tick_window():
+    data = payload()
+    data["windows"] = {
+        "100": {
+            "window_size": 100,
+            "sample_size": 100,
+            "counts": {str(d): 10 for d in range(10)},
+            "percentages": {str(d): 10.0 for d in range(10)},
+        }
+    }
+    result = to_percentage_snapshot(data, window="100")
+    assert result.event_id == "1HZ100V:1799999999.000000:123.45:100"
+
+
+def test_rejects_unsupported_window():
+    with pytest.raises(ValueError, match="Unsupported frequency window"):
+        to_percentage_snapshot(payload(), window="75")
