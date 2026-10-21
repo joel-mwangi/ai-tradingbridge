@@ -49,6 +49,10 @@ def test_backend_frequency_snapshot_is_consumed_in_observation_only_mode():
     runtime = LiveStrategyFeed()
     with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: clock[0]):
         status = runtime.start("1HZ100V")
+        clock[0] = start + timedelta(seconds=9)
+        runtime.on_frequency(
+            frequency_payload("1HZ100V", clock[0], start.timestamp() + 9)
+        )
         clock[0] = start + timedelta(seconds=10)
         result = runtime.on_frequency(
             frequency_payload("1HZ100V", clock[0], start.timestamp() + 10)
