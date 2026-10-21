@@ -51,3 +51,28 @@ def test_live_tick_integrity_rejects_duplicate_and_out_of_order_ticks():
     assert window.add_tick("1.2", 99, 1) == "out_of_order"
     assert window.add_tick("1.2", 101, 1) == "accepted"
     assert window.snapshot("R_100")["latest_tick_event_id"] == "101.000000:1.2"
+
+
+def test_distinct_live_ticks_with_same_second_timestamp_are_accepted():
+    window = DigitFrequencyWindow()
+    assert window.add_tick("1.1", 100, 1, "tick-A") == "accepted"
+    assert window.add_tick("1.2", 100, 1, "tick-B") == "accepted"
+    summary = window.snapshot("R_100")["windows"]["50"]
+    assert summary["sample_size"] == 2
+    assert summary["counts"]["1"] == 2
+    assert summary["counts"]["2"] == 0
+    assert window.snapshot("R_100")["latest_tick_event_id"] == "provider:tick-B"
+
+
+def test_repeated_provider_event_id_is_rejected_even_with_same_timestamp():
+    window = DigitFrequencyWindow()
+    assert window.add_tick("1.1", 100, 1, "tick-A") == "accepted"
+    assert window.add_tick("1.2", 100, 1, "tick-A") == "duplicate"
+    assert window.snapshot("R_100")["windows"]["50"]["sample_size"] == 1
+
+
+def test_equal_timestamp_does_not_allow_older_timestamp_afterward():
+    window = DigitFrequencyWindow()
+    assert window.add_tick("1.1", 100, 1, "tick-A") == "accepted"
+    assert window.add_tick("1.2", 100, 1, "tick-B") == "accepted"
+    assert window.add_tick("1.3", 99, 1, "tick-C") == "out_of_order"
