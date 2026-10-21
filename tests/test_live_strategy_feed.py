@@ -6,9 +6,10 @@ from app.strategy.session import SessionState
 
 
 def frequency_payload(symbol, timestamp, event_epoch):
-    under = {0: 9.9, 1: 9.8, 2: 9.7, 3: 9.6, 4: 9.5}
-    over = {5: 10.1, 6: 10.2, 7: 10.3, 8: 10.4, 9: 10.4}
-    percentages = {str(k): v for k, v in {**under, **over}.items()}
+    # Counts sum to 1,000 and percentages are derived from those counts.
+    # Under uniquely qualifies; digit 4 is its lowest-frequency digit.
+    counts = {0: 99, 1: 98, 2: 97, 3: 97, 4: 95, 5: 101, 6: 102, 7: 103, 8: 104, 9: 104}
+    percentages = {str(d): round(counts[d] / 1000 * 100, 1) for d in range(10)}
     return {
         "source": "tradebridge_backend_tick_frequency",
         "symbol": symbol,
@@ -19,7 +20,7 @@ def frequency_payload(symbol, timestamp, event_epoch):
             "1000": {
                 "window_size": 1000,
                 "sample_size": 1000,
-                "counts": {str(d): 100 for d in range(10)},
+                "counts": {str(d): counts[d] for d in range(10)},
                 "percentages": percentages,
             }
         },
@@ -90,7 +91,7 @@ def test_wrong_market_events_are_ignored_not_mixed_into_session():
 def test_stop_prevents_future_strategy_processing():
     start = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
     runtime = LiveStrategyFeed()
-    with patch.object(LiveStrategyFeed, "_now", return_value=start):
+    with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: start):
         runtime.start("1HZ100V")
         stopped = runtime.stop()
         result = runtime.on_frequency(frequency_payload("1HZ100V", start + timedelta(seconds=1), start.timestamp() + 1))
