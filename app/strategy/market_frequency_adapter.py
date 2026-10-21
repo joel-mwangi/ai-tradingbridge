@@ -69,21 +69,26 @@ def to_percentage_snapshot(
 
     calculated_at = payload.get("calculated_at")
     latest_tick_epoch = payload.get("latest_tick_epoch")
+    latest_tick_event_id = payload.get("latest_tick_event_id")
     if not _finite_number(calculated_at):
         raise ValueError("Frequency payload must include a finite calculation timestamp.")
     if not _finite_number(latest_tick_epoch):
         raise ValueError("Frequency payload must include a finite latest observed tick timestamp.")
+    if not isinstance(latest_tick_event_id, str) or not latest_tick_event_id.strip():
+        raise ValueError("Frequency payload must include a stable latest source tick event ID.")
 
     try:
-        observed_at = datetime.fromtimestamp(float(calculated_at), tz=timezone.utc)
+        # The observation time is the provider's tick timestamp, not the time
+        # our server happened to calculate the histogram.
+        observed_at = datetime.fromtimestamp(float(latest_tick_epoch), tz=timezone.utc)
     except (OverflowError, OSError, ValueError) as exc:
-        raise ValueError("Frequency calculation timestamp is outside the supported range.") from exc
+        raise ValueError("Latest source tick timestamp is outside the supported range.") from exc
 
     received = received_at or datetime.now(timezone.utc)
     if not isinstance(received, datetime) or received.tzinfo is None or received.utcoffset() is None:
         raise ValueError("Receipt timestamp must be timezone-aware.")
 
-    event_id = f"{symbol}:{float(latest_tick_epoch):.6f}:{float(calculated_at):.6f}:{window}"
+    event_id = f"{symbol}:{latest_tick_event_id}:{window}"
     return PercentageSnapshot(
         source_id=SOURCE_ID,
         market_id=symbol,
