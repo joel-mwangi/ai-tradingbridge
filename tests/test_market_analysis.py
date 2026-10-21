@@ -42,3 +42,12 @@ def test_latest_duplicate_history_live_tick_is_not_counted_twice():
     window.seed_history(["1.2"], [123], 1)
     window.add_tick("1.2", 123, 1)
     assert window.snapshot("R_100")["windows"]["50"]["sample_size"] == 1
+
+
+def test_live_tick_integrity_rejects_duplicate_and_out_of_order_ticks():
+    window = DigitFrequencyWindow()
+    assert window.add_tick("1.1", 100, 1) == "accepted"
+    assert window.add_tick("1.1", 100, 1) == "duplicate"
+    assert window.add_tick("1.2", 99, 1) == "out_of_order"
+    assert window.add_tick("1.2", 101, 1) == "accepted"
+    assert window.snapshot("R_100")["latest_tick_event_id"] == "101.000000:1.2"
