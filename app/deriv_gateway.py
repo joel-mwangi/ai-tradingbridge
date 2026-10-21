@@ -969,6 +969,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                         tick.get("quote"),
                                         tick.get("epoch"),
                                         pip_size_by_symbol.get(symbol),
+                                        tick.get("id"),
                                     )
                                     provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
                                     active_strategy = (
