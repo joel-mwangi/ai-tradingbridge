@@ -946,9 +946,8 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                     pip_size_by_symbol.get(symbol),
                                 )
                                 provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
-                                strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
-                                if strategy_status:
-                                    await websocket.send_json(strategy_status)
+                                # History seeds the rolling frequency calculator only.
+                                # It is not a post-Start percentage observation.
                         elif msg_type == "tick":
                             tick = provider_message.get("tick")
                             if isinstance(tick, dict):
