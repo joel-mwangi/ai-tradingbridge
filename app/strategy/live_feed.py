@@ -51,17 +51,16 @@ class LiveStrategyFeed:
         self.session = DigitStrategySession(feed_health=self.feed_health, window_seconds=10.0)
         self.session.start(now)
 
-        # Fail closed until a supported source for Deriv's actual Digit
-        # Analytics percentages has been verified and implemented. The current
-        # adapter only derives frequencies from observed ticks, which is not
-        # an interchangeable source for the percentages shown in Deriv Trader.
+        # Reuse the same backend-calculated digit_frequency snapshots rendered
+        # by the Digit Analysis circles. These are TradeBridge observed-tick
+        # frequencies, not a claim that this is Deriv's separate official
+        # Digit Analytics feed. Keep trade execution disabled.
         reason = (
-            "Strategy blocked: no verified Deriv Digit Analytics percentage "
-            "feed is configured. TradeBridge-derived tick frequencies cannot "
-            "qualify a group; execution remains disabled."
+            "Strategy started in observation-only mode. Waiting for a fresh "
+            "TradeBridge backend frequency snapshot for the selected market "
+            "and 1,000-tick window; these are observed-tick frequencies, not "
+            "official Deriv Digit Analytics percentages or predictions."
         )
-        self.feed_health.mark_disconnected(reason)
-        self.session.state = SessionState.BLOCKED
         return self._status(reason)
 
     def stop(self) -> dict[str, Any]:
