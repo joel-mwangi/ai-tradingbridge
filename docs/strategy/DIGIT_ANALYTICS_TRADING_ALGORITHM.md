@@ -15,8 +15,10 @@ establish that a digit is more likely on the next tick.
 - Market: the payload's `symbol`, which must match the active strategy market.
 - Window: `windows["1000"]`, with at least 2 and at most 1,000 valid observed ticks.
 - Percentages: all ten digits, finite numeric values from 0 through 100.
-- Observation timestamp: backend `calculated_at`, generated when a live tick is processed.
-- Event identity: market symbol + latest observed tick epoch + calculation timestamp + window.
+- Observation timestamp: provider-supplied `latest_tick_epoch`, not server calculation time.
+- Event identity: market symbol + stable latest source tick event ID + window.
+- Calculation timestamp: retained as diagnostic metadata; it is not substituted for source time.
+- Tick ordering: duplicate or non-increasing live ticks block the active strategy session.
 - Receipt timestamp: assigned by the receiving process; it must be timezone-aware.
 - Health validation: normalized snapshots must pass `PercentageFeedHealth` for source,
   market, freshness, timestamp ordering, duplicate IDs, and complete percentages.
