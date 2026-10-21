@@ -2,9 +2,9 @@
 
 This is deliberately NOT an adapter for official Deriv Digit Analytics. It
 normalizes the `digit_frequency` object emitted by /deriv/live/market into
-the strategy's percentage-snapshot contract. The backend calculation time is
-the observation timestamp; latest_tick_epoch is retained in the event ID so
-each snapshot can be traced to the newest observed market tick.
+the strategy's percentage-snapshot contract. The provider's latest tick epoch is the observation timestamp; calculation time
+is retained only as diagnostic metadata, and the stable tick event ID identifies
+the source event used to calculate the snapshot.
 """
 from __future__ import annotations
 
