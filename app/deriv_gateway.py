@@ -954,23 +954,40 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 symbol = tick.get("underlying_symbol") or tick.get("symbol")
                                 if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
                                     tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                                    pip_size = tick.get("pip_size", provider_message.get("pip_size"))
+                                    pip_size = tick.get("pip_size")
+                                    if pip_size is None:
+                                        pip_size = provider_message.get("pip_size")
                                     if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
                                         pip_size_by_symbol[symbol] = pip_size
-                                    tracker.add_tick(
+                                    tick_result = tracker.add_tick(
                                         tick.get("quote"),
                                         tick.get("epoch"),
                                         pip_size_by_symbol.get(symbol),
                                     )
                                     provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
-                                    was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
-                                    strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
-                                    if strategy_status:
-                                        await websocket.send_json(strategy_status)
-                                    if was_selected:
-                                        tick_status = strategy_feed.on_tick(symbol, tick, pip_size_by_symbol.get(symbol))
+                                    active_strategy = (
+                                        strategy_feed.symbol == symbol
+                                        and strategy_feed.session is not None
+                                        and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
+                                    )
+                                    if active_strategy and tick_result != "accepted":
+                                        reason = (
+                                            "Duplicate live tick detected."
+                                            if tick_result == "duplicate"
+                                            else "Invalid or out-of-order live tick detected."
+                                        )
+                                        tick_status = strategy_feed.reject_tick(reason)
                                         if tick_status:
                                             await websocket.send_json(tick_status)
+                                    else:
+                                        was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
+                                        strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
+                                        if strategy_status:
+                                            await websocket.send_json(strategy_status)
+                                        if was_selected:
+                                            tick_status = strategy_feed.on_tick(symbol, tick, pip_size_by_symbol.get(symbol))
+                                            if tick_status:
+                                                await websocket.send_json(tick_status)
                         raw = json.dumps(provider_message, separators=(",", ":"))
                     await websocket.send_text(raw)
 
