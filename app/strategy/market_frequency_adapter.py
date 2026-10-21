@@ -14,7 +14,9 @@ from typing import Any, Mapping
 from app.strategy.feed_health import PercentageSnapshot
 
 SOURCE_ID = "tradebridge_backend_tick_frequency"
-STRATEGY_WINDOW = "1000"
+DEFAULT_STRATEGY_WINDOW = "1000"
+SUPPORTED_WINDOWS = ("50", "100", "250", "500", "1000")
+STRATEGY_WINDOW = DEFAULT_STRATEGY_WINDOW
 
 
 def _finite_number(value: Any) -> bool:
@@ -37,6 +39,8 @@ def to_percentage_snapshot(
     percentages must not be allowed to disagree with the actual histogram.
     This does not authenticate the upstream connection or imply prediction.
     """
+    if window not in SUPPORTED_WINDOWS:
+        raise ValueError(f"Unsupported frequency window {window}; expected one of {', '.join(SUPPORTED_WINDOWS)}.")
     if not isinstance(payload, Mapping):
         raise ValueError("Frequency event must be a mapping.")
     if payload.get("source") != SOURCE_ID:
