@@ -2,9 +2,8 @@
 
 This is deliberately NOT an adapter for official Deriv Digit Analytics. It
 normalizes the `digit_frequency` object emitted by /deriv/live/market into
-the strategy's percentage-snapshot contract. The provider's latest tick epoch is the observation timestamp; calculation time
-is retained only as diagnostic metadata, and the stable tick event ID identifies
-the source event used to calculate the snapshot.
+the strategy's percentage-snapshot contract. The provider's latest tick epoch
+is the observation timestamp; calculation time is diagnostic metadata.
 """
 from __future__ import annotations
 
@@ -34,9 +33,9 @@ def to_percentage_snapshot(
 ) -> PercentageSnapshot:
     """Normalize one backend frequency event or fail closed.
 
-    This function validates payload shape and numeric integrity. It does not
-    authenticate the upstream connection or claim statistical/predictive
-    meaning; callers must also pass the result through PercentageFeedHealth.
+    Check the count/percentage contract as well as field types: valid-looking
+    percentages must not be allowed to disagree with the actual histogram.
+    This does not authenticate the upstream connection or imply prediction.
     """
     if not isinstance(payload, Mapping):
         raise ValueError("Frequency event must be a mapping.")
@@ -55,6 +54,20 @@ def to_percentage_snapshot(
     sample_size = summary.get("sample_size")
     if type(sample_size) is not int or not 2 <= sample_size <= int(window):
         raise ValueError(f"Window {window} must contain between 2 and {window} valid observed ticks.")
+    if summary.get("window_size") != int(window):
+        raise ValueError(f"Window {window} has an inconsistent window_size.")
+
+    raw_counts = summary.get("counts")
+    if not isinstance(raw_counts, Mapping):
+        raise ValueError("Frequency payload must include digit counts.")
+    counts: dict[int, int] = {}
+    for digit in range(10):
+        value = raw_counts.get(str(digit))
+        if type(value) is not int or value < 0:
+            raise ValueError(f"Digit {digit} count must be a non-negative integer.")
+        counts[digit] = value
+    if sum(counts.values()) != sample_size:
+        raise ValueError("Digit counts must sum exactly to sample_size.")
 
     raw_percentages = summary.get("percentages")
     if not isinstance(raw_percentages, Mapping):
@@ -65,7 +78,13 @@ def to_percentage_snapshot(
         value = raw_percentages.get(str(digit))
         if not _finite_number(value) or not 0 <= float(value) <= 100:
             raise ValueError(f"Digit {digit} percentage must be finite and in [0, 100].")
-        percentages[digit] = float(value)
+        numeric = float(value)
+        expected = round(counts[digit] / sample_size * 100, 1)
+        if numeric != expected:
+            raise ValueError(
+                f"Digit {digit} percentage does not match its count and sample_size."
+            )
+        percentages[digit] = numeric
 
     calculated_at = payload.get("calculated_at")
     latest_tick_epoch = payload.get("latest_tick_epoch")
@@ -78,8 +97,6 @@ def to_percentage_snapshot(
         raise ValueError("Frequency payload must include a stable latest source tick event ID.")
 
     try:
-        # The observation time is the provider's tick timestamp, not the time
-        # our server happened to calculate the histogram.
         observed_at = datetime.fromtimestamp(float(latest_tick_epoch), tz=timezone.utc)
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError("Latest source tick timestamp is outside the supported range.") from exc
