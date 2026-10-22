@@ -324,16 +324,14 @@ void SortLevelsByDistance(PriceLevel &levels[], const double current_price)
 //+------------------------------------------------------------------+
 void DrawZones(PriceLevel &levels[],
                const bool is_support,
+               const double current_price,
                const datetime future_time,
                const double zone_half_width,
                const int max_zones,
                int &drawn)
   {
    drawn = 0;
-   SortLevelsByDistance(levels, SymbolInfoDouble(_Symbol, SYMBOL_LAST));
-
-   // Forex symbols may not populate SYMBOL_LAST; the caller has sorted
-   // by close as well, so this is only a fallback-safe visual ordering.
+   SortLevelsByDistance(levels, current_price);
    const int total = MathMin(ArraySize(levels), MathMax(0, max_zones));
    for(int i = 0; i < total; ++i)
      {
@@ -545,7 +543,7 @@ void DrawStatusPanel(const string structure,
       ObjectSetInteger(0, panel, OBJPROP_XDISTANCE, InpPanelX);
       ObjectSetInteger(0, panel, OBJPROP_YDISTANCE, InpPanelY);
       ObjectSetInteger(0, panel, OBJPROP_XSIZE, 440);
-      ObjectSetInteger(0, panel, OBJPROP_YSIZE, 118);
+      ObjectSetInteger(0, panel, OBJPROP_YSIZE, 134);
       ObjectSetInteger(0, panel, OBJPROP_BGCOLOR, clrBlack);
       ObjectSetInteger(0, panel, OBJPROP_COLOR, clrSlateGray);
       ObjectSetInteger(0, panel, OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -641,9 +639,9 @@ void RefreshAnalysis(const int rates_total,
 
    if(InpShowSupportResistance)
      {
-      DrawZones(supports, true, future_time, zone_half_width,
+      DrawZones(supports, true, latest_close, future_time, zone_half_width,
                 InpMaxZonesPerSide, support_count);
-      DrawZones(resistances, false, future_time, zone_half_width,
+      DrawZones(resistances, false, latest_close, future_time, zone_half_width,
                 InpMaxZonesPerSide, resistance_count);
      }
 
@@ -664,7 +662,6 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    DeleteOwnedObjects();
-   Comment("");
   }
 
 int OnCalculate(const int rates_total,
