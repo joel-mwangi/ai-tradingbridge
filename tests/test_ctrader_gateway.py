@@ -213,3 +213,34 @@ def test_json_websocket_endpoint_config():
 )
 def test_execution_type_normalization(payload, expected):
     assert ctrader_gateway._execution_type_value(payload) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (123, 123),
+        ("456", 456),
+        ("", None),
+        ("not-an-id", None),
+        (True, None),
+        (-1, None),
+    ],
+)
+def test_protocol_id_normalization(value, expected):
+    assert ctrader_gateway._optional_protocol_id(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "valid"),
+    [
+        (int(time.time() * 1000), True),
+        (str(int(time.time() * 1000)), True),
+        ("NaN", False),
+        ("Infinity", False),
+        ("", False),
+        (True, False),
+    ],
+)
+def test_timestamp_normalization(value, valid):
+    result = ctrader_gateway._numeric_timestamp(value)
+    assert (result is not None) is valid
