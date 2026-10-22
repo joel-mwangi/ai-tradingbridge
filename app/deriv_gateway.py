@@ -958,6 +958,13 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
                                 # History seeds the rolling frequency calculator only.
                                 # It is not a post-Start percentage observation.
+                        elif msg_type == "candles":
+                            # Candle-history requests share the request map used by
+                            # tick history for symbol validation/analytics. Candle
+                            # responses do not need that entry, so release it here.
+                            req_id = provider_message.get("req_id")
+                            if isinstance(req_id, int):
+                                history_requests.pop(req_id, None)
                         elif msg_type == "tick":
                             tick = provider_message.get("tick")
                             if isinstance(tick, dict):
