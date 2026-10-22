@@ -911,6 +911,11 @@ async def quote(
         except (ValueError, OverflowError, OSError):
             provider_quote_at = None
             quote_age_seconds = None
+    if quote_age_seconds is None or quote_age_seconds > 15:
+        raise HTTPException(
+            status_code=409,
+            detail="The cTrader price snapshot is stale or missing its provider timestamp. Wait for a fresh quote before trading.",
+        )
     return {
         "account_id": account_id,
         "account_type": account["account_type"],
