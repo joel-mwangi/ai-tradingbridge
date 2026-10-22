@@ -50,6 +50,9 @@ APP_AUTH_RES = 2101
 ACCOUNT_AUTH_REQ = 2102
 ACCOUNT_AUTH_RES = 2103
 NEW_ORDER_REQ = 2106
+SPOTS_SUBSCRIBE_REQ = 2127
+SPOTS_SUBSCRIBE_RES = 2128
+SPOT_EVENT = 2131
 SYMBOLS_LIST_REQ = 2114
 SYMBOLS_LIST_RES = 2115
 SYMBOL_BY_ID_REQ = 2116
@@ -595,6 +598,83 @@ def _is_forex_symbol(value: Any) -> bool:
     return len(normalized) == 6 and normalized[:3] in CURRENCY_CODES and normalized[3:] in CURRENCY_CODES
 
 
+async def _fetch_spot_quote(
+    credential: CTraderCredential,
+    account_id: str,
+    is_live: bool,
+    symbol_id: int,
+) -> dict[str, Any]:
+    """Retrieve one real bid/ask snapshot from the linked cTrader account's venue."""
+    host = LIVE_HOST if is_live else DEMO_HOST
+    async with websockets.connect(
+        f"wss://{host}:{OPENAPI_PORT}",
+        open_timeout=8,
+        close_timeout=3,
+        ping_interval=20,
+        max_size=1_048_576,
+    ) as websocket:
+        await _connect_and_authorize_application(websocket)
+        await _send_and_wait(
+            websocket,
+            ACCOUNT_AUTH_REQ,
+            {"ctidTraderAccountId": int(account_id), "accessToken": credential.access_token},
+            {ACCOUNT_AUTH_RES},
+        )
+        await _send_and_wait(
+            websocket,
+            SPOTS_SUBSCRIBE_REQ,
+            {
+                "ctidTraderAccountId": int(account_id),
+                "symbolId": [symbol_id],
+                "subscribeToSpotTimestamp": True,
+            },
+            {SPOTS_SUBSCRIBE_RES},
+        )
+        deadline = time.monotonic() + 8.0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("cTrader did not provide a bid/ask snapshot.")
+            raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            try:
+                message = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(message, dict):
+                continue
+            try:
+                payload_type = int(message.get("payloadType"))
+            except (TypeError, ValueError):
+                continue
+            payload = message.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if payload_type == ERROR_RES:
+                raise CTraderProviderError(
+                    str(payload.get("errorCode", "PROVIDER_ERROR")),
+                    str(payload.get("description", "")),
+                )
+            if payload_type != SPOT_EVENT:
+                continue
+            if str(payload.get("ctidTraderAccountId", "")) != account_id:
+                continue
+            if str(payload.get("symbolId", "")) != str(symbol_id):
+                continue
+            try:
+                bid_raw = float(payload.get("bid"))
+                ask_raw = float(payload.get("ask"))
+            except (TypeError, ValueError):
+                continue
+            if not (0 < bid_raw < float("inf") and 0 < ask_raw < float("inf") and ask_raw >= bid_raw):
+                continue
+            stamp = payload.get("timestamp")
+            return {
+                "bid_raw": bid_raw,
+                "ask_raw": ask_raw,
+                "provider_timestamp": stamp if isinstance(stamp, (int, float)) else None,
+            }
+
+
 def _public_account(account: dict[str, Any]) -> dict[str, Any]:
     return {
         "account_id": account["account_id"],
@@ -744,6 +824,92 @@ async def symbols(
                 output.append({"symbol_id": int(symbol_id), "symbol_name": name})
     output.sort(key=lambda row: row["symbol_name"])
     return {"account_id": account_id, "symbols": output}
+
+
+@router.get("/quote")
+async def quote(
+    user_id: Annotated[str, Depends(current_user)],
+    account_id: str = Query(min_length=1, max_length=24),
+    symbol_id: int = Query(gt=0),
+) -> dict[str, Any]:
+    if not ACCOUNT_ID_RE.fullmatch(account_id):
+        raise HTTPException(status_code=422, detail="Invalid cTrader account identifier.")
+    credential = await _owned_credential(user_id)
+    links = await _load_account_links(user_id)
+    account = next((item for item in links if item["account_id"] == account_id), None)
+    if not account:
+        raise HTTPException(status_code=403, detail="This cTrader account is not linked to your TradeBridge user.")
+
+    try:
+        _, light_payload = await _call_account_api(
+            credential,
+            account_id,
+            account["account_type"] == "live",
+            SYMBOLS_LIST_REQ,
+            {"ctidTraderAccountId": int(account_id), "includeArchivedSymbols": False},
+            {SYMBOLS_LIST_RES},
+        )
+        candidates = light_payload.get("symbol", [])
+        selected = next(
+            (
+                item for item in candidates
+                if isinstance(item, dict)
+                and str(item.get("symbolId", "")) == str(symbol_id)
+                and item.get("enabled") is not False
+                and _is_forex_symbol(item.get("symbolName"))
+            ),
+            None,
+        ) if isinstance(candidates, list) else None
+        if not selected:
+            raise HTTPException(status_code=422, detail="Select an enabled Forex symbol from the linked cTrader account.")
+        _, symbol_payload = await _call_account_api(
+            credential,
+            account_id,
+            account["account_type"] == "live",
+            SYMBOL_BY_ID_REQ,
+            {"ctidTraderAccountId": int(account_id), "symbolId": [symbol_id]},
+            {SYMBOL_BY_ID_RES},
+        )
+        full_symbols = symbol_payload.get("symbol", [])
+        symbol = next(
+            (
+                item for item in full_symbols
+                if isinstance(item, dict) and str(item.get("symbolId", "")) == str(symbol_id)
+            ),
+            None,
+        ) if isinstance(full_symbols, list) else None
+        if not symbol:
+            raise HTTPException(status_code=502, detail="cTrader did not return symbol price precision.")
+        spot = await _fetch_spot_quote(
+            credential, account_id, account["account_type"] == "live", symbol_id
+        )
+    except HTTPException:
+        raise
+    except CTraderProviderError as exc:
+        raise HTTPException(status_code=502, detail="cTrader quote request failed: " + exc.error_code)
+    except (TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+        raise HTTPException(status_code=502, detail="cTrader did not provide a fresh quote. Refresh before confirming an order.")
+
+    try:
+        digits = max(0, min(10, int(symbol.get("digits", 5))))
+        pip_position = max(0, min(10, int(symbol.get("pipPosition", 4))))
+    except (TypeError, ValueError):
+        digits, pip_position = 5, 4
+    bid = round(spot["bid_raw"] / 100_000, digits)
+    ask = round(spot["ask_raw"] / 100_000, digits)
+    spread = round(ask - bid, digits)
+    return {
+        "account_id": account_id,
+        "account_type": account["account_type"],
+        "symbol_id": symbol_id,
+        "symbol_name": selected.get("symbolName"),
+        "bid": bid,
+        "ask": ask,
+        "spread": spread,
+        "spread_pips": round(spread * (10 ** pip_position), 2),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "provider_timestamp": spot.get("provider_timestamp"),
+    }
 
 
 @router.post("/orders")
