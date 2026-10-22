@@ -757,7 +757,7 @@ async def place_demo_order(
         raise HTTPException(status_code=503, detail="Demo order execution is disabled until configured by the TradeBridge operator.")
     max_volume = 100.0
     try:
-        max_volume = min(100_000.0, max(0.01, float(os.getenv("CTRADER_DEMO_MAX_VOLUME_UNITS", "100"))))
+        max_volume = min(100_000.0, max(0.01, float(os.getenv("CTRADER_DEMO_MAX_VOLUME_UNITS", "1000"))))
     except (TypeError, ValueError):
         raise HTTPException(status_code=503, detail="The server-side cTrader demo volume limit is invalid.")
     if body.volume_units > max_volume:
