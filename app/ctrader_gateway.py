@@ -1463,7 +1463,7 @@ async def close_position(
             raise HTTPException(status_code=502, detail="cTrader did not return the symbol's volume rules.")
         min_volume = _as_protocol_int(symbol.get("minVolume")) or 0
         step_volume = _as_protocol_int(symbol.get("stepVolume")) or 0
-        if min_volume <= 0 or step_volume <= 0 or requested_cents < min_volume or requested_cents % step_volume != 0:
+        if min_volume <= 0 or step_volume <= 0 or requested_cents < min_volume or (requested_cents - min_volume) % step_volume != 0:
             raise HTTPException(status_code=422, detail="Partial-close volume must follow the minimum and step allowed for this cTrader symbol.")
         close_volume = requested_cents
 
