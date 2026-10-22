@@ -40,9 +40,9 @@ CURRENCY_CODES = {
     "HKD", "NOK", "SEK", "DKK", "ZAR", "MXN", "PLN", "TRY", "CNH",
     "CNY", "HUF", "CZK", "ILS", "THB",
 }
-DEMO_HOST = "demo1.p.ctrader.com"
-LIVE_HOST = "live1.p.ctrader.com"
-OPENAPI_PORT = 5035
+DEMO_HOST = "demo.ctraderapi.com"
+LIVE_HOST = "live.ctraderapi.com"
+OPENAPI_PORT = 5036
 TOKEN_ENDPOINT = "https://openapi.ctrader.com/apps/token"
 AUTH_ENDPOINT = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
 
