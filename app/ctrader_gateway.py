@@ -907,6 +907,8 @@ async def quote(
         "ask": ask,
         "spread": spread,
         "spread_pips": round(spread * (10 ** pip_position), 2),
+        "digits": digits,
+        "pip_position": pip_position,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "provider_timestamp": spot.get("provider_timestamp"),
     }
