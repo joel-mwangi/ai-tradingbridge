@@ -67,6 +67,13 @@ ORDER_ERROR_EVENT = 2132
 ERROR_RES = 2142
 ACCOUNT_LIST_REQ = 2149
 ACCOUNT_LIST_RES = 2150
+AMEND_POSITION_SLTP_REQ = 2110
+CLOSE_POSITION_REQ = 2111
+RECONCILE_REQ = 2124
+RECONCILE_RES = 2125
+GET_POSITION_UNREALIZED_PNL_REQ = 2187
+GET_POSITION_UNREALIZED_PNL_RES = 2188
+POSITION_ID_RE = re.compile(r"^[0-9]{1,24}$")
 
 
 @dataclass(frozen=True)
@@ -111,6 +118,65 @@ class CTraderOrderRequest(BaseModel):
     def validate_volume_is_finite(cls, value: float) -> float:
         if not (value > 0 and value < float("inf")):
             raise ValueError("Volume must be a finite positive number.")
+        return value
+
+
+class CTraderProtectionRequest(BaseModel):
+    account_id: StrictStr = Field(min_length=1, max_length=24)
+    idempotency_key: StrictStr = Field(min_length=8, max_length=50)
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    confirmed: StrictBool
+
+    @field_validator("account_id")
+    @classmethod
+    def validate_position_action_account_id(cls, value: str) -> str:
+        if not ACCOUNT_ID_RE.fullmatch(value):
+            raise ValueError("Invalid cTrader account identifier.")
+        return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_position_action_key(cls, value: str) -> str:
+        if not IDEMPOTENCY_RE.fullmatch(value):
+            raise ValueError("Invalid idempotency key.")
+        return value
+
+    @field_validator("stop_loss", "take_profit")
+    @classmethod
+    def validate_protection_price(cls, value: float | None) -> float | None:
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ValueError("Protection prices must be finite positive prices.")
+        return value
+
+
+class CTraderClosePositionRequest(BaseModel):
+    account_id: StrictStr = Field(min_length=1, max_length=24)
+    idempotency_key: StrictStr = Field(min_length=8, max_length=50)
+    volume_units: float | None = Field(default=None, gt=0, le=100_000)
+    confirmed: StrictBool
+
+    @field_validator("account_id")
+    @classmethod
+    def validate_close_account_id(cls, value: str) -> str:
+        if not ACCOUNT_ID_RE.fullmatch(value):
+            raise ValueError("Invalid cTrader account identifier.")
+        return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_close_idempotency_key(cls, value: str) -> str:
+        if not IDEMPOTENCY_RE.fullmatch(value):
+            raise ValueError("Invalid idempotency key.")
+        return value
+
+    @field_validator("volume_units")
+    @classmethod
+    def validate_close_volume(cls, value: float | None) -> float | None:
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ValueError("Close volume must be a finite positive number.")
+        if value is not None and abs(value * 100 - round(value * 100)) > 1e-7:
+            raise ValueError("Close volume must use increments of 0.01 units.")
         return value
 
 
@@ -465,6 +531,311 @@ async def _claim_order(user_id: str, body: CTraderOrderRequest, volume_cents: in
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Could not create a safe cTrader order record.")
+
+
+async def _claim_position_action(
+    user_id: str,
+    idempotency_key: str,
+    account_id: str,
+    position_id: int,
+    action_type: str,
+    request_hash: str,
+) -> None:
+    url, service_key = _store_config()
+    row = {
+        "user_id": user_id,
+        "idempotency_key": idempotency_key,
+        "ctid_trader_account_id": account_id,
+        "position_id": position_id,
+        "action_type": action_type,
+        "request_hash": request_hash,
+        "status": "submitting",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.post(
+                f"{url}/rest/v1/ctrader_position_action_requests",
+                params={"on_conflict": "user_id,idempotency_key"},
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=ignore-duplicates,return=representation",
+                },
+                json=row,
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not create a safe position-action record.")
+        inserted = response.json()
+        if not isinstance(inserted, list) or not inserted:
+            raise HTTPException(
+                status_code=409,
+                detail="This position action was already submitted or its outcome is unresolved. Refresh positions before trying again.",
+            )
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=503, detail="Could not create a safe position-action record.")
+
+
+async def _update_position_action(
+    user_id: str,
+    idempotency_key: str,
+    status_value: str,
+    provider_error: str | None = None,
+) -> None:
+    url, service_key = _store_config()
+    payload: dict[str, Any] = {
+        "status": status_value,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if provider_error:
+        payload["provider_error_code"] = provider_error[:100]
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.patch(
+                f"{url}/rest/v1/ctrader_position_action_requests",
+                params={"user_id": f"eq.{user_id}", "idempotency_key": f"eq.{idempotency_key}"},
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                json=payload,
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not persist the position-action status.")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not persist the position-action status.")
+
+
+async def _provider_reconcile(
+    credential: CTraderCredential,
+    account_id: str,
+    is_live: bool,
+) -> dict[str, Any]:
+    _, payload = await _call_account_api(
+        credential,
+        account_id,
+        is_live,
+        RECONCILE_REQ,
+        {"ctidTraderAccountId": int(account_id), "returnProtectionOrders": False},
+        {RECONCILE_RES},
+    )
+    return payload
+
+
+def _as_protocol_int(value: Any) -> int | None:
+    parsed = _optional_protocol_id(value)
+    return parsed if parsed is not None else None
+
+
+def _open_position_by_id(payload: dict[str, Any], position_id: int) -> dict[str, Any] | None:
+    raw_positions = payload.get("position", [])
+    if not isinstance(raw_positions, list):
+        return None
+    for item in raw_positions:
+        if not isinstance(item, dict) or _as_protocol_int(item.get("positionId")) != position_id:
+            continue
+        status = _as_protocol_int(item.get("positionStatus"))
+        if status not in (None, 1):
+            continue
+        return item
+    return None
+
+
+async def _position_snapshot(
+    user_id: str,
+    account_id: str,
+    account_type: str,
+    credential: CTraderCredential,
+) -> dict[str, Any]:
+    is_live = account_type == "live"
+    payload = await _provider_reconcile(credential, account_id, is_live)
+    raw_positions = payload.get("position", [])
+    raw_orders = payload.get("order", [])
+    raw_positions = raw_positions if isinstance(raw_positions, list) else []
+    raw_orders = raw_orders if isinstance(raw_orders, list) else []
+
+    symbol_names: dict[int, str] = {}
+    try:
+        _, symbol_payload = await _call_account_api(
+            credential,
+            account_id,
+            is_live,
+            SYMBOLS_LIST_REQ,
+            {"ctidTraderAccountId": int(account_id), "includeArchivedSymbols": False},
+            {SYMBOLS_LIST_RES},
+        )
+        for symbol in symbol_payload.get("symbol", []):
+            if not isinstance(symbol, dict):
+                continue
+            symbol_id = _as_protocol_int(symbol.get("symbolId"))
+            name = symbol.get("symbolName")
+            if symbol_id is not None and isinstance(name, str):
+                symbol_names[symbol_id] = name
+    except (CTraderProviderError, TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+        # Reconcile data is still authoritative; labels can fall back to symbol IDs.
+        pass
+
+    pnl_by_position: dict[int, float] = {}
+    pnl_money_digits: int | None = None
+    if raw_positions:
+        try:
+            _, pnl_payload = await _call_account_api(
+                credential,
+                account_id,
+                is_live,
+                GET_POSITION_UNREALIZED_PNL_REQ,
+                {"ctidTraderAccountId": int(account_id)},
+                {GET_POSITION_UNREALIZED_PNL_RES},
+            )
+            raw_pnls = pnl_payload.get("positionUnrealizedPnL", [])
+            pnl_money_digits = max(0, min(12, int(pnl_payload.get("moneyDigits", 2))))
+            scale = 10 ** pnl_money_digits
+            if isinstance(raw_pnls, list):
+                for pnl in raw_pnls:
+                    if not isinstance(pnl, dict):
+                        continue
+                    pnl_id = _as_protocol_int(pnl.get("positionId"))
+                    raw_net = pnl.get("netUnrealizedPnL")
+                    if pnl_id is None or isinstance(raw_net, bool):
+                        continue
+                    try:
+                        net_value = float(raw_net)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if math.isfinite(net_value):
+                        pnl_by_position[pnl_id] = net_value / scale
+        except (CTraderProviderError, TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError, ValueError, TypeError):
+            pnl_by_position = {}
+            pnl_money_digits = None
+
+    positions: list[dict[str, Any]] = []
+    for item in raw_positions:
+        if not isinstance(item, dict):
+            continue
+        status = _as_protocol_int(item.get("positionStatus"))
+        if status not in (None, 1):
+            continue
+        position_id = _as_protocol_int(item.get("positionId"))
+        trade_data = item.get("tradeData") if isinstance(item.get("tradeData"), dict) else {}
+        symbol_id = _as_protocol_int(trade_data.get("symbolId"))
+        side_value = _as_protocol_int(trade_data.get("tradeSide"))
+        volume_raw = _as_protocol_int(trade_data.get("volume"))
+        entry_raw = item.get("price")
+        try:
+            entry_price = float(entry_raw) if entry_raw is not None else None
+        except (TypeError, ValueError, OverflowError):
+            entry_price = None
+        if entry_price is not None and not math.isfinite(entry_price):
+            entry_price = None
+        stop_loss = item.get("stopLoss")
+        take_profit = item.get("takeProfit")
+        try:
+            stop_loss = float(stop_loss) if stop_loss is not None else None
+            take_profit = float(take_profit) if take_profit is not None else None
+        except (TypeError, ValueError, OverflowError):
+            stop_loss = take_profit = None
+        if position_id is None or symbol_id is None or volume_raw is None:
+            continue
+        positions.append({
+            "position_id": str(position_id),
+            "symbol_id": symbol_id,
+            "symbol_name": symbol_names.get(symbol_id, f"Symbol {symbol_id}"),
+            "side": "BUY" if side_value == 1 else "SELL" if side_value == 2 else "UNKNOWN",
+            "volume_units": volume_raw / 100,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss if stop_loss is not None and math.isfinite(stop_loss) else None,
+            "take_profit": take_profit if take_profit is not None and math.isfinite(take_profit) else None,
+            "net_unrealized_pnl": pnl_by_position.get(position_id),
+            "pnl_currency_digits": pnl_money_digits,
+            "opened_at": trade_data.get("openTimestamp"),
+            "last_updated_at": item.get("utcLastUpdateTimestamp"),
+            "used_margin": item.get("usedMargin"),
+        })
+
+    pending_orders: list[dict[str, Any]] = []
+    for item in raw_orders:
+        if not isinstance(item, dict):
+            continue
+        trade_data = item.get("tradeData") if isinstance(item.get("tradeData"), dict) else {}
+        order_id = _as_protocol_int(item.get("orderId"))
+        symbol_id = _as_protocol_int(trade_data.get("symbolId"))
+        volume_raw = _as_protocol_int(item.get("volume"))
+        if order_id is None:
+            continue
+        pending_orders.append({
+            "order_id": str(order_id),
+            "symbol_id": symbol_id,
+            "symbol_name": symbol_names.get(symbol_id, f"Symbol {symbol_id}" if symbol_id is not None else "Unknown symbol"),
+            "side": "BUY" if _as_protocol_int(trade_data.get("tradeSide")) == 1 else "SELL",
+            "volume_units": volume_raw / 100 if volume_raw is not None else None,
+            "order_type": item.get("orderType"),
+            "limit_price": item.get("limitPrice"),
+            "stop_price": item.get("stopPrice"),
+        })
+    return {
+        "account_id": account_id,
+        "account_type": account_type,
+        "positions": positions,
+        "pending_orders": pending_orders,
+        "pnl_available": pnl_money_digits is not None,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _require_demo_position(
+    user_id: str,
+    account_id: str,
+    position_id: int,
+    credential: CTraderCredential,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    links = await _load_account_links(user_id)
+    account = next((item for item in links if item["account_id"] == account_id), None)
+    if not account:
+        raise HTTPException(status_code=403, detail="This cTrader account is not linked to your TradeBridge user.")
+    if account["account_type"] != "demo":
+        raise HTTPException(status_code=403, detail="Position actions are locked for live accounts.")
+    if credential.permission_scope != 1:
+        raise HTTPException(status_code=403, detail="Trading permission was not granted. Reconnect and approve trading access.")
+    snapshot = await _provider_reconcile(credential, account_id, False)
+    position = _open_position_by_id(snapshot, position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail="The position is no longer open. Refresh the positions list.")
+    return account, position
+
+
+async def _validate_position_action_response(
+    user_id: str,
+    idempotency_key: str,
+    payload_type: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    execution_type = _execution_type_value(payload)
+    if payload.get("errorCode") or execution_type == 7:
+        error_code = str(payload.get("errorCode") or "ORDER_REJECTED")
+        await _update_position_action(user_id, idempotency_key, "rejected", error_code)
+        raise HTTPException(status_code=422, detail="cTrader rejected the position action: " + error_code)
+    position = payload.get("position") if isinstance(payload.get("position"), dict) else {}
+    position_id = _optional_protocol_id(position.get("positionId"))
+    order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
+    order_id = _optional_protocol_id(order.get("orderId"))
+    if payload_type != EXECUTION_EVENT:
+        await _update_position_action(user_id, idempotency_key, "unknown")
+        raise HTTPException(status_code=504, detail="cTrader returned an unexpected action acknowledgement. Refresh positions before proceeding.")
+    await _update_position_action(user_id, idempotency_key, "completed")
+    return {
+        "status": "acknowledged",
+        "position_id": str(position_id) if position_id is not None else None,
+        "order_id": str(order_id) if order_id is not None else None,
+        "message": "cTrader acknowledged the position action. Refresh positions to verify the resulting state.",
+    }
 
 
 async def _refresh_credential(user_id: str, credential: CTraderCredential) -> CTraderCredential:
@@ -973,6 +1344,165 @@ async def quote(
         "provider_quote_at": provider_quote_at,
         "quote_age_seconds": quote_age_seconds,
     }
+
+
+@router.get("/positions")
+async def list_positions(
+    user_id: Annotated[str, Depends(current_user)],
+    account_id: str = Query(min_length=1, max_length=24),
+) -> dict[str, Any]:
+    if not ACCOUNT_ID_RE.fullmatch(account_id):
+        raise HTTPException(status_code=422, detail="Invalid cTrader account identifier.")
+    credential = await _owned_credential(user_id)
+    links = await _load_account_links(user_id)
+    account = next((item for item in links if item["account_id"] == account_id), None)
+    if not account:
+        raise HTTPException(status_code=403, detail="This cTrader account is not linked to your TradeBridge user.")
+    try:
+        return await _position_snapshot(user_id, account_id, account["account_type"], credential)
+    except HTTPException:
+        raise
+    except CTraderProviderError as exc:
+        raise HTTPException(status_code=502, detail="cTrader positions request failed: " + exc.error_code)
+    except (TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+        raise HTTPException(status_code=502, detail="Could not retrieve positions from cTrader.")
+
+
+@router.post("/positions/{position_id}/protection")
+async def amend_position_protection(
+    position_id: str,
+    body: CTraderProtectionRequest,
+    user_id: Annotated[str, Depends(current_user)],
+) -> dict[str, Any]:
+    if not POSITION_ID_RE.fullmatch(position_id):
+        raise HTTPException(status_code=422, detail="Invalid cTrader position identifier.")
+    if body.confirmed is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required for a position-protection change.")
+    supplied = body.model_fields_set.intersection({"stop_loss", "take_profit"})
+    if not supplied:
+        raise HTTPException(status_code=422, detail="Supply a new stop-loss and/or take-profit price.")
+    if any(getattr(body, field) is None for field in supplied):
+        raise HTTPException(status_code=422, detail="Protection prices cannot be cleared in this version; enter positive prices instead.")
+    parsed_position_id = int(position_id)
+    credential = await _owned_credential(user_id)
+    _, position = await _require_demo_position(user_id, body.account_id, parsed_position_id, credential)
+    action_payload = {
+        "account_id": body.account_id,
+        "position_id": parsed_position_id,
+        "stop_loss": body.stop_loss if "stop_loss" in supplied else None,
+        "take_profit": body.take_profit if "take_profit" in supplied else None,
+    }
+    request_hash = hashlib.sha256(json.dumps(action_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    await _claim_position_action(user_id, body.idempotency_key, body.account_id, parsed_position_id, "protection", request_hash)
+    request_payload: dict[str, Any] = {
+        "ctidTraderAccountId": int(body.account_id),
+        "positionId": parsed_position_id,
+    }
+    if "stop_loss" in supplied:
+        request_payload["stopLoss"] = body.stop_loss
+    if "take_profit" in supplied:
+        request_payload["takeProfit"] = body.take_profit
+    try:
+        payload_type, response_payload = await _call_account_api(
+            credential,
+            body.account_id,
+            False,
+            AMEND_POSITION_SLTP_REQ,
+            request_payload,
+            {EXECUTION_EVENT, ORDER_ERROR_EVENT},
+            timeout_seconds=12.0,
+        )
+        result = await _validate_position_action_response(user_id, body.idempotency_key, payload_type, response_payload)
+    except CTraderProviderError as exc:
+        await _update_position_action(user_id, body.idempotency_key, "rejected", exc.error_code)
+        raise HTTPException(status_code=422, detail="cTrader rejected the protection change: " + exc.error_code)
+    except (TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+        await _update_position_action(user_id, body.idempotency_key, "unknown")
+        raise HTTPException(status_code=504, detail="The protection-change outcome is unknown. Refresh positions in cTrader before retrying.")
+    return {**result, "account_id": body.account_id, "position_id": position_id}
+
+
+@router.post("/positions/{position_id}/close")
+async def close_position(
+    position_id: str,
+    body: CTraderClosePositionRequest,
+    user_id: Annotated[str, Depends(current_user)],
+) -> dict[str, Any]:
+    if not POSITION_ID_RE.fullmatch(position_id):
+        raise HTTPException(status_code=422, detail="Invalid cTrader position identifier.")
+    if body.confirmed is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required to close a position.")
+    parsed_position_id = int(position_id)
+    credential = await _owned_credential(user_id)
+    _, position = await _require_demo_position(user_id, body.account_id, parsed_position_id, credential)
+    trade_data = position.get("tradeData") if isinstance(position.get("tradeData"), dict) else {}
+    current_volume = _as_protocol_int(trade_data.get("volume"))
+    symbol_id = _as_protocol_int(trade_data.get("symbolId"))
+    if current_volume is None or current_volume <= 0 or symbol_id is None:
+        raise HTTPException(status_code=502, detail="cTrader position is missing valid volume or symbol information.")
+    if body.volume_units is None:
+        close_volume = current_volume
+    else:
+        requested_cents = int(round(body.volume_units * 100))
+        if requested_cents >= current_volume:
+            raise HTTPException(status_code=422, detail="For a full close, leave close volume blank. Partial-close volume must be smaller than the position.")
+        try:
+            _, full_payload = await _call_account_api(
+                credential,
+                body.account_id,
+                False,
+                SYMBOL_BY_ID_REQ,
+                {"ctidTraderAccountId": int(body.account_id), "symbolId": [symbol_id]},
+                {SYMBOL_BY_ID_RES},
+            )
+        except (CTraderProviderError, TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+            raise HTTPException(status_code=502, detail="Could not validate the cTrader partial-close size.")
+        full_symbols = full_payload.get("symbol", [])
+        symbol = next((item for item in full_symbols if isinstance(item, dict) and _as_protocol_int(item.get("symbolId")) == symbol_id), None) if isinstance(full_symbols, list) else None
+        if not symbol:
+            raise HTTPException(status_code=502, detail="cTrader did not return the symbol's volume rules.")
+        min_volume = _as_protocol_int(symbol.get("minVolume")) or 0
+        step_volume = _as_protocol_int(symbol.get("stepVolume")) or 0
+        if min_volume <= 0 or step_volume <= 0 or requested_cents < min_volume or requested_cents % step_volume != 0:
+            raise HTTPException(status_code=422, detail="Partial-close volume must follow the minimum and step allowed for this cTrader symbol.")
+        close_volume = requested_cents
+
+    action_payload = {
+        "account_id": body.account_id,
+        "position_id": parsed_position_id,
+        "volume_cents": close_volume,
+    }
+    request_hash = hashlib.sha256(json.dumps(action_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    await _claim_position_action(user_id, body.idempotency_key, body.account_id, parsed_position_id, "close", request_hash)
+    try:
+        payload_type, response_payload = await _call_account_api(
+            credential,
+            body.account_id,
+            False,
+            CLOSE_POSITION_REQ,
+            {
+                "ctidTraderAccountId": int(body.account_id),
+                "positionId": parsed_position_id,
+                "volume": close_volume,
+            },
+            {EXECUTION_EVENT, ORDER_ERROR_EVENT},
+            timeout_seconds=12.0,
+        )
+        result = await _validate_position_action_response(user_id, body.idempotency_key, payload_type, response_payload)
+    except CTraderProviderError as exc:
+        await _update_position_action(user_id, body.idempotency_key, "rejected", exc.error_code)
+        raise HTTPException(status_code=422, detail="cTrader rejected the close request: " + exc.error_code)
+    except (TimeoutError, OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError):
+        await _update_position_action(user_id, body.idempotency_key, "unknown")
+        raise HTTPException(status_code=504, detail="The close outcome is unknown. Refresh positions in cTrader before attempting another action.")
+    return {
+        **result,
+        "account_id": body.account_id,
+        "position_id": position_id,
+        "closed_volume_units": close_volume / 100,
+        "full_close": close_volume == current_volume,
+    }
+
 
 
 @router.post("/orders")
