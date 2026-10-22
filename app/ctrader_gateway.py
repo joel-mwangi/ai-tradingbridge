@@ -120,6 +120,23 @@ class CTraderProviderError(Exception):
         super().__init__(self.error_code)
 
 
+def _execution_type_value(payload: dict[str, Any]) -> int | None:
+    raw = payload.get("executionType")
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        normalized = raw.strip().upper()
+        if normalized.isdigit():
+            return int(normalized)
+        return {
+            "ORDER_ACCEPTED": 2,
+            "ORDER_FILLED": 3,
+            "ORDER_REJECTED": 7,
+            "ORDER_PARTIAL_FILL": 11,
+        }.get(normalized)
+    return None
+
+
 def _required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
@@ -1049,7 +1066,8 @@ async def place_demo_order(
             detail="The order outcome is unknown because cTrader did not confirm it. Do not submit it again; check the cTrader account before taking further action.",
         )
 
-    if payload.get("errorCode") or payload.get("executionType") == 7:
+    execution_type = _execution_type_value(payload)
+    if payload.get("errorCode") or execution_type == 7:
         error_code = str(payload.get("errorCode") or "ORDER_REJECTED")
         await _update_order_request(user_id, body.idempotency_key, "rejected", provider_error=error_code)
         raise HTTPException(status_code=422, detail="cTrader rejected the demo order: " + error_code)
@@ -1058,22 +1076,31 @@ async def place_demo_order(
     position = payload.get("position") if isinstance(payload.get("position"), dict) else {}
     order_id = order.get("orderId") if isinstance(order.get("orderId"), int) else None
     position_id = position.get("positionId") if isinstance(position.get("positionId"), int) else None
-    if payload.get("executionType") not in (2, 3, 11) and order_id is None and position_id is None:
+    status_by_execution = {2: "accepted", 3: "filled", 11: "partial"}
+    order_status = status_by_execution.get(execution_type)
+    if order_status is None:
         await _update_order_request(user_id, body.idempotency_key, "unknown")
         raise HTTPException(
             status_code=504,
             detail="cTrader returned an unrecognized execution state. The outcome is unknown; do not retry this order.",
         )
-    await _update_order_request(user_id, body.idempotency_key, "accepted", order_id, position_id)
+
+    await _update_order_request(user_id, body.idempotency_key, order_status, order_id, position_id)
+    if order_status == "filled":
+        order_message = "cTrader reports the demo order filled. Verify the resulting position in account activity."
+    elif order_status == "partial":
+        order_message = "cTrader reports a partial fill. Check the position and remaining order amount in account activity."
+    else:
+        order_message = "cTrader accepted the demo order request. Verify the final fill and position in account activity."
     return {
-        "status": "accepted",
+        "status": order_status,
         "account_id": body.account_id,
         "symbol_id": body.symbol_id,
         "side": body.side,
         "volume_units": body.volume_units,
         "order_id": str(order_id) if order_id is not None else None,
         "position_id": str(position_id) if position_id is not None else None,
-        "message": "cTrader acknowledged the demo order. Verify its final fill and position in account activity.",
+        "message": order_message,
     }
 
 
