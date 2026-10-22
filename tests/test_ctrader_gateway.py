@@ -197,3 +197,19 @@ def test_json_websocket_endpoint_config():
     assert ctrader_gateway.DEMO_HOST == "demo.ctraderapi.com"
     assert ctrader_gateway.LIVE_HOST == "live.ctraderapi.com"
     assert ctrader_gateway.OPENAPI_PORT == 5036
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"executionType": 2}, 2),
+        ({"executionType": "3"}, 3),
+        ({"executionType": "ORDER_FILLED"}, 3),
+        ({"executionType": 7}, 7),
+        ({"executionType": "ORDER_PARTIAL_FILL"}, 11),
+        ({"executionType": "unexpected"}, None),
+        ({}, None),
+    ],
+)
+def test_execution_type_normalization(payload, expected):
+    assert ctrader_gateway._execution_type_value(payload) == expected
