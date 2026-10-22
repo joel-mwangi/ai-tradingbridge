@@ -22,17 +22,24 @@ pip install -r requirements.txt
 Create a local `.env` file (never commit it):
 
 ```dotenv
-TRADEBRIDGE_API_TOKEN=GENERATE_A_LONG_RANDOM_SERVER_TO_SERVER_TOKEN
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SERVICE_ROLE_KEY
-DERIV_OAUTH_CLIENT_ID=YOUR_DERIV_OAUTH_CLIENT_ID
+TRADEBRIDGE_API_TOKEN=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+DERIV_OAUTH_CLIENT_ID=
 DERIV_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/deriv/callback
-TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
-TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
+TRADEBRIDGE_SESSION_BRIDGE_TOKEN=
+TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=
 TRADEBRIDGE_ALLOWED_ORIGINS=https://YOUR_FRONTEND_HOST,http://localhost:3000
 TRADEBRIDGE_DEMO_MAX_STAKE=1000
 DERIV_SYMBOL=1HZ100V
+# cTrader Open API — leave blank until Spotware approves the app
+CTRADER_OPENAPI_CLIENT_ID=
+CTRADER_OPENAPI_CLIENT_SECRET=
+CTRADER_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/ctrader/callback
+APP_URL=https://YOUR_FRONTEND_HOST
+CTRADER_DEMO_ORDERS_ENABLED=false
+CTRADER_DEMO_MAX_VOLUME_UNITS=1000
 ```
 
 Generate a strong token: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
@@ -42,6 +49,12 @@ Generate a Fernet key: `python -c "from cryptography.fernet import Fernet; print
 The `TRADEBRIDGE_SESSION_BRIDGE_TOKEN` must match the server-only value in Next.js. Never
 expose it through `NEXT_PUBLIC_*`. The service-role key bypasses Supabase RLS — keep it
 only in server-side environment variables.
+
+## cTrader Open API gateway
+
+Conventional Forex CFD access is provided separately from the Deriv Options gateway. The cTrader API app must first be registered and approved by Spotware, with the exact callback URI registered in that app. Keep `CTRADER_OPENAPI_CLIENT_ID`, `CTRADER_OPENAPI_CLIENT_SECRET`, and `CTRADER_OAUTH_REDIRECT_URI` unset until that approval is complete; then add their values in the backend and frontend platform environment settings, not in source control. The client secret, Supabase service-role key, encryption key, and bridge token must remain backend/server-only. The frontend onboarding panel links users to Deriv's account activation instructions when needed.
+
+All cTrader order and position-changing actions are limited to Demo accounts by the backend in this rollout. Keep `CTRADER_DEMO_ORDERS_ENABLED=false` while validating OAuth, account ownership, migrations, and provider responses. There is no live-account order execution in this release.
 
 ## Supabase migrations
 
