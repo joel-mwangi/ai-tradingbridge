@@ -191,3 +191,9 @@ def test_send_and_wait_correlates_response_to_request_id():
     assert websocket.sent["payloadType"] == ctrader_gateway.APP_AUTH_REQ
     assert response_type == ctrader_gateway.APP_AUTH_RES
     assert payload == {}
+
+
+def test_json_websocket_endpoint_config():
+    assert ctrader_gateway.DEMO_HOST == "demo.ctraderapi.com"
+    assert ctrader_gateway.LIVE_HOST == "live.ctraderapi.com"
+    assert ctrader_gateway.OPENAPI_PORT == 5036
