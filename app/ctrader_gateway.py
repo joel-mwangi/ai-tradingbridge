@@ -6,6 +6,7 @@ idempotency record are required before a market order can be sent.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -23,7 +24,6 @@ import websockets
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, StrictBool, StrictStr, field_validator
-from starlette.concurrency import run_in_threadpool
 
 from app.deriv_gateway import (
     _credential_cipher,
@@ -425,7 +425,7 @@ async def _claim_order(user_id: str, body: CTraderOrderRequest, volume_cents: in
         raise HTTPException(status_code=503, detail="Could not create a safe cTrader order record.")
 
 
-async def _refresh_credential(credential: CTraderCredential) -> CTraderCredential:
+async def _refresh_credential(user_id: str, credential: CTraderCredential) -> CTraderCredential:
     client_id, client_secret = _ctrader_app_credentials()
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
@@ -454,9 +454,6 @@ async def _refresh_credential(credential: CTraderCredential) -> CTraderCredentia
         expires_in = int(payload.get("expiresIn", 2_628_000))
     except (TypeError, ValueError):
         expires_in = 2_628_000
-    user_id = getattr(_refresh_credential, "user_id", "")
-    if not user_id:
-        raise HTTPException(status_code=503, detail="Could not resolve cTrader credential owner.")
     return await _store_credential(user_id, access_token, refresh_token, expires_in, credential.permission_scope)
 
 
@@ -465,62 +462,8 @@ async def _owned_credential(user_id: str) -> CTraderCredential:
     if credential is None:
         raise HTTPException(status_code=409, detail="cTrader is not connected to this TradeBridge account.")
     if credential.expires_at <= time.time() + 120:
-        # Refresh tokens are user-specific; the attribute is set only for this awaited refresh.
-        setattr(_refresh_credential, "user_id", user_id)
-        return await _refresh_credential(credential)
+        return await _refresh_credential(user_id, credential)
     return credential
-
-
-async def _receive_for(
-    websocket: Any,
-    client_msg_id: str,
-    expected_types: set[int],
-    timeout_seconds: float = 10.0,
-) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("cTrader did not return a response in time.")
-        raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
-        try:
-            message = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(message, dict):
-            continue
-        response_id = message.get("clientMsgId")
-        response_type = message.get("payloadType")
-        if response_id != client_msg_id:
-            continue
-        try:
-            response_type = int(response_type)
-        except (TypeError, ValueError):
-            raise CTraderProviderError("INVALID_RESPONSE", "cTrader returned an invalid message type.")
-        payload = message.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        if response_type == ERROR_RES:
-            raise CTraderProviderError(str(payload.get("errorCode", "PROVIDER_ERROR")), str(payload.get("description", "")))
-        if response_type not in expected_types:
-            raise CTraderProviderError("UNEXPECTED_RESPONSE", "cTrader returned an unexpected response.")
-        return payload
-
-
-async def _send_request(
-    websocket: Any,
-    payload_type: int,
-    payload: dict[str, Any],
-    expected_types: set[int],
-    timeout_seconds: float = 10.0,
-) -> tuple[dict[str, Any], int]:
-    msg_id = uuid.uuid4().hex
-    await websocket.send(json.dumps({
-        "clientMsgId": msg_id,
-        "payloadType": payload_type,
-        "payload": payload,
-    }, separators=(",", ":")))
-    response_type = await _receive_for(websocket, msg_id, expected_types, timeout_seconds)
-    return response_type, {}
 
 
 async def _send_and_wait(
@@ -554,7 +497,7 @@ async def _send_and_wait(
             raise CTraderProviderError("INVALID_RESPONSE", "cTrader returned an invalid message type.")
         response_payload = message.get("payload")
         response_payload = response_payload if isinstance(response_payload, dict) else {}
-        if response_type == ERROR_RES:
+        if response_type == ERROR_RES or response_payload.get("errorCode"):
             raise CTraderProviderError(str(response_payload.get("errorCode", "PROVIDER_ERROR")), str(response_payload.get("description", "")))
         if response_type not in expected_types:
             raise CTraderProviderError("UNEXPECTED_RESPONSE", "cTrader returned an unexpected response.")
@@ -568,7 +511,7 @@ async def _connect_and_authorize_application(websocket: Any) -> None:
     )
 
 
-async def _list_accounts_on_host(host: str, access_token: str) -> list[dict[str, Any]]:
+async def _list_accounts_on_host(host: str, access_token: str) -> tuple[list[dict[str, Any]], int]:
     async with websockets.connect(
         f"wss://{host}:{OPENAPI_PORT}",
         open_timeout=8,
@@ -580,9 +523,11 @@ async def _list_accounts_on_host(host: str, access_token: str) -> list[dict[str,
         _, payload = await _send_and_wait(
             websocket, ACCOUNT_LIST_REQ, {"accessToken": access_token}, {ACCOUNT_LIST_RES}
         )
+    raw_scope = payload.get("permissionScope", 0)
+    permission_scope = 1 if raw_scope in (1, "1", "SCOPE_TRADE", "trading") else 0
     candidates = payload.get("ctidTraderAccount", [])
     if not isinstance(candidates, list):
-        return []
+        return [], permission_scope
     accounts: list[dict[str, Any]] = []
     for item in candidates:
         if not isinstance(item, dict):
@@ -596,21 +541,24 @@ async def _list_accounts_on_host(host: str, access_token: str) -> list[dict[str,
             "trader_login": item.get("traderLogin") if isinstance(item.get("traderLogin"), int) else None,
             "broker_title_short": item.get("brokerTitleShort") if isinstance(item.get("brokerTitleShort"), str) else None,
         })
-    return accounts
+    return accounts, permission_scope
 
 
-async def _list_authorized_accounts(access_token: str) -> list[dict[str, Any]]:
+async def _list_authorized_accounts(access_token: str) -> tuple[list[dict[str, Any]], int]:
     accounts: dict[str, dict[str, Any]] = {}
     failures: list[Exception] = []
+    permission_scope = 0
     for host in (DEMO_HOST, LIVE_HOST):
         try:
-            for account in await _list_accounts_on_host(host, access_token):
+            found, scope = await _list_accounts_on_host(host, access_token)
+            permission_scope = max(permission_scope, scope)
+            for account in found:
                 accounts[account["account_id"]] = account
         except (TimeoutError, OSError, websockets.exceptions.WebSocketException, CTraderProviderError) as exc:
             failures.append(exc)
     if not accounts and failures:
         raise HTTPException(status_code=502, detail="Could not verify cTrader accounts through Open API.")
-    return list(accounts.values())
+    return list(accounts.values()), permission_scope
 
 
 async def _call_account_api(
@@ -707,11 +655,10 @@ async def exchange_oauth_code(
     except (TypeError, ValueError):
         expires_in = 2_628_000
 
-    accounts = await _list_authorized_accounts(access_token)
+    accounts, permission_scope = await _list_authorized_accounts(access_token)
     if not accounts:
         raise HTTPException(status_code=502, detail="No cTrader accounts were authorized. Reconnect and choose an account.")
-    permission_scope = 1 if token_payload.get("permissionScope") in (1, "SCOPE_TRADE", "trading", None) else 0
-    # Store ownership links only after Open API verifies that the access token can enumerate them.
+    # Store ownership links only after Open API verifies both the account list and granted scope.
     await _store_account_links(user_id, accounts)
     try:
         await _store_credential(user_id, access_token, refresh_token, expires_in, permission_scope)
