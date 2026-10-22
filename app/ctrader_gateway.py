@@ -17,12 +17,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
-from urllib.parse import urlencode
 
 import httpx
 import websockets
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field, StrictBool, StrictStr, field_validator
 
 from app.deriv_gateway import (
@@ -44,7 +43,6 @@ DEMO_HOST = "demo.ctraderapi.com"
 LIVE_HOST = "live.ctraderapi.com"
 OPENAPI_PORT = 5036
 TOKEN_ENDPOINT = "https://openapi.ctrader.com/apps/token"
-AUTH_ENDPOINT = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
 
 # cTrader Open API payload IDs from Spotware's OpenApiModelMessages.proto.
 APP_AUTH_REQ = 2100
@@ -613,7 +611,9 @@ async def exchange_oauth_code(
 ) -> dict[str, Any]:
     _require_bridge_secret(x_tradebridge_bridge_token)
     user_id = body.user_id
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", user_id):
+    try:
+        user_id = str(uuid.UUID(user_id))
+    except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid TradeBridge user identifier.")
     client_id, client_secret = _ctrader_app_credentials()
     configured_redirect = os.getenv("CTRADER_OAUTH_REDIRECT_URI", "").strip()
