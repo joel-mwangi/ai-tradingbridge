@@ -898,6 +898,19 @@ async def quote(
     bid = round(spot["bid_raw"] / 100_000, digits)
     ask = round(spot["ask_raw"] / 100_000, digits)
     spread = round(ask - bid, digits)
+    provider_timestamp = spot.get("provider_timestamp")
+    provider_quote_at: str | None = None
+    quote_age_seconds: float | None = None
+    if isinstance(provider_timestamp, (int, float)) and provider_timestamp > 0:
+        # The provider serializes spot timestamps as Unix epoch values. Accept
+        # either seconds or milliseconds, since account gateways may differ.
+        timestamp_seconds = float(provider_timestamp) / 1000 if provider_timestamp > 10_000_000_000 else float(provider_timestamp)
+        try:
+            provider_quote_at = datetime.fromtimestamp(timestamp_seconds, timezone.utc).isoformat()
+            quote_age_seconds = round(max(0.0, time.time() - timestamp_seconds), 3)
+        except (ValueError, OverflowError, OSError):
+            provider_quote_at = None
+            quote_age_seconds = None
     return {
         "account_id": account_id,
         "account_type": account["account_type"],
@@ -910,7 +923,9 @@ async def quote(
         "digits": digits,
         "pip_position": pip_position,
         "received_at": datetime.now(timezone.utc).isoformat(),
-        "provider_timestamp": spot.get("provider_timestamp"),
+        "provider_timestamp": provider_timestamp,
+        "provider_quote_at": provider_quote_at,
+        "quote_age_seconds": quote_age_seconds,
     }
 
 
