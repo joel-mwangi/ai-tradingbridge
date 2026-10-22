@@ -21,7 +21,7 @@ def test_quote_returns_account_specific_bid_ask(monkeypatch):
         return ctrader_gateway.SYMBOL_BY_ID_RES, {"symbol": [{"symbolId": 7, "digits": 5, "pipPosition": 4}]}
 
     async def spot(_cred, _account, _live, _symbol):
-        return {"bid_raw": 123450, "ask_raw": 123460, "provider_timestamp": int(time.time() * 1000)}
+        return {"bid_raw": 123450, "ask_raw": 123460, "provider_timestamp": str(int(time.time() * 1000))}
 
     monkeypatch.setattr(ctrader_gateway, "_owned_credential", credential)
     monkeypatch.setattr(ctrader_gateway, "_load_account_links", links)
