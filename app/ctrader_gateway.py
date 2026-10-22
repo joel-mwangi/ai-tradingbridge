@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import time
@@ -134,6 +135,29 @@ def _execution_type_value(payload: dict[str, Any]) -> int | None:
             "ORDER_REJECTED": 7,
             "ORDER_PARTIAL_FILL": 11,
         }.get(normalized)
+    return None
+
+
+def _numeric_timestamp(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
+
+
+def _optional_protocol_id(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
     return None
 
 
@@ -684,11 +708,11 @@ async def _fetch_spot_quote(
                 continue
             if not (0 < bid_raw < float("inf") and 0 < ask_raw < float("inf") and ask_raw >= bid_raw):
                 continue
-            stamp = payload.get("timestamp")
+            stamp = _numeric_timestamp(payload.get("timestamp"))
             return {
                 "bid_raw": bid_raw,
                 "ask_raw": ask_raw,
-                "provider_timestamp": stamp if isinstance(stamp, (int, float)) else None,
+                "provider_timestamp": stamp,
             }
 
 
@@ -915,10 +939,10 @@ async def quote(
     bid = round(spot["bid_raw"] / 100_000, digits)
     ask = round(spot["ask_raw"] / 100_000, digits)
     spread = round(ask - bid, digits)
-    provider_timestamp = spot.get("provider_timestamp")
+    provider_timestamp = _numeric_timestamp(spot.get("provider_timestamp"))
     provider_quote_at: str | None = None
     quote_age_seconds: float | None = None
-    if isinstance(provider_timestamp, (int, float)) and provider_timestamp > 0:
+    if provider_timestamp is not None:
         # The provider serializes spot timestamps as Unix epoch values. Accept
         # either seconds or milliseconds, since account gateways may differ.
         timestamp_seconds = float(provider_timestamp) / 1000 if provider_timestamp > 10_000_000_000 else float(provider_timestamp)
@@ -1074,8 +1098,8 @@ async def place_demo_order(
 
     order = payload.get("order") if isinstance(payload.get("order"), dict) else {}
     position = payload.get("position") if isinstance(payload.get("position"), dict) else {}
-    order_id = order.get("orderId") if isinstance(order.get("orderId"), int) else None
-    position_id = position.get("positionId") if isinstance(position.get("positionId"), int) else None
+    order_id = _optional_protocol_id(order.get("orderId"))
+    position_id = _optional_protocol_id(position.get("positionId"))
     status_by_execution = {2: "accepted", 3: "filled", 11: "partial"}
     order_status = status_by_execution.get(execution_type)
     if order_status is None:
