@@ -742,6 +742,10 @@ async def _position_snapshot(
             take_profit = float(take_profit) if take_profit is not None else None
         except (TypeError, ValueError, OverflowError):
             stop_loss = take_profit = None
+        if stop_loss is not None and (not math.isfinite(stop_loss) or stop_loss <= 0):
+            stop_loss = None
+        if take_profit is not None and (not math.isfinite(take_profit) or take_profit <= 0):
+            take_profit = None
         if position_id is None or symbol_id is None or volume_raw is None:
             continue
         positions.append({
@@ -767,7 +771,7 @@ async def _position_snapshot(
         trade_data = item.get("tradeData") if isinstance(item.get("tradeData"), dict) else {}
         order_id = _as_protocol_int(item.get("orderId"))
         symbol_id = _as_protocol_int(trade_data.get("symbolId"))
-        volume_raw = _as_protocol_int(item.get("volume"))
+        volume_raw = _as_protocol_int(trade_data.get("volume"))
         if order_id is None:
             continue
         pending_orders.append({
