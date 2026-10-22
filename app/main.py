@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
 from app.deriv_gateway import router as deriv_router
+from app.ctrader_gateway import router as ctrader_router
 
 
 
@@ -22,6 +23,7 @@ app = FastAPI(
 )
 
 app.include_router(deriv_router)
+app.include_router(ctrader_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
