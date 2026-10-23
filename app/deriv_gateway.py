@@ -897,14 +897,21 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             if direction not in ("over", "under"):
                                 await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
                                 continue
+                            already_subscribed = symbol in subscribed_symbols
+                            tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                            initial_frequency = tracker.snapshot(symbol, time.time())
                             try:
-                                status = strategy_feed.start(symbol, window_size=window_size, barrier=barrier, direction=direction)
+                                status = strategy_feed.start(
+                                    symbol,
+                                    window_size=window_size,
+                                    barrier=barrier,
+                                    direction=direction,
+                                    initial_frequency=initial_frequency,
+                                )
                             except ValueError as exc:
                                 await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
                                 continue
-                            already_subscribed = symbol in subscribed_symbols
                             subscribed_symbols.add(symbol)
-                            frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
                             history_req_id = secrets.randbelow(1_000_000) + 8_000_000
                             while history_req_id in history_requests:
                                 history_req_id = secrets.randbelow(1_000_000) + 8_000_000
