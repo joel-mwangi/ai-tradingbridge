@@ -11,6 +11,7 @@ from app.strategy.digit_strategy import (
     choose_group_from_timestamped_observations,
     evaluate_stability,
     evaluate_thresholds,
+    evaluate_color_positions,
     rank_bar_colors,
     validate_initial_observation_window,
 )
@@ -41,10 +42,10 @@ class PercentageThresholdTests(unittest.TestCase):
         p.update({0: 9.1, 1: 9.2, 2: 9.6, 3: 9.7})
         self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
-    def test_one_remaining_digit_at_10_5_passes(self):
+    def test_one_remaining_digit_at_10_5_fails_strict_upper_bound(self):
         p = over3_percentages()
         p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.5})
-        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_one_remaining_digit_above_10_5_fails(self):
         p = over3_percentages()
@@ -56,9 +57,9 @@ class PercentageThresholdTests(unittest.TestCase):
         p.update({0: 9.7, 1: 9.8, 2: 8.0, 3: 8.5})
         self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
-    def test_under_6_checks_only_digits_6_to_9(self):
+    def test_under_6_checks_only_digits_6_to_9_and_has_no_10_5_cap(self):
         p = under6_percentages()
-        p.update({0: math.nan})  # Outside the Under 6 percentage-filter group.
+        p.update({0: math.nan, 9: 10.8})  # Digit 0 is outside the filter; fourth selected digit has no 10.5 cap.
         self.assertTrue(evaluate_thresholds(p, Group.UNDER, barrier=6)[0])
 
     def test_nan_in_filter_digits_fails(self):
@@ -130,6 +131,24 @@ class AutomaticSelectionTests(unittest.TestCase):
         p.update({1: 9.0, 2: 9.1, 3: 9.2, 4: 9.3})  # Yellow is exactly 9%.
         result = choose_group(p, [p, p], barrier=3)
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
+
+    def test_under6_red_and_yellow_must_both_be_strictly_below_9_percent(self):
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
+             5: 9.2, 6: 8.0, 7: 8.8, 8: 9.3, 9: 9.4}
+        self.assertTrue(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
+
+        # Yellow is exactly 9%; it must fail the strict threshold.
+        p[7] = 9.0
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
+
+    def test_under6_red_exactly_9_percent_fails(self):
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
+             5: 9.2, 6: 9.0, 7: 9.1, 8: 9.3, 9: 9.4}
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
 
     def test_red_tie_prevents_arbitrary_selection(self):
         p = over3_percentages()
@@ -205,12 +224,12 @@ class PatternSequenceTests(unittest.TestCase):
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [6, 8, 2]], [False, False, True])
 
-    def test_confirmation_before_two_activity_ticks_does_not_complete(self):
+    def test_one_activity_tick_followed_by_confirmation_completes(self):
         tracker = PatternTracker(Group.UNDER, trigger_digit=6)
         tracker.arm()
         self.assertFalse(tracker.on_tick(6))
-        self.assertFalse(tracker.on_tick(2))
-        self.assertEqual(tracker.completed_patterns, 0)
+        self.assertTrue(tracker.on_tick(2))
+        self.assertEqual(tracker.completed_patterns, 1)
 
     def test_boolean_tick_and_trigger_are_rejected(self):
         tracker = PatternTracker(Group.OVER, trigger_digit=0)
@@ -232,13 +251,27 @@ class BarrierGeneralizationTests(unittest.TestCase):
         self.assertEqual(digits_for(Group.UNDER, 6), frozenset({6, 7, 8, 9}))
         self.assertEqual(digits_for(Group.UNDER, 3), frozenset({3, 4, 5, 6, 7, 8, 9}))
 
-    def test_selected_barrier_filter_allows_at_most_one_exception(self):
-        from app.strategy.digit_strategy import evaluate_thresholds
+    def test_unsupported_barrier_percentage_filter_fails_closed(self):
         p = {d: 8.0 for d in range(10)}
         p[6] = 10.1
-        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=6)[0])
-        p[5] = 9.7
-        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=6)[0])
+        ok, reason = evaluate_thresholds(p, Group.OVER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("no complete approved strategy profile", reason)
+
+    def test_unsupported_barrier_never_selects_or_qualifies(self):
+        p = over3_percentages()
+        result = choose_group(p, [p, p], barrier=4)
+        self.assertEqual(result.decision, Decision.OBSERVE)
+        self.assertFalse(result.over.qualifies)
+        self.assertFalse(result.under.qualifies)
+        self.assertIn("observation only", result.reason + result.over.reason + result.under.reason)
+
+    def test_supported_profiles_are_over3_and_under6_only(self):
+        from app.strategy.digit_strategy import strategy_profile_supported
+        self.assertTrue(strategy_profile_supported(Group.OVER, 3))
+        self.assertTrue(strategy_profile_supported(Group.UNDER, 6))
+        self.assertFalse(strategy_profile_supported(Group.OVER, 4))
+        self.assertFalse(strategy_profile_supported(Group.UNDER, 3))
 
     def test_barrier_validation_excludes_impossible_direction(self):
         from app.strategy.digit_strategy import barrier_valid_for
@@ -252,12 +285,15 @@ class BarrierGeneralizationTests(unittest.TestCase):
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [0, 4, 9]], [False, False, True])
 
-    def test_colour_positions_move_with_selected_barrier(self):
-        from app.strategy.digit_strategy import evaluate_color_positions
+    def test_only_complete_profiles_pass_color_position_gate(self):
         self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=3)[0])
-        self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=6)[0])
         self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=6)[0])
-        self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=3)[0])
+        ok, reason = evaluate_color_positions(over3_percentages(), Group.OVER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("observation only", reason)
+        ok, reason = evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=3)
+        self.assertFalse(ok)
+        self.assertIn("observation only", reason)
 
 
 if __name__ == "__main__":

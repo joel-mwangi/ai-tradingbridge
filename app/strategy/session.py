@@ -16,6 +16,7 @@ from app.strategy.digit_strategy import (
     QualificationResult,
     TimestampedPercentageObservation,
     choose_group,
+    digits_for,
     rank_bar_colors,
 )
 from app.strategy.feed_health import FeedHealthResult, PercentageFeedHealth, PercentageSnapshot
@@ -52,6 +53,7 @@ class DigitStrategySession:
     feed_health: PercentageFeedHealth
     barrier: int = DEFAULT_BARRIER
     window_seconds: float = STABILITY_SECONDS
+    requested_group: Group | None = None
     state: SessionState = SessionState.IDLE
     started_at: datetime | None = None
     observations: list[TimestampedPercentageObservation] = field(default_factory=list)
@@ -62,6 +64,7 @@ class DigitStrategySession:
     stable_since: datetime | None = None
     bar_colors: BarColorRanks | None = None
     percentage_baseline: float | None = None
+    trigger_baselines: dict[int, float] = field(default_factory=dict)
     percentage_triggered: bool = False
     skip_current_tick: bool = False
     signal_generated: bool = False
@@ -83,11 +86,24 @@ class DigitStrategySession:
         self.trigger_digit = None
         self.pattern_tracker = None
         self.percentage_baseline = None
+        self.trigger_baselines.clear()
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
 
-    def start(self, started_at: datetime) -> SessionUpdate:
+    def start(
+        self,
+        started_at: datetime,
+        initial_percentages: dict[int, float] | None = None,
+        initial_observed_at: datetime | None = None,
+    ) -> SessionUpdate:
+        """Start a fresh run, anchoring stability to Run only when identities are known.
+
+        If a fresh pre-existing market snapshot is supplied, its Red/Green identities
+        are captured at Run and the 15-second clock starts immediately. Without a
+        fresh snapshot, identities are unknowable at click time, so the clock starts
+        at the first valid snapshot instead of falsely counting unobserved time.
+        """
         if not isinstance(started_at, datetime) or started_at.tzinfo is None or started_at.utcoffset() is None:
             raise ValueError("Session start must be timezone-aware.")
         self.started_at = started_at.astimezone(timezone.utc)
@@ -99,9 +115,32 @@ class DigitStrategySession:
         self.bar_colors = None
         self.qualification = None
         self.state = SessionState.OBSERVING
+
+        initial_is_fresh = (
+            isinstance(initial_observed_at, datetime)
+            and initial_observed_at.tzinfo is not None
+            and initial_observed_at.utcoffset() is not None
+            and initial_observed_at.astimezone(timezone.utc) <= self.started_at
+            and self.started_at - initial_observed_at.astimezone(timezone.utc) <= self.feed_health.max_age
+            and isinstance(initial_percentages, dict)
+        )
+        if initial_is_fresh:
+            try:
+                ranks = rank_bar_colors(initial_percentages)
+            except (TypeError, ValueError):
+                ranks = None
+            if ranks is not None and len(ranks.red) == 1:
+                self.bar_colors = ranks
+                self._rank_signature = ranks.stability_signature
+                self.stable_since = self.started_at
+                return SessionUpdate(
+                    self.state,
+                    "Fresh Red/Green identities captured at Run; the 15-second stability timer started.",
+                )
+
         return SessionUpdate(
             self.state,
-            "Fresh session started. Waiting for valid live frequency data before starting Red/Green stability.",
+            "Run started, but no fresh initial Red/Green snapshot was available. The 15-second timer will start at the first valid snapshot; unobserved time will not count.",
         )
 
     def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
@@ -243,6 +282,20 @@ class DigitStrategySession:
             )
 
         current_result = choose_group(percentages, stable_rows, self.barrier)
+        if self.requested_group is not None:
+            requested_evaluation = current_result.under if self.requested_group is Group.UNDER else current_result.over
+            if requested_evaluation.qualifies:
+                requested_decision = Decision.SELECT_UNDER if self.requested_group is Group.UNDER else Decision.SELECT_OVER
+                current_result = QualificationResult(
+                    requested_decision, current_result.under, current_result.over,
+                    trigger_digit=(self._requested_trigger_digits(percentages, self.requested_group) or (None,))[0],
+                    reason=f"User-selected {self.requested_group.value.title()} {self.barrier} qualifies.",
+                )
+            else:
+                current_result = QualificationResult(
+                    Decision.OBSERVE, current_result.under, current_result.over,
+                    reason=f"User-selected {self.requested_group.value.title()} {self.barrier} does not qualify; the other direction will not be substituted.",
+                )
         self.qualification = current_result
 
         if self.selected_group is not None:
@@ -257,11 +310,22 @@ class DigitStrategySession:
                 self._clear_candidate()
                 self.state = SessionState.WAITING_FOR_MORE_DATA
             else:
-                if not self.percentage_triggered and self.trigger_digit is not None and self.percentage_baseline is not None:
-                    current_value = float(percentages[self.trigger_digit])
-                    if current_value + 1e-9 >= self.percentage_baseline + PERCENTAGE_TRIGGER_RISE:
+                if not self.percentage_triggered and self.trigger_baselines:
+                    risen_digits = [
+                        digit for digit, baseline in self.trigger_baselines.items()
+                        if float(percentages[digit]) + 1e-9 >= baseline + PERCENTAGE_TRIGGER_RISE
+                    ]
+                    if risen_digits:
+                        # If both candidate digits rise in the same snapshot, use
+                        # the larger increase; stable digit order breaks exact ties.
+                        self.trigger_digit = max(
+                            risen_digits,
+                            key=lambda digit: (float(percentages[digit]) - self.trigger_baselines[digit], -digit),
+                        )
+                        self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
                         self.percentage_triggered = True
                         if self.pattern_tracker is not None:
+                            self.pattern_tracker.trigger_digit = self.trigger_digit
                             self.pattern_tracker.arm()
                         # The gateway calls on_tick for the same market event
                         # immediately after on_frequency. That event's tick is
@@ -269,7 +333,7 @@ class DigitStrategySession:
                         self.skip_current_tick = True
                         return SessionUpdate(
                             self.state,
-                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
                             self.qualification,
                             percentage_triggered=True,
                         )
@@ -277,7 +341,7 @@ class DigitStrategySession:
                     self.state,
                     "Setup qualified; monitoring the trigger percentage and subsequent tick sequence."
                     if not self.percentage_triggered
-                    else "Percentage trigger confirmed; waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                    else "Percentage trigger confirmed; waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
                     self.qualification,
                     percentage_triggered=self.percentage_triggered,
                 )
@@ -305,6 +369,24 @@ class DigitStrategySession:
             current_result,
         )
 
+    def _requested_trigger_digits(self, percentages: dict[int, float] | object, group: Group) -> tuple[int, ...]:
+        """Return the allowed percentage-trigger digits for the chosen strategy.
+
+        Over 3 permits either of the two least-frequency digits in 0–3. Other
+        direction/barrier combinations conservatively monitor only the unique
+        least-frequency digit until their strategy-specific trigger is defined.
+        """
+        selected = digits_for(group, self.barrier)
+        values = {digit: float(percentages[digit]) for digit in selected}  # type: ignore[index]
+        ordered = sorted(values, key=lambda digit: (values[digit], digit))
+        if group is Group.OVER and self.barrier == 3:
+            if len(ordered) < 2 or values[ordered[0]] == values[ordered[1]]:
+                return ()
+            return (ordered[0], ordered[1])
+        lowest = values[ordered[0]]
+        winners = [digit for digit in ordered if values[digit] == lowest]
+        return (winners[0],) if len(winners) == 1 else ()
+
     def _activate_candidate(
         self,
         group: Group,
@@ -313,11 +395,13 @@ class DigitStrategySession:
     ) -> None:
         self.selected_group = group
         self.trigger_digit = qualification.trigger_digit
-        if self.trigger_digit is None:
+        trigger_digits = self._requested_trigger_digits(percentages, group)
+        if self.trigger_digit is None or not trigger_digits:
             self._clear_candidate()
             self.state = SessionState.WAITING_FOR_MORE_DATA
             return
-        self.percentage_baseline = float(percentages[self.trigger_digit])  # type: ignore[index]
+        self.trigger_baselines = {digit: float(percentages[digit]) for digit in trigger_digits}  # type: ignore[index]
+        self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
@@ -381,7 +465,7 @@ class DigitStrategySession:
             )
         return SessionUpdate(
             self.state,
-            f"Post-trigger sequence progress: {self.pattern_tracker.progress} consecutive activity tick(s); two are required before confirmation.",
+            f"Post-trigger sequence progress: {self.pattern_tracker.progress} consecutive activity tick(s); at least one is required before confirmation.",
             self.qualification,
             percentage_triggered=True,
         )

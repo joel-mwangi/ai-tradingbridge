@@ -22,7 +22,7 @@ PERCENTAGE_TRIGGER_RISE = 0.1
 OVER_RED_YELLOW_MAX_PERCENT = 9.0
 FILTER_LIMIT = 9.7
 FILTER_EXCEPTION_MAX = 10.5
-MIN_ACTIVITY_TICKS = 2
+MIN_ACTIVITY_TICKS = 1
 DEFAULT_BARRIER = 5
 
 
@@ -91,6 +91,11 @@ def barrier_valid_for(group: Group, barrier: int) -> bool:
     if group is Group.OVER:
         return barrier <= 8
     return barrier >= 1
+
+
+def strategy_profile_supported(group: Group, barrier: int) -> bool:
+    """Only fully specified strategy profiles may qualify or emit signals."""
+    return (group is Group.OVER and barrier == 3) or (group is Group.UNDER and barrier == 6)
 
 
 def digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
@@ -171,18 +176,23 @@ def evaluate_thresholds(
         return False, "Barrier must be an integer digit from 0 to 9."
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
+    if not strategy_profile_supported(group, barrier):
+        return False, f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
     digits = digits_for(group, barrier)
     if not digits.issubset(percentages):
         return False, "Missing one or more barrier-filter percentages."
     if any(not _valid_percentage(percentages[d]) for d in digits):
         return False, "Barrier-filter percentages must be finite numbers between 0 and 100."
 
-    exceptions = [float(percentages[d]) for d in digits if float(percentages[d]) >= FILTER_LIMIT]
-    if not exceptions:
-        return True, f"All {len(digits)} digits in the {group.value.title()} {barrier} filter are below 9.7%."
-    if len(exceptions) == 1 and exceptions[0] <= FILTER_EXCEPTION_MAX:
-        return True, f"Only one selected digit is >=9.7%, and it is <=10.5%."
-    return False, "Percentage filter failed: at most one selected digit may be >=9.7%, and it must be <=10.5%."
+    below_limit = [d for d in digits if float(percentages[d]) < FILTER_LIMIT]
+    required_below = len(digits) - 1
+    if len(below_limit) < required_below:
+        return False, f"Percentage filter failed: at least {required_below} of {len(digits)} selected digits must be strictly below 9.7%."
+    exceptions = [d for d in digits if float(percentages[d]) >= FILTER_LIMIT]
+    if group is Group.OVER and exceptions:
+        if len(exceptions) != 1 or not float(percentages[exceptions[0]]) < FILTER_EXCEPTION_MAX:
+            return False, "Over percentage filter failed: the one remaining digit must be strictly below 10.5%."
+    return True, f"{group.value.title()} {barrier} percentage filter passes: at least {required_below} selected digits are below 9.7%."
 
 
 def evaluate_color_positions(
@@ -193,6 +203,8 @@ def evaluate_color_positions(
     """Place all four colour ranks on the correct side of the selected barrier."""
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
+    if not strategy_profile_supported(group, barrier):
+        return False, f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
     try:
         ranks = rank_bar_colors(percentages)
     except ValueError as exc:
@@ -226,7 +238,9 @@ def evaluate_color_positions(
         return False, f"Under {barrier} requires Red and Yellow among digits {boundary}–9."
     if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
         return False, f"Under {barrier} requires Green and Blue among digits 0–{max(barrier - 2, 0)}."
-    return True, f"Under {barrier} colour positions pass; no additional Red/Yellow <9% threshold applies."
+    if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
+        return False, f"Under {barrier} requires both Red and Yellow percentages to be strictly below 9%."
+    return True, f"Under {barrier} colour positions pass; Red and Yellow are <9%."
 
 
 def evaluate_stability(
@@ -270,6 +284,9 @@ def evaluate_group(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> GroupEvaluation:
+    if not strategy_profile_supported(group, barrier):
+        reason = f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
+        return GroupEvaluation(group, False, False, False, False, False, reason)
     threshold_ok, threshold_reason = evaluate_thresholds(percentages, group, barrier)
     stability_ok, stability_reason = evaluate_stability(observations)
     color_ok, color_reason = evaluate_color_positions(percentages, group, barrier)
@@ -308,6 +325,16 @@ def choose_group(
         return QualificationResult(
             Decision.INVALID_DATA, invalid_under, invalid_over,
             reason="Selected barrier must be an integer digit from 0 to 9.",
+        )
+    if not (
+        strategy_profile_supported(Group.UNDER, barrier)
+        or strategy_profile_supported(Group.OVER, barrier)
+    ):
+        reason = f"Barrier {barrier} has no complete approved strategy profile; observation only."
+        unsupported_under = GroupEvaluation(Group.UNDER, False, False, False, False, False, reason)
+        unsupported_over = GroupEvaluation(Group.OVER, False, False, False, False, False, reason)
+        return QualificationResult(
+            Decision.OBSERVE, unsupported_under, unsupported_over, reason=reason
         )
 
     under = evaluate_group(percentages, observations, Group.UNDER, barrier)
@@ -413,7 +440,7 @@ def choose_group_from_timestamped_observations(
 
 @dataclass
 class PatternTracker:
-    """After a percentage trigger, require 2+ activity digits then confirmation.
+    """After a percentage trigger, require one or more consecutive activity digits then confirmation.
 
     The trigger is a percentage increase, not the trigger digit appearing as a
     tick. The caller arms this tracker only after the trigger percentage rises.

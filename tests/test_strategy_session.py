@@ -61,6 +61,44 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(self.session.stable_since, self.start + timedelta(seconds=1))
         self.assertIn("timer started", update.reason)
 
+    def test_fresh_initial_ranking_anchors_stability_to_run_click(self):
+        self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=1),
+        )
+        self.assertEqual(self.session.stable_since, self.start)
+        self.add(8, over3_percentages(), "run-anchor-8")
+        self.assertEqual(self.session.stable_since, self.start)
+        update = self.add(16, over3_percentages(), "run-anchor-16")
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.stable_since, self.start)
+
+    def test_initially_captured_identity_change_restarts_full_window(self):
+        self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=1),
+        )
+        changed = dict(over3_percentages())
+        changed[5] = 11.0
+        self.add(10, changed, "run-anchor-changed")
+        self.assertEqual(self.session.stable_since, self.start + timedelta(seconds=10))
+        self.assertIsNone(self.session.selected_group)
+        self.add(20, changed, "run-anchor-20")
+        self.assertEqual(self.session.state, SessionState.WAITING_FOR_MORE_DATA)
+        update = self.add(26, changed, "run-anchor-26")
+        self.assertEqual(update.state, SessionState.SELECTED)
+
+    def test_stale_initial_ranking_does_not_count_from_run_click(self):
+        update = self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=30),
+        )
+        self.assertIsNone(self.session.stable_since)
+        self.assertIn("first valid snapshot", update.reason)
+
     def test_selects_over3_only_after_full_fifteen_seconds(self):
         self.add(1, over3_percentages(), "e1")
         self.add(8, over3_percentages(), "e2")
@@ -81,6 +119,17 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.SELECTED)
         self.assertEqual(self.session.selected_group, Group.UNDER)
         self.assertEqual(self.session.trigger_digit, 6)
+
+    def test_unsupported_barrier_stays_observation_only(self):
+        self.session = DigitStrategySession(self.monitor, barrier=4)
+        self.session.start(self.start)
+        self.add(1, over3_percentages(), "unsupported-1")
+        self.add(8, over3_percentages(), "unsupported-2")
+        update = self.add(16, over3_percentages(), "unsupported-3")
+        self.assertNotEqual(update.state, SessionState.SELECTED)
+        self.assertIsNone(self.session.selected_group)
+        self.assertFalse(self.session.signal_generated)
+        self.assertIn("no complete approved strategy profile", update.reason)
 
     def test_red_tie_blocks_and_does_not_start_timer(self):
         tied = over3_percentages()
@@ -131,6 +180,15 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertTrue(self.session.signal_generated)
         self.assertEqual(self.session.state, SessionState.SELECTED)
 
+    def test_over3_second_lowest_digit_percentage_can_trigger(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[1] = 8.3
+        update = self.add(17, increased, "second-lowest-trigger")
+        self.assertTrue(update.percentage_triggered)
+        self.assertEqual(self.session.trigger_digit, 1)
+        self.assertEqual(self.session.pattern_tracker.trigger_digit, 1)
+        self.assertTrue(self.session.skip_current_tick)
     def test_completed_pattern_emits_exactly_one_signal(self):
         self.start_stable_over3()
         increased = over3_percentages()
@@ -174,3 +232,12 @@ class DigitStrategySessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    def test_user_selected_direction_is_not_replaced_by_other_qualifying_direction(self):
+        self.session = DigitStrategySession(self.monitor, barrier=3, requested_group=Group.UNDER)
+        self.session.start(self.start)
+        self.add(1, over3_percentages(), "direction1")
+        self.add(8, over3_percentages(), "direction2")
+        update = self.add(16, over3_percentages(), "direction3")
+        self.assertNotEqual(update.state, SessionState.SELECTED)
+        self.assertIsNone(self.session.selected_group)
+        self.assertIn("other direction will not be substituted", update.reason)
