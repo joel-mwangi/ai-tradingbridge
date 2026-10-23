@@ -61,6 +61,44 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(self.session.stable_since, self.start + timedelta(seconds=1))
         self.assertIn("timer started", update.reason)
 
+    def test_fresh_initial_ranking_anchors_stability_to_run_click(self):
+        self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=1),
+        )
+        self.assertEqual(self.session.stable_since, self.start)
+        self.add(8, over3_percentages(), "run-anchor-8")
+        self.assertEqual(self.session.stable_since, self.start)
+        update = self.add(16, over3_percentages(), "run-anchor-16")
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.stable_since, self.start)
+
+    def test_initially_captured_identity_change_restarts_full_window(self):
+        self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=1),
+        )
+        changed = dict(over3_percentages())
+        changed[5] = 11.0
+        self.add(10, changed, "run-anchor-changed")
+        self.assertEqual(self.session.stable_since, self.start + timedelta(seconds=10))
+        self.assertIsNone(self.session.selected_group)
+        self.add(20, changed, "run-anchor-20")
+        self.assertEqual(self.session.state, SessionState.WAITING_FOR_MORE_DATA)
+        update = self.add(26, changed, "run-anchor-26")
+        self.assertEqual(update.state, SessionState.SELECTED)
+
+    def test_stale_initial_ranking_does_not_count_from_run_click(self):
+        update = self.session.start(
+            self.start,
+            initial_percentages=over3_percentages(),
+            initial_observed_at=self.start - timedelta(seconds=30),
+        )
+        self.assertIsNone(self.session.stable_since)
+        self.assertIn("first valid snapshot", update.reason)
+
     def test_selects_over3_only_after_full_fifteen_seconds(self):
         self.add(1, over3_percentages(), "e1")
         self.add(8, over3_percentages(), "e2")
