@@ -326,6 +326,16 @@ def choose_group(
             Decision.INVALID_DATA, invalid_under, invalid_over,
             reason="Selected barrier must be an integer digit from 0 to 9.",
         )
+    if not (
+        strategy_profile_supported(Group.UNDER, barrier)
+        or strategy_profile_supported(Group.OVER, barrier)
+    ):
+        reason = f"Barrier {barrier} has no complete approved strategy profile; observation only."
+        unsupported_under = GroupEvaluation(Group.UNDER, False, False, False, False, False, reason)
+        unsupported_over = GroupEvaluation(Group.OVER, False, False, False, False, False, reason)
+        return QualificationResult(
+            Decision.OBSERVE, unsupported_under, unsupported_over, reason=reason
+        )
 
     under = evaluate_group(percentages, observations, Group.UNDER, barrier)
     over = evaluate_group(percentages, observations, Group.OVER, barrier)
