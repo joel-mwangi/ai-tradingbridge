@@ -324,9 +324,32 @@ class DigitStrategySession:
         self.pattern_tracker = PatternTracker(group, self.trigger_digit, barrier=self.barrier)
         self.state = SessionState.SELECTED
 
-    def on_tick(self, digit: int) -> SessionUpdate:
+    def on_tick(self, digit: int, now: datetime | None = None) -> SessionUpdate:
+        """Consume a tick, optionally checking frequency freshness, and suppress duplicates."""
         if self.state is not SessionState.SELECTED or self.pattern_tracker is None:
             return SessionUpdate(self.state, "Pattern tracking is unavailable until one profile is selected.")
+        if now is not None:
+            if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+                self.state = SessionState.BLOCKED
+                self._clear_candidate()
+                return SessionUpdate(self.state, "Tick validation timestamp must be timezone-aware.")
+            if not self.observations:
+                self.state = SessionState.BLOCKED
+                self._clear_candidate()
+                return SessionUpdate(self.state, "No accepted frequency observation is available for tick validation.")
+            latest_observed = self.observations[-1].observed_at.astimezone(timezone.utc)
+            now_utc = now.astimezone(timezone.utc)
+            if now_utc < latest_observed or now_utc - latest_observed > self.feed_health.max_age:
+                self.state = SessionState.BLOCKED
+                self._clear_candidate()
+                return SessionUpdate(self.state, "Frequency feed is stale or timestamp-inconsistent; strategy blocked.")
+        if self.signal_generated:
+            return SessionUpdate(
+                self.state,
+                "Entry signal already generated for this setup; duplicate signals are suppressed.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
         if self.skip_current_tick:
             self.skip_current_tick = False
             return SessionUpdate(
