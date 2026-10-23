@@ -1,8 +1,8 @@
-# TradeBridge Barrier-Aware Digit Strategy
+# Deprecated strategy note
 
-The strategy uses the barrier digit selected in TradeBridge's Digit Analysis
-controls, evaluates both eligible directions, and automatically selects Over
-or Under only when exactly one direction qualifies.
+This older algorithm description conflicts with the user's latest explicit strategy rules and must not be treated as authoritative. The sole source of truth is [STRATEGY_SOURCE_OF_TRUTH.md](STRATEGY_SOURCE_OF_TRUTH.md). In particular, the user selects Over or Under; qualification alone is not an entry signal; the entry signal requires the percentage trigger and digit sequence; and a completed signal allows at most three sequential buys with a stop after two consecutive losses. A completed sequence stops until the user clicks Run again.
+
+Do not extend or reinterpret unspecified barrier rules based on this historical document.
 
 The backend consumes TradeBridge-calculated frequencies from
 `/deriv/live/market`. These are observed-tick frequencies, not official Deriv
