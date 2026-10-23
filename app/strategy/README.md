@@ -58,7 +58,7 @@ closed. Never synthesize percentage updates or silently switch source types.
 ## Tests
 
 ```powershell
-python -m pytest tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_live_strategy_feed.py -v
+python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_live_strategy_feed.py -v
 ```
 
 ## Not implemented in this step
