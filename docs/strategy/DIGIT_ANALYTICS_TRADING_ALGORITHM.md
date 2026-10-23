@@ -40,17 +40,19 @@ Ties must be preserved; never break them by digit order. If multiple digits tie
 for the lowest frequency, every tied digit is Red and entry is blocked until
 exactly one Red digit remains.
 
-The source specification defines the colour zones by direction:
+The documented examples define the colour-zone boundary relative to the
+selected barrier:
 
 | Direction candidate | Red and Yellow | Green and Blue |
 |---|---|---|
-| Over | Digits 0–4 | Digits 5–9 |
-| Under | Digits 5–9 | Digits 0–4 |
+| Over B | Digits 0 through B+1 | Digits B+2 through 9 |
+| Under B | Digits B−1 through 9 | Digits 0 through B−2 |
 
-These zones remain direction-based for every selected barrier. The selected
-barrier dynamically changes the percentage-filter digits and tick-sequence
-digits above, rather than inventing a different colour-zone rule for each
-barrier.
+This reproduces Over 3 (Red/Yellow 0–4; Green/Blue 5–9) and Under 6
+(Red/Yellow 5–9; Green/Blue 0–4). The zones move when the selected barrier
+changes. A direction whose colour zone is too small to contain the required
+distinct ranks fails qualification; the other eligible direction is still
+evaluated automatically.
 
 For all Over candidates, Red and Yellow must both be strictly below 9%.
 Under candidates do not have this extra Red/Yellow percentage threshold.
@@ -94,16 +96,15 @@ frequency snapshot which detected the rise; only later tick events can count.
 
 After the percentage trigger:
 - **Over B:** require at least two consecutive activity ticks with digits 0–B,
-  followed by a confirmation tick that is above B and in the high confirmation
-  zone 6–9.
+  followed by a confirmation digit in B+3…9 (the Over 3 example is 6–9).
 - **Under B:** require at least two consecutive activity ticks with digits B–9,
-  followed by a confirmation tick below B and in the low confirmation zone 0–3.
+  followed by a confirmation digit in 0…B−3 (the Under 6 example is 0–3).
 
 Digits outside the activity or confirmation sets break the consecutive
 sequence. For the original examples this yields Over 3 activity 0–3 followed
 by confirmation 6–9, and Under 6 activity 6–9 followed by confirmation 0–3.
-The confirmation bands narrow toward the barrier so the confirmation tick must
-remain on the contract's opposite side. Barriers whose conditions cannot
+The colour zones and confirmation bands narrow or widen with the selected
+barrier; confirmation must remain on the contract's opposite side. Barriers whose conditions cannot
 produce a valid sequence remain observation-only and cannot submit a signal.
 
 If Red/Green identities, colour positions, or percentage filters become
