@@ -370,22 +370,17 @@ class DigitStrategySession:
         )
 
     def _requested_trigger_digits(self, percentages: dict[int, float] | object, group: Group) -> tuple[int, ...]:
-        """Return the allowed percentage-trigger digits for the chosen strategy.
+        """Return trigger candidates derived from the selected direction and barrier.
 
-        Over 3 permits either of the two least-frequency digits in 0–3. Other
-        direction/barrier combinations conservatively monitor only the unique
-        least-frequency digit until their strategy-specific trigger is defined.
+        Over monitors digits at either of the two lowest distinct percentage
+        levels within 0..B. Under monitors the lowest distinct level within B..9.
+        Preserve ties instead of silently breaking them by digit order.
         """
         selected = digits_for(group, self.barrier)
         values = {digit: float(percentages[digit]) for digit in selected}  # type: ignore[index]
-        ordered = sorted(values, key=lambda digit: (values[digit], digit))
-        if group is Group.OVER and self.barrier == 3:
-            if len(ordered) < 2 or values[ordered[0]] == values[ordered[1]]:
-                return ()
-            return (ordered[0], ordered[1])
-        lowest = values[ordered[0]]
-        winners = [digit for digit in ordered if values[digit] == lowest]
-        return (winners[0],) if len(winners) == 1 else ()
+        levels = sorted(set(values.values()))
+        candidate_levels = set(levels[:2] if group is Group.OVER else levels[:1])
+        return tuple(sorted(digit for digit, value in values.items() if value in candidate_levels))
 
     def _activate_candidate(
         self,
