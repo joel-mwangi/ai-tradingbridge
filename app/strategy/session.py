@@ -16,6 +16,7 @@ from app.strategy.digit_strategy import (
     QualificationResult,
     TimestampedPercentageObservation,
     choose_group,
+    digits_for,
     rank_bar_colors,
 )
 from app.strategy.feed_health import FeedHealthResult, PercentageFeedHealth, PercentageSnapshot
@@ -320,19 +321,12 @@ class DigitStrategySession:
             current_result,
         )
 
-    @staticmethod
-    def _requested_trigger_digit(percentages: dict[int, float] | object, group: Group) -> int | None:
-        # The selected direction's unique least-frequency digit is used as the trigger.
-        from app.strategy.digit_strategy import digits_for
-        digits = digits_for(group, DEFAULT_BARRIER) if False else None
-        del digits
-        values = {int(d): float(percentages[d]) for d in percentages}  # type: ignore[index]
-        barrier_digits = [d for d in values if 0 <= d <= 9]
-        selected = [d for d in barrier_digits if d <= DEFAULT_BARRIER] if group is Group.OVER else [d for d in barrier_digits if d >= DEFAULT_BARRIER]
-        if not selected:
-            return None
-        low = min(values[d] for d in selected)
-        winners = [d for d in selected if values[d] == low]
+    def _requested_trigger_digit(self, percentages: dict[int, float] | object, group: Group) -> int | None:
+        # The selected direction's unique least-frequency digit is the trigger.
+        selected = digits_for(group, self.barrier)
+        values = {digit: float(percentages[digit]) for digit in selected}  # type: ignore[index]
+        lowest = min(values.values())
+        winners = [digit for digit, value in values.items() if value == lowest]
         return winners[0] if len(winners) == 1 else None
 
     def _activate_candidate(
