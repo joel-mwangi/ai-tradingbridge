@@ -9,6 +9,9 @@ from app.strategy.digit_strategy import (
     TimestampedPercentageObservation,
     choose_group,
     choose_group_from_timestamped_observations,
+    activity_digits_for,
+    confirmation_digits_for,
+    strategy_profile_supported,
     evaluate_stability,
     evaluate_thresholds,
     evaluate_color_positions,
@@ -285,15 +288,25 @@ class BarrierGeneralizationTests(unittest.TestCase):
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [0, 4, 9]], [False, False, True])
 
-    def test_only_complete_profiles_pass_color_position_gate(self):
+    def test_generalized_over4_color_positions_pass(self):
         self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=3)[0])
+        self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=4)[0])
+
+    def test_generalized_under5_color_positions_pass(self):
         self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=6)[0])
-        ok, reason = evaluate_color_positions(over3_percentages(), Group.OVER, barrier=6)
-        self.assertFalse(ok)
-        self.assertIn("observation only", reason)
-        ok, reason = evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=3)
-        self.assertFalse(ok)
-        self.assertIn("observation only", reason)
+        self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=5)[0])
+
+    def test_barrier_relative_activity_and_confirmation_sets(self):
+        self.assertEqual(activity_digits_for(Group.OVER, 4), frozenset({0, 1, 2, 3, 4}))
+        self.assertEqual(confirmation_digits_for(Group.OVER, 4), frozenset({7, 8, 9}))
+        self.assertEqual(activity_digits_for(Group.UNDER, 5), frozenset({5, 6, 7, 8, 9}))
+        self.assertEqual(confirmation_digits_for(Group.UNDER, 5), frozenset({0, 1, 2}))
+
+    def test_profiles_supported_only_when_confirmation_band_is_nonempty(self):
+        self.assertTrue(strategy_profile_supported(Group.OVER, 4))
+        self.assertTrue(strategy_profile_supported(Group.UNDER, 5))
+        self.assertFalse(strategy_profile_supported(Group.OVER, 7))
+        self.assertFalse(strategy_profile_supported(Group.UNDER, 2))
 
 
 if __name__ == "__main__":
