@@ -133,17 +133,19 @@ class AutomaticSelectionTests(unittest.TestCase):
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
     def test_under6_red_and_yellow_must_both_be_strictly_below_9_percent(self):
-        p = under6_percentages()
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
+             5: 9.2, 6: 8.0, 7: 8.8, 8: 9.3, 9: 9.4}
         self.assertTrue(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
 
-        # The second-lowest (Yellow) bar is exactly 9%; strict threshold must fail.
-        p[5] = 9.0
-        self.assertFalse(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
+        # Yellow is exactly 9%; it must fail the strict threshold.
+        p[7] = 9.0
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
 
     def test_under6_red_exactly_9_percent_fails(self):
-        p = under6_percentages()
-        p[9] = 9.0
-        from app.strategy.digit_strategy import evaluate_color_positions
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
+             5: 9.2, 6: 9.0, 7: 9.1, 8: 9.3, 9: 9.4}
         ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
         self.assertFalse(ok)
         self.assertIn("strictly below 9%", reason)
