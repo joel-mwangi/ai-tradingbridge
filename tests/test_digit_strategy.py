@@ -205,12 +205,12 @@ class PatternSequenceTests(unittest.TestCase):
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [6, 8, 2]], [False, False, True])
 
-    def test_confirmation_before_two_activity_ticks_does_not_complete(self):
+    def test_one_activity_tick_followed_by_confirmation_completes(self):
         tracker = PatternTracker(Group.UNDER, trigger_digit=6)
         tracker.arm()
         self.assertFalse(tracker.on_tick(6))
-        self.assertFalse(tracker.on_tick(2))
-        self.assertEqual(tracker.completed_patterns, 0)
+        self.assertTrue(tracker.on_tick(2))
+        self.assertEqual(tracker.completed_patterns, 1)
 
     def test_boolean_tick_and_trigger_are_rejected(self):
         tracker = PatternTracker(Group.OVER, trigger_digit=0)
