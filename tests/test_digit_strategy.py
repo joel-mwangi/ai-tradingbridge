@@ -217,7 +217,7 @@ class TimestampedStabilityTests(unittest.TestCase):
 
 class PatternSequenceTests(unittest.TestCase):
     def test_over3_percentage_trigger_then_two_activity_ticks_and_confirmation(self):
-        tracker = PatternTracker(Group.OVER, trigger_digit=2)
+        tracker = PatternTracker(Group.OVER, trigger_digit=2, barrier=3)
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 7]], [False, False, False])
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 6]], [False, False, False, True])
