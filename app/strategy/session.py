@@ -51,6 +51,7 @@ class DigitStrategySession:
 
     feed_health: PercentageFeedHealth
     barrier: int = DEFAULT_BARRIER
+    requested_group: Group | None = None
     window_seconds: float = STABILITY_SECONDS
     state: SessionState = SessionState.IDLE
     started_at: datetime | None = None
@@ -243,6 +244,20 @@ class DigitStrategySession:
             )
 
         current_result = choose_group(percentages, stable_rows, self.barrier)
+        if self.requested_group is not None:
+            requested_evaluation = current_result.under if self.requested_group is Group.UNDER else current_result.over
+            if requested_evaluation.qualifies:
+                requested_decision = Decision.SELECT_UNDER if self.requested_group is Group.UNDER else Decision.SELECT_OVER
+                current_result = QualificationResult(
+                    requested_decision, current_result.under, current_result.over,
+                    trigger_digit=self._requested_trigger_digit(percentages, self.requested_group),
+                    reason=f"User-selected {self.requested_group.value.title()} {self.barrier} qualifies.",
+                )
+            else:
+                current_result = QualificationResult(
+                    Decision.OBSERVE, current_result.under, current_result.over,
+                    reason=f"User-selected {self.requested_group.value.title()} {self.barrier} does not qualify; the other direction will not be substituted.",
+                )
         self.qualification = current_result
 
         if self.selected_group is not None:
@@ -304,6 +319,21 @@ class DigitStrategySession:
             f"{self.selected_group.value.title()} {self.barrier} automatically selected after {elapsed:.1f} seconds of stable Red/Green identities. Baseline recorded; waiting for a 0.1 percentage-point rise.",
             current_result,
         )
+
+    @staticmethod
+    def _requested_trigger_digit(percentages: dict[int, float] | object, group: Group) -> int | None:
+        # The selected direction's unique least-frequency digit is used as the trigger.
+        from app.strategy.digit_strategy import digits_for
+        digits = digits_for(group, DEFAULT_BARRIER) if False else None
+        del digits
+        values = {int(d): float(percentages[d]) for d in percentages}  # type: ignore[index]
+        barrier_digits = [d for d in values if 0 <= d <= 9]
+        selected = [d for d in barrier_digits if d <= DEFAULT_BARRIER] if group is Group.OVER else [d for d in barrier_digits if d >= DEFAULT_BARRIER]
+        if not selected:
+            return None
+        low = min(values[d] for d in selected)
+        winners = [d for d in selected if values[d] == low]
+        return winners[0] if len(winners) == 1 else None
 
     def _activate_candidate(
         self,
