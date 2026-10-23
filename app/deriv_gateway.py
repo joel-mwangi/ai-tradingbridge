@@ -893,8 +893,12 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             if type(barrier) is not int or barrier not in range(10):
                                 await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
                                 continue
+                            direction = control.get("direction")
+                            if direction not in ("over", "under"):
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
+                                continue
                             try:
-                                status = strategy_feed.start(symbol, window_size=window_size, barrier=barrier)
+                                status = strategy_feed.start(symbol, window_size=window_size, barrier=barrier, direction=direction)
                             except ValueError as exc:
                                 await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
                                 continue
