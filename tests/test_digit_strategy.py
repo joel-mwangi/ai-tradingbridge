@@ -198,7 +198,7 @@ class PatternSequenceTests(unittest.TestCase):
         tracker = PatternTracker(Group.OVER, trigger_digit=2)
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 7]], [False, False, False])
         tracker.arm()
-        self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 7]], [False, False, False, True])
+        self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 6]], [False, False, False, True])
 
     def test_under6_sequence_uses_upper_activity_then_lower_confirmation(self):
         tracker = PatternTracker(Group.UNDER, trigger_digit=7)
@@ -250,7 +250,14 @@ class BarrierGeneralizationTests(unittest.TestCase):
     def test_pattern_confirmation_adapts_to_selected_barrier(self):
         tracker = PatternTracker(Group.OVER, trigger_digit=6, barrier=6)
         tracker.arm()
-        self.assertEqual([tracker.on_tick(d) for d in [0, 4, 7]], [False, False, True])
+        self.assertEqual([tracker.on_tick(d) for d in [0, 4, 9]], [False, False, True])
+
+    def test_colour_positions_move_with_selected_barrier(self):
+        from app.strategy.digit_strategy import evaluate_color_positions
+        self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=3)[0])
+        self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=6)[0])
+        self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=6)[0])
+        self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=3)[0])
 
 
 if __name__ == "__main__":
