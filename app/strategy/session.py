@@ -64,6 +64,7 @@ class DigitStrategySession:
     stable_since: datetime | None = None
     bar_colors: BarColorRanks | None = None
     percentage_baseline: float | None = None
+    trigger_baselines: dict[int, float] = field(default_factory=dict)
     percentage_triggered: bool = False
     skip_current_tick: bool = False
     signal_generated: bool = False
