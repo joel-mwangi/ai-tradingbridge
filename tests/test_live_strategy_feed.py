@@ -30,6 +30,70 @@ def frequency_payload(symbol, timestamp, event_epoch, window_size=1000):
     }
 
 
+def test_full_over3_flow_qualifies_triggers_and_emits_one_signal_without_trading():
+    start = datetime(2026, 10, 23, 2, 0, tzinfo=timezone.utc)
+    clock = [start]
+    runtime = LiveStrategyFeed()
+    base_counts = [78, 80, 81, 82, 83, 115, 116, 117, 123, 125]
+
+    def event(seconds, counts):
+        observed = start + timedelta(seconds=seconds)
+        clock[0] = observed
+        return {
+            "source": "tradebridge_backend_tick_frequency",
+            "symbol": "1HZ100V",
+            "calculated_at": observed.timestamp(),
+            "latest_tick_epoch": observed.timestamp(),
+            "latest_tick_event_id": f"{observed.timestamp():.6f}:123.45{seconds % 10}",
+            "windows": {
+                "1000": {
+                    "window_size": 1000,
+                    "sample_size": 1000,
+                    "counts": {str(d): counts[d] for d in range(10)},
+                    "percentages": {str(d): counts[d] / 10 for d in range(10)},
+                }
+            },
+            "warning": "TradeBridge-calculated observed-tick frequencies, not official Deriv Digit Analytics.",
+        }
+
+    with patch.object(LiveStrategyFeed, "_now", side_effect=lambda: clock[0]):
+        started = runtime.start("1HZ100V", window_size=1000, barrier=3)
+        assert started["execution_enabled"] is False
+        # Frequent, fresh source events provide more than 15 seconds of stable ranks.
+        for seconds in (1, 3, 5, 7, 9, 11, 13, 15, 17):
+            status = runtime.on_frequency(event(seconds, base_counts))
+        assert status is not None
+        assert status["state"] == "selected"
+        assert status["selected_group"] == "over"
+        assert status["trigger_digit"] == 0
+        assert status["qualification"]["over_threshold_passes"] is True
+        assert status["qualification"]["over_color_positions_pass"] is True
+        assert status["signal_generated"] is False
+
+        # Digit 0 rises from 7.8% to 7.9%; keep the total at 1,000 and ranks stable.
+        triggered_counts = [79, 80, 81, 82, 82, 115, 116, 117, 123, 125]
+        status = runtime.on_frequency(event(18, triggered_counts))
+        assert status is not None
+        assert status["percentage_triggered"] is True
+        # The tick associated with the triggering frequency snapshot is ignored.
+        assert runtime.on_tick("1HZ100V", {"quote": "123.450", "pip_size": 3})["signal_generated"] is False
+        clock[0] = start + timedelta(seconds=19)
+        runtime.on_tick("1HZ100V", {"quote": "123.450", "pip_size": 3})
+        clock[0] = start + timedelta(seconds=20)
+        runtime.on_tick("1HZ100V", {"quote": "123.452", "pip_size": 3})
+        clock[0] = start + timedelta(seconds=21)
+        completed = runtime.on_tick("1HZ100V", {"quote": "123.457", "pip_size": 3})
+        assert completed is not None
+        assert completed["signal_generated"] is True
+        assert completed["execution_enabled"] is False
+        assert "no trade was submitted" in completed["reason"]
+        # Further ticks cannot generate a second signal for this setup.
+        clock[0] = start + timedelta(seconds=22)
+        duplicate = runtime.on_tick("1HZ100V", {"quote": "123.457", "pip_size": 3})
+        assert duplicate is not None
+        assert duplicate["signal_generated"] is True
+        assert "duplicate signals are suppressed" in duplicate["reason"]
+
 def test_start_creates_fresh_observation_only_session():
     now = datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
     with patch.object(LiveStrategyFeed, "_now", return_value=now):
