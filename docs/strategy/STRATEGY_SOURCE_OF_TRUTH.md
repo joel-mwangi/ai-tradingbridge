@@ -33,9 +33,15 @@ This document is authoritative for the digit strategy. Implementations must not 
 - Watch the least-appearing digit among 6–9; wait for its percentage to rise by 0.1 percentage point.
 - Then require one or more upper digits (6–9), followed by a lower digit (0–3), before the Under 6 signal is confirmed.
 
-## Barrier generalization
+## Supported strategy profiles and barrier handling
 
-The selected barrier determines the corresponding digit sets and positions, but the explicit Over 3 and Under 6 examples above must not be altered. Do not silently extrapolate unspecified thresholds to other barriers. If a barrier's complete rules are not defined, fail closed (observation only) rather than inventing rules.
+Only these complete profiles are approved to qualify or generate a signal:
+- **Over 3**
+- **Under 6**
+
+Other barriers must remain **observation-only** until their complete percentage thresholds, colour positions, trigger digit/rise rule, activity sequence, and confirmation digits are explicitly specified and reviewed. Do not derive a profile by shifting the Over 3 or Under 6 rules. This includes partially described examples such as Over 4: partial thresholds or colour zones do not constitute a complete profile.
+
+For unsupported direction/barrier combinations, return a clear unsupported-profile reason and keep every qualification flag false. Do not select a direction, arm a pattern tracker, or generate a signal. Generic digit-set helpers may describe the mathematical barrier range, but they do not authorize a strategy profile.
 
 ## Verification requirements
 
