@@ -285,7 +285,7 @@ class DigitStrategySession:
                         self.skip_current_tick = True
                         return SessionUpdate(
                             self.state,
-                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
                             self.qualification,
                             percentage_triggered=True,
                         )
@@ -293,7 +293,7 @@ class DigitStrategySession:
                     self.state,
                     "Setup qualified; monitoring the trigger percentage and subsequent tick sequence."
                     if not self.percentage_triggered
-                    else "Percentage trigger confirmed; waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                    else "Percentage trigger confirmed; waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
                     self.qualification,
                     percentage_triggered=self.percentage_triggered,
                 )
@@ -405,7 +405,7 @@ class DigitStrategySession:
             )
         return SessionUpdate(
             self.state,
-            f"Post-trigger sequence progress: {self.pattern_tracker.progress} consecutive activity tick(s); two are required before confirmation.",
+            f"Post-trigger sequence progress: {self.pattern_tracker.progress} consecutive activity tick(s); at least one is required before confirmation.",
             self.qualification,
             percentage_triggered=True,
         )
