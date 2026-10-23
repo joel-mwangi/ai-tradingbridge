@@ -41,7 +41,14 @@ class LiveStrategyFeed:
             raise ValueError("TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS must be a positive finite number.")
         return value
 
-    def start(self, symbol: str, window_size: int = 1000, barrier: int = DEFAULT_BARRIER, direction: str | None = None) -> dict[str, Any]:
+    def start(
+        self,
+        symbol: str,
+        window_size: int = 1000,
+        barrier: int = DEFAULT_BARRIER,
+        direction: str | None = None,
+        initial_frequency: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(symbol, str) or not symbol.strip():
             raise ValueError("A valid market symbol is required to start strategy observation.")
         if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
@@ -61,7 +68,25 @@ class LiveStrategyFeed:
         )
         requested_group = Group(direction) if direction is not None else None
         self.session = DigitStrategySession(feed_health=self.feed_health, barrier=barrier, requested_group=requested_group, window_seconds=STABILITY_SECONDS)
-        self.session.start(now)
+        initial_percentages: dict[int, float] | None = None
+        initial_observed_at: datetime | None = None
+        if isinstance(initial_frequency, Mapping) and initial_frequency.get("symbol") == symbol:
+            windows = initial_frequency.get("windows")
+            summary = windows.get(str(window_size)) if isinstance(windows, Mapping) else None
+            raw_percentages = summary.get("percentages") if isinstance(summary, Mapping) else None
+            latest_epoch = initial_frequency.get("latest_tick_epoch")
+            try:
+                epoch = float(latest_epoch)
+                candidate_observed_at = datetime.fromtimestamp(epoch, tz=timezone.utc)
+                if isinstance(raw_percentages, Mapping):
+                    parsed = {digit: float(raw_percentages[str(digit)]) for digit in range(10)}
+                    if candidate_observed_at <= now and now - candidate_observed_at <= self.feed_health.max_age:
+                        initial_percentages = parsed
+                        initial_observed_at = candidate_observed_at
+            except (TypeError, ValueError, OverflowError, OSError, KeyError):
+                initial_percentages = None
+                initial_observed_at = None
+        self.session.start(now, initial_percentages, initial_observed_at)
 
         reason = (
             "Strategy started in observation-only mode. Waiting for a fresh "
