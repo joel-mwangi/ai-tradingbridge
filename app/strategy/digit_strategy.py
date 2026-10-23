@@ -94,8 +94,15 @@ def barrier_valid_for(group: Group, barrier: int) -> bool:
 
 
 def strategy_profile_supported(group: Group, barrier: int) -> bool:
-    """Only fully specified strategy profiles may qualify or emit signals."""
-    return (group is Group.OVER and barrier == 3) or (group is Group.UNDER and barrier == 6)
+    """Return whether the generalized rules have non-empty activity and confirmation bands.
+
+    Over uses activity digits 0..B and confirmation digits B+3..9.
+    Under uses activity digits B..9 and confirmation digits 0..B-3.
+    Empty confirmation bands cannot produce a signal and must fail closed.
+    """
+    if not barrier_valid_for(group, barrier):
+        return False
+    return bool(activity_digits_for(group, barrier) and confirmation_digits_for(group, barrier))
 
 
 def digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
@@ -273,9 +280,14 @@ def _trigger_digit(
 ) -> int | None:
     digits = digits_for(group, barrier)
     values = {digit: float(percentages[digit]) for digit in digits}
-    low = min(values.values())
-    lowest = [digit for digit, value in values.items() if value == low]
-    return lowest[0] if len(lowest) == 1 else None
+    ordered_levels = sorted(set(values.values()))
+    if not ordered_levels:
+        return None
+    # Over monitors either of the two least-frequency levels. Under monitors
+    # only the least-frequency level. The session tracks every tied candidate.
+    candidate_levels = set(ordered_levels[:2] if group is Group.OVER else ordered_levels[:1])
+    candidates = [digit for digit, value in values.items() if value in candidate_levels]
+    return min(candidates) if candidates else None
 
 
 def evaluate_group(
@@ -330,7 +342,7 @@ def choose_group(
         strategy_profile_supported(Group.UNDER, barrier)
         or strategy_profile_supported(Group.OVER, barrier)
     ):
-        reason = f"Barrier {barrier} has no complete approved strategy profile; observation only."
+        reason = f"Barrier {barrier} has no valid activity/confirmation range for either direction; observation only."
         unsupported_under = GroupEvaluation(Group.UNDER, False, False, False, False, False, reason)
         unsupported_over = GroupEvaluation(Group.OVER, False, False, False, False, False, reason)
         return QualificationResult(
