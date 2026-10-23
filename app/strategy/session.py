@@ -9,6 +9,7 @@ from app.strategy.digit_strategy import (
     PERCENTAGE_TRIGGER_RISE,
     STABILITY_SECONDS,
     BarColorRanks,
+    DEFAULT_BARRIER,
     Decision,
     Group,
     PatternTracker,
@@ -49,6 +50,7 @@ class DigitStrategySession:
     """
 
     feed_health: PercentageFeedHealth
+    barrier: int = DEFAULT_BARRIER
     window_seconds: float = STABILITY_SECONDS
     state: SessionState = SessionState.IDLE
     started_at: datetime | None = None
@@ -67,6 +69,8 @@ class DigitStrategySession:
     _last_observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        if type(self.barrier) is not int or self.barrier not in range(10):
+            raise ValueError("barrier must be an integer digit from 0 to 9.")
         if (
             isinstance(self.window_seconds, bool)
             or not isinstance(self.window_seconds, (int, float))
@@ -238,7 +242,7 @@ class DigitStrategySession:
                 self.qualification,
             )
 
-        current_result = choose_group(percentages, stable_rows)
+        current_result = choose_group(percentages, stable_rows, self.barrier)
         self.qualification = current_result
 
         if self.selected_group is not None:
@@ -297,7 +301,7 @@ class DigitStrategySession:
 
         return SessionUpdate(
             self.state,
-            f"{self.selected_group.value.title()} profile automatically selected after {elapsed:.1f} seconds of stable Red/Green identities. Baseline recorded; waiting for a 0.1 percentage-point rise.",
+            f"{self.selected_group.value.title()} {self.barrier} automatically selected after {elapsed:.1f} seconds of stable Red/Green identities. Baseline recorded; waiting for a 0.1 percentage-point rise.",
             current_result,
         )
 
@@ -317,7 +321,7 @@ class DigitStrategySession:
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
-        self.pattern_tracker = PatternTracker(group, self.trigger_digit)
+        self.pattern_tracker = PatternTracker(group, self.trigger_digit, barrier=self.barrier)
         self.state = SessionState.SELECTED
 
     def on_tick(self, digit: int) -> SessionUpdate:
