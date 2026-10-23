@@ -79,7 +79,7 @@ class BarColorTests(unittest.TestCase):
         ranks = rank_bar_colors(p)
         self.assertEqual(ranks.red, frozenset({1}))
         self.assertEqual(ranks.green, frozenset({9}))
-        self.assertEqual(ranks.yellow, frozenset({0, 2, 4}) if p[4] == 8.4 else frozenset({4}))
+        self.assertEqual(ranks.yellow, frozenset({4}))
 
     def test_all_tied_minimum_digits_are_red(self):
         p = over3_percentages()
@@ -127,7 +127,7 @@ class AutomaticSelectionTests(unittest.TestCase):
 
     def test_over3_red_and_yellow_must_both_be_below_9_percent(self):
         p = over3_percentages()
-        p[1] = 9.0  # Yellow's frequency reaches exactly 9%; strict rule must fail.
+        p.update({1: 9.0, 2: 9.1, 3: 9.2, 4: 9.3})  # Yellow is exactly 9%.
         result = choose_group(p, [p, p])
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
