@@ -52,8 +52,8 @@ class DigitStrategySession:
 
     feed_health: PercentageFeedHealth
     barrier: int = DEFAULT_BARRIER
-    requested_group: Group | None = None
     window_seconds: float = STABILITY_SECONDS
+    requested_group: Group | None = None
     state: SessionState = SessionState.IDLE
     started_at: datetime | None = None
     observations: list[TimestampedPercentageObservation] = field(default_factory=list)
