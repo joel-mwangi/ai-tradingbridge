@@ -22,7 +22,7 @@ PERCENTAGE_TRIGGER_RISE = 0.1
 OVER_RED_YELLOW_MAX_PERCENT = 9.0
 FILTER_LIMIT = 9.7
 FILTER_EXCEPTION_MAX = 10.5
-MIN_ACTIVITY_TICKS = 2
+MIN_ACTIVITY_TICKS = 1
 DEFAULT_BARRIER = 5
 
 
@@ -177,12 +177,15 @@ def evaluate_thresholds(
     if any(not _valid_percentage(percentages[d]) for d in digits):
         return False, "Barrier-filter percentages must be finite numbers between 0 and 100."
 
-    exceptions = [float(percentages[d]) for d in digits if float(percentages[d]) >= FILTER_LIMIT]
-    if not exceptions:
-        return True, f"All {len(digits)} digits in the {group.value.title()} {barrier} filter are below 9.7%."
-    if len(exceptions) == 1 and exceptions[0] <= FILTER_EXCEPTION_MAX:
-        return True, f"Only one selected digit is >=9.7%, and it is <=10.5%."
-    return False, "Percentage filter failed: at most one selected digit may be >=9.7%, and it must be <=10.5%."
+    below_limit = [d for d in digits if float(percentages[d]) < FILTER_LIMIT]
+    required_below = len(digits) - 1
+    if len(below_limit) < required_below:
+        return False, f"Percentage filter failed: at least {required_below} of {len(digits)} selected digits must be strictly below 9.7%."
+    exceptions = [d for d in digits if float(percentages[d]) >= FILTER_LIMIT]
+    if group is Group.OVER and exceptions:
+        if len(exceptions) != 1 or not float(percentages[exceptions[0]]) < FILTER_EXCEPTION_MAX:
+            return False, "Over percentage filter failed: the one remaining digit must be strictly below 10.5%."
+    return True, f"{group.value.title()} {barrier} percentage filter passes: at least {required_below} selected digits are below 9.7%."
 
 
 def evaluate_color_positions(
