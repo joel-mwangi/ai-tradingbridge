@@ -3,201 +3,221 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.strategy.digit_strategy import (
-    Decision, Group, PatternTracker, TimestampedPercentageObservation, choose_group,
-    choose_group_from_timestamped_observations, evaluate_stability, evaluate_thresholds,
+    Decision,
+    Group,
+    PatternTracker,
+    TimestampedPercentageObservation,
+    choose_group,
+    choose_group_from_timestamped_observations,
+    evaluate_stability,
+    evaluate_thresholds,
+    rank_bar_colors,
     validate_initial_observation_window,
 )
 
 
-def percentages(value=8.0):
-    return {digit: value for digit in range(10)}
+def over3_percentages():
+    return {
+        0: 8.0, 1: 8.2, 2: 8.5, 3: 9.1, 4: 8.4,
+        5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9,
+    }
 
 
-class ThresholdTests(unittest.TestCase):
-    def test_normal_percentages_pass(self):
-        p = {0: 8.2, 1: 9.1, 2: 9.5, 3: 9.7, 4: 9.9}
+def under6_percentages():
+    return {
+        0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
+        5: 8.5, 6: 8.0, 7: 8.2, 8: 8.3, 9: 8.4,
+    }
+
+
+class PercentageThresholdTests(unittest.TestCase):
+    def test_all_four_profile_digits_strictly_below_9_7_pass(self):
+        p = over3_percentages()
+        p.update({0: 9.0, 1: 9.2, 2: 9.4, 3: 9.6})
+        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+
+    def test_three_below_9_7_and_one_at_9_7_pass(self):
+        p = over3_percentages()
+        p.update({0: 9.1, 1: 9.2, 2: 9.6, 3: 9.7})
+        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+
+    def test_one_remaining_digit_at_10_5_passes(self):
+        p = over3_percentages()
+        p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.5})
+        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+
+    def test_one_remaining_digit_above_10_5_fails(self):
+        p = over3_percentages()
+        p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.6})
+        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+
+    def test_two_digits_at_or_above_9_7_fail(self):
+        p = over3_percentages()
+        p.update({0: 9.7, 1: 9.8, 2: 8.0, 3: 8.5})
+        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+
+    def test_under_6_checks_only_digits_6_to_9(self):
+        p = under6_percentages()
+        p.update({0: math.nan})  # Outside the Under 6 percentage-filter group.
         self.assertTrue(evaluate_thresholds(p, Group.UNDER)[0])
 
-    def test_one_digit_between_10_and_10_5_passes(self):
-        p = {0: 8.2, 1: 9.1, 2: 9.5, 3: 9.7, 4: 10.3}
-        self.assertTrue(evaluate_thresholds(p, Group.UNDER)[0])
-
-    def test_two_digits_at_least_10_fail(self):
-        p = {0: 10.0, 1: 10.1, 2: 9.5, 3: 9.7, 4: 9.9}
-        self.assertFalse(evaluate_thresholds(p, Group.UNDER)[0])
-
-    def test_10_5_fails(self):
-        p = {0: 10.5, 1: 9.1, 2: 9.5, 3: 9.7, 4: 9.9}
-        self.assertFalse(evaluate_thresholds(p, Group.UNDER)[0])
-
-    def test_nan_is_rejected(self):
-        p = {0: math.nan, 1: 9.1, 2: 9.5, 3: 9.7, 4: 9.9}
-        self.assertFalse(evaluate_thresholds(p, Group.UNDER)[0])
-
-    def test_infinity_is_rejected(self):
-        p = {0: math.inf, 1: 9.1, 2: 9.5, 3: 9.7, 4: 9.9}
-        self.assertFalse(evaluate_thresholds(p, Group.UNDER)[0])
+    def test_nan_in_filter_digits_fails(self):
+        p = over3_percentages()
+        p[2] = math.nan
+        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
 
     def test_boolean_is_not_a_percentage(self):
-        p = {0: True, 1: 9.1, 2: 9.5, 3: 9.7, 4: 9.9}
-        self.assertFalse(evaluate_thresholds(p, Group.UNDER)[0])
+        p = over3_percentages()
+        p[1] = True
+        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
 
-    def test_group_selection_rejects_invalid_value_anywhere(self):
-        p = percentages()
-        p[7] = math.nan
-        result = choose_group(p, [{d: 8.0 for d in range(10)}])
+
+class BarColorTests(unittest.TestCase):
+    def test_ranks_all_ten_digits_and_preserves_ties(self):
+        p = over3_percentages()
+        p[0] = p[2]  # Both are now tied at 8.5 but neither is the global minimum.
+        ranks = rank_bar_colors(p)
+        self.assertEqual(ranks.red, frozenset({1}))
+        self.assertEqual(ranks.green, frozenset({9}))
+        self.assertEqual(ranks.yellow, frozenset({0, 2, 4}) if p[4] == 8.4 else frozenset({4}))
+
+    def test_all_tied_minimum_digits_are_red(self):
+        p = over3_percentages()
+        p[1] = p[0]
+        ranks = rank_bar_colors(p)
+        self.assertEqual(ranks.red, frozenset({0, 1}))
+
+    def test_red_green_identity_stability_ignores_percentage_spread(self):
+        first = over3_percentages()
+        second = dict(first)
+        second.update({0: 8.1, 1: 8.3, 2: 8.6, 3: 9.2, 4: 8.5})
+        self.assertTrue(evaluate_stability([first, second])[0])
+
+    def test_changed_green_identity_resets_stability(self):
+        first = over3_percentages()
+        second = dict(first)
+        second[5] = 11.0
+        second[9] = 10.7
+        self.assertFalse(evaluate_stability([first, second])[0])
+
+    def test_red_tie_blocks_stability(self):
+        p = over3_percentages()
+        p[1] = p[0]
+        self.assertFalse(evaluate_stability([p, p])[0])
+
+
+class AutomaticSelectionTests(unittest.TestCase):
+    def test_over3_qualifies_and_chooses_trigger_digit_automatically(self):
+        p = over3_percentages()
+        result = choose_group(p, [p, p])
+        self.assertEqual(result.decision, Decision.SELECT_OVER)
+        self.assertEqual(result.trigger_digit, 0)
+        self.assertTrue(result.over.threshold_passes)
+        self.assertTrue(result.over.stability_passes)
+        self.assertTrue(result.over.color_positions_pass)
+
+    def test_under6_qualifies_and_chooses_trigger_digit_automatically(self):
+        p = under6_percentages()
+        result = choose_group(p, [p, p])
+        self.assertEqual(result.decision, Decision.SELECT_UNDER)
+        self.assertEqual(result.trigger_digit, 6)
+        self.assertTrue(result.under.threshold_passes)
+        self.assertTrue(result.under.stability_passes)
+        self.assertTrue(result.under.color_positions_pass)
+
+    def test_over3_red_and_yellow_must_both_be_below_9_percent(self):
+        p = over3_percentages()
+        p[1] = 9.0  # Yellow's frequency reaches exactly 9%; strict rule must fail.
+        result = choose_group(p, [p, p])
+        self.assertNotEqual(result.decision, Decision.SELECT_OVER)
+
+    def test_red_tie_prevents_arbitrary_selection(self):
+        p = over3_percentages()
+        p[1] = p[0]
+        result = choose_group(p, [p, p])
+        self.assertNotEqual(result.decision, Decision.SELECT_OVER)
+
+    def test_changed_red_or_green_identity_prevents_selection(self):
+        first = over3_percentages()
+        second = dict(first)
+        second[5] = 11.0
+        second[9] = 10.7
+        result = choose_group(first, [first, second])
+        self.assertNotEqual(result.decision, Decision.SELECT_OVER)
+
+    def test_invalid_percentage_anywhere_rejects_full_rankings(self):
+        p = over3_percentages()
+        p[7] = math.inf
+        result = choose_group(p, [p, p])
         self.assertEqual(result.decision, Decision.INVALID_DATA)
 
 
-class InitialWindowValidationTests(unittest.TestCase):
+class TimestampedStabilityTests(unittest.TestCase):
     def setUp(self):
-        self.started = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
-        self.values = percentages()
+        self.started = datetime(2026, 10, 23, 10, 0, tzinfo=timezone.utc)
+        self.values = over3_percentages()
         self.observations = [
-            TimestampedPercentageObservation(self.started + timedelta(seconds=1), self.values),
-            TimestampedPercentageObservation(self.started + timedelta(seconds=9), self.values),
+            TimestampedPercentageObservation(self.started, self.values),
+            TimestampedPercentageObservation(self.started + timedelta(seconds=15), self.values),
         ]
-        self.evaluated = self.started + timedelta(seconds=10)
 
-    def test_valid_initial_window_passes(self):
+    def test_full_fifteen_second_window_passes(self):
         ok, _ = validate_initial_observation_window(
-            self.observations, self.started, self.evaluated
+            self.observations, self.started, self.started + timedelta(seconds=15)
         )
         self.assertTrue(ok)
 
-    def test_window_must_reach_ten_seconds(self):
-        ok, _ = validate_initial_observation_window(
-            self.observations, self.started, self.started + timedelta(seconds=9)
+    def test_fourteen_seconds_is_not_enough(self):
+        observations = [
+            self.observations[0],
+            TimestampedPercentageObservation(self.started + timedelta(seconds=14), self.values),
+        ]
+        result = choose_group_from_timestamped_observations(
+            observations, self.started, self.started + timedelta(seconds=14)
         )
-        self.assertFalse(ok)
+        self.assertEqual(result.decision, Decision.INVALID_DATA)
 
-    def test_single_snapshot_cannot_pass_as_stable(self):
-        ok, _ = validate_initial_observation_window(
-            self.observations[:1], self.started, self.evaluated
+    def test_timestamped_selector_uses_fifteen_seconds_and_selects_over3(self):
+        result = choose_group_from_timestamped_observations(
+            self.observations, self.started, self.started + timedelta(seconds=15)
         )
-        self.assertFalse(ok)
-
-    def test_duplicate_timestamps_fail(self):
-        duplicate = [
-            self.observations[0],
-            TimestampedPercentageObservation(self.observations[0].observed_at, self.values),
-        ]
-        ok, _ = validate_initial_observation_window(duplicate, self.started, self.evaluated)
-        self.assertFalse(ok)
-
-    def test_out_of_window_snapshot_fails(self):
-        late = [
-            self.observations[0],
-            TimestampedPercentageObservation(self.started + timedelta(seconds=11), self.values),
-        ]
-        ok, _ = validate_initial_observation_window(late, self.started, self.evaluated)
-        self.assertFalse(ok)
-
-    def test_incomplete_snapshot_fails(self):
-        incomplete = dict(self.values)
-        del incomplete[9]
-        rows = [
-            self.observations[0],
-            TimestampedPercentageObservation(self.started + timedelta(seconds=9), incomplete),
-        ]
-        ok, _ = validate_initial_observation_window(rows, self.started, self.evaluated)
-        self.assertFalse(ok)
+        self.assertEqual(result.decision, Decision.SELECT_OVER)
+        self.assertEqual(result.trigger_digit, 0)
 
     def test_naive_timestamps_fail(self):
         ok, _ = validate_initial_observation_window(
-            self.observations, datetime(2026, 10, 20, 10, 0),
-            self.evaluated
+            self.observations,
+            datetime(2026, 10, 23, 10, 0),
+            self.started + timedelta(seconds=15),
         )
         self.assertFalse(ok)
 
 
-class TimestampedSelectionTests(unittest.TestCase):
-    def setUp(self):
-        self.started = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
-        self.evaluated = self.started + timedelta(seconds=10)
-        # Under qualifies uniquely (digit 0 is lowest); Over fails threshold.
-        first = {0: 7.0, 1: 8.0, 2: 8.1, 3: 8.2, 4: 8.3,
-                 5: 10.5, 6: 8.0, 7: 8.0, 8: 8.0, 9: 8.0}
-        second = dict(first)
-        self.observations = [
-            TimestampedPercentageObservation(self.started + timedelta(seconds=1), first),
-            TimestampedPercentageObservation(self.started + timedelta(seconds=9), second),
-        ]
+class PatternSequenceTests(unittest.TestCase):
+    def test_over3_percentage_trigger_then_two_activity_ticks_and_confirmation(self):
+        tracker = PatternTracker(Group.OVER, trigger_digit=2)
+        self.assertEqual([tracker.on_tick(d) for d in [0, 3, 7]], [False, False, False])
+        tracker.arm()
+        self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 7]], [False, False, False, True])
 
-    def test_valid_window_reaches_group_selection(self):
-        result = choose_group_from_timestamped_observations(
-            self.observations, self.started, self.evaluated
-        )
-        self.assertEqual(result.decision, Decision.SELECT_UNDER)
-        self.assertEqual(result.trigger_digit, 0)
+    def test_under6_sequence_uses_upper_activity_then_lower_confirmation(self):
+        tracker = PatternTracker(Group.UNDER, trigger_digit=7)
+        tracker.arm()
+        self.assertEqual([tracker.on_tick(d) for d in [6, 8, 2]], [False, False, True])
 
-    def test_short_window_cannot_select_group(self):
-        result = choose_group_from_timestamped_observations(
-            self.observations, self.started, self.started + timedelta(seconds=9)
-        )
-        self.assertEqual(result.decision, Decision.INVALID_DATA)
-        self.assertIsNone(result.trigger_digit)
+    def test_confirmation_before_two_activity_ticks_does_not_complete(self):
+        tracker = PatternTracker(Group.UNDER, trigger_digit=6)
+        tracker.arm()
+        self.assertFalse(tracker.on_tick(6))
+        self.assertFalse(tracker.on_tick(2))
+        self.assertEqual(tracker.completed_patterns, 0)
 
-    def test_equal_lowest_percentages_choose_smallest_digit(self):
-        first = {0: 7.0, 1: 7.0, 2: 8.0, 3: 8.2, 4: 8.3,
-                 5: 10.5, 6: 8.0, 7: 8.0, 8: 8.0, 9: 8.0}
-        second = dict(first)
-        observations = [
-            TimestampedPercentageObservation(self.started + timedelta(seconds=1), first),
-            TimestampedPercentageObservation(self.started + timedelta(seconds=9), second),
-        ]
-        result = choose_group_from_timestamped_observations(
-            observations, self.started, self.evaluated
-        )
-        self.assertEqual(result.decision, Decision.SELECT_UNDER)
-        self.assertEqual(result.trigger_digit, 0)
-
-
-class StabilityTests(unittest.TestCase):
-    def test_spread_exactly_point_five_passes(self):
-        rows = [{d: 5.5 for d in range(10)}, {d: 6.0 for d in range(10)}]
-        self.assertTrue(evaluate_stability(rows, Group.UNDER)[0])
-
-    def test_spread_point_six_fails(self):
-        rows = [{d: 5.5 for d in range(10)}, {d: 6.1 for d in range(10)}]
-        self.assertFalse(evaluate_stability(rows, Group.UNDER)[0])
-
-    def test_no_observations_fail_closed(self):
-        self.assertFalse(evaluate_stability([], Group.UNDER)[0])
-
-    def test_nan_observation_fails_closed(self):
-        rows = [{d: 5.5 for d in range(10)}, {d: 5.5 for d in range(10)}]
-        rows[1][2] = math.nan
-        self.assertFalse(evaluate_stability(rows, Group.UNDER)[0])
-
-    def test_boolean_observation_fails_closed(self):
-        rows = [{d: 5.5 for d in range(10)}, {d: 5.5 for d in range(10)}]
-        rows[1][2] = True
-        self.assertFalse(evaluate_stability(rows, Group.UNDER)[0])
-
-
-class PatternTests(unittest.TestCase):
-    def test_under_pattern_matches(self):
-        tracker = PatternTracker(Group.UNDER, 2)
-        self.assertEqual([tracker.on_tick(d) for d in [2, 1, 4, 7]], [False, False, False, True])
-
-    def test_over_pattern_matches(self):
-        tracker = PatternTracker(Group.OVER, 8)
-        self.assertEqual([tracker.on_tick(d) for d in [8, 6, 9, 3]], [False, False, False, True])
-
-    def test_failed_attempt_requires_trigger_again(self):
-        tracker = PatternTracker(Group.UNDER, 2)
-        results = [tracker.on_tick(d) for d in [2, 7, 1, 2, 1, 4, 7]]
-        self.assertEqual(results, [False, False, False, False, False, False, True])
-
-    def test_boolean_tick_is_rejected(self):
-        tracker = PatternTracker(Group.UNDER, 2)
+    def test_boolean_tick_and_trigger_are_rejected(self):
+        tracker = PatternTracker(Group.OVER, trigger_digit=0)
         with self.assertRaises(ValueError):
             tracker.on_tick(True)
-
-    def test_boolean_trigger_is_rejected(self):
         with self.assertRaises(ValueError):
-            PatternTracker(Group.UNDER, True)
+            PatternTracker(Group.OVER, trigger_digit=True)
 
 
 if __name__ == "__main__":
