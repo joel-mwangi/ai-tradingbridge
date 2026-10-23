@@ -229,7 +229,9 @@ def evaluate_color_positions(
         return False, f"Under {barrier} requires Red and Yellow among digits {boundary}–9."
     if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
         return False, f"Under {barrier} requires Green and Blue among digits 0–{max(barrier - 2, 0)}."
-    return True, f"Under {barrier} colour positions pass; no additional Red/Yellow <9% threshold applies."
+    if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
+        return False, f"Under {barrier} requires both Red and Yellow percentages to be strictly below 9%."
+    return True, f"Under {barrier} colour positions pass; Red and Yellow are <9%."
 
 
 def evaluate_stability(
