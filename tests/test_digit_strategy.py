@@ -131,6 +131,26 @@ class AutomaticSelectionTests(unittest.TestCase):
         result = choose_group(p, [p, p], barrier=3)
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
+    def test_under6_red_and_yellow_must_both_be_strictly_below_9_percent(self):
+        p = under6_percentages()
+        self.assertTrue(__import__("app.strategy.digit_strategy", fromlist=["evaluate_color_positions"]).evaluate_color_positions(
+            p, Group.UNDER, barrier=6
+        )[0])
+
+        # The second-lowest (Yellow) bar is exactly 9%; strict threshold must fail.
+        p[5] = 9.0
+        self.assertFalse(__import__("app.strategy.digit_strategy", fromlist=["evaluate_color_positions"]).evaluate_color_positions(
+            p, Group.UNDER, barrier=6
+        )[0])
+
+    def test_under6_red_exactly_9_percent_fails(self):
+        p = under6_percentages()
+        p[9] = 9.0
+        from app.strategy.digit_strategy import evaluate_color_positions
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
+
     def test_red_tie_prevents_arbitrary_selection(self):
         p = over3_percentages()
         p[1] = p[0]
