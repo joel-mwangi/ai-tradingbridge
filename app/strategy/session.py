@@ -85,6 +85,7 @@ class DigitStrategySession:
         self.trigger_digit = None
         self.pattern_tracker = None
         self.percentage_baseline = None
+        self.trigger_baselines.clear()
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
@@ -251,7 +252,7 @@ class DigitStrategySession:
                 requested_decision = Decision.SELECT_UNDER if self.requested_group is Group.UNDER else Decision.SELECT_OVER
                 current_result = QualificationResult(
                     requested_decision, current_result.under, current_result.over,
-                    trigger_digit=self._requested_trigger_digit(percentages, self.requested_group),
+                    trigger_digit=(self._requested_trigger_digits(percentages, self.requested_group) or (None,))[0],
                     reason=f"User-selected {self.requested_group.value.title()} {self.barrier} qualifies.",
                 )
             else:
@@ -273,11 +274,22 @@ class DigitStrategySession:
                 self._clear_candidate()
                 self.state = SessionState.WAITING_FOR_MORE_DATA
             else:
-                if not self.percentage_triggered and self.trigger_digit is not None and self.percentage_baseline is not None:
-                    current_value = float(percentages[self.trigger_digit])
-                    if current_value + 1e-9 >= self.percentage_baseline + PERCENTAGE_TRIGGER_RISE:
+                if not self.percentage_triggered and self.trigger_baselines:
+                    risen_digits = [
+                        digit for digit, baseline in self.trigger_baselines.items()
+                        if float(percentages[digit]) + 1e-9 >= baseline + PERCENTAGE_TRIGGER_RISE
+                    ]
+                    if risen_digits:
+                        # If both candidate digits rise in the same snapshot, use
+                        # the larger increase; stable digit order breaks exact ties.
+                        self.trigger_digit = max(
+                            risen_digits,
+                            key=lambda digit: (float(percentages[digit]) - self.trigger_baselines[digit], -digit),
+                        )
+                        self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
                         self.percentage_triggered = True
                         if self.pattern_tracker is not None:
+                            self.pattern_tracker.trigger_digit = self.trigger_digit
                             self.pattern_tracker.arm()
                         # The gateway calls on_tick for the same market event
                         # immediately after on_frequency. That event's tick is
@@ -321,13 +333,23 @@ class DigitStrategySession:
             current_result,
         )
 
-    def _requested_trigger_digit(self, percentages: dict[int, float] | object, group: Group) -> int | None:
-        # The selected direction's unique least-frequency digit is the trigger.
+    def _requested_trigger_digits(self, percentages: dict[int, float] | object, group: Group) -> tuple[int, ...]:
+        """Return the allowed percentage-trigger digits for the chosen strategy.
+
+        Over 3 permits either of the two least-frequency digits in 0–3. Other
+        direction/barrier combinations conservatively monitor only the unique
+        least-frequency digit until their strategy-specific trigger is defined.
+        """
         selected = digits_for(group, self.barrier)
         values = {digit: float(percentages[digit]) for digit in selected}  # type: ignore[index]
-        lowest = min(values.values())
-        winners = [digit for digit, value in values.items() if value == lowest]
-        return winners[0] if len(winners) == 1 else None
+        ordered = sorted(values, key=lambda digit: (values[digit], digit))
+        if group is Group.OVER and self.barrier == 3:
+            if len(ordered) < 2 or values[ordered[0]] == values[ordered[1]]:
+                return ()
+            return (ordered[0], ordered[1])
+        lowest = values[ordered[0]]
+        winners = [digit for digit in ordered if values[digit] == lowest]
+        return (winners[0],) if len(winners) == 1 else ()
 
     def _activate_candidate(
         self,
@@ -337,11 +359,13 @@ class DigitStrategySession:
     ) -> None:
         self.selected_group = group
         self.trigger_digit = qualification.trigger_digit
-        if self.trigger_digit is None:
+        trigger_digits = self._requested_trigger_digits(percentages, group)
+        if self.trigger_digit is None or not trigger_digits:
             self._clear_candidate()
             self.state = SessionState.WAITING_FOR_MORE_DATA
             return
-        self.percentage_baseline = float(percentages[self.trigger_digit])  # type: ignore[index]
+        self.trigger_baselines = {digit: float(percentages[digit]) for digit in trigger_digits}  # type: ignore[index]
+        self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
