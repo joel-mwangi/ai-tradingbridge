@@ -467,7 +467,7 @@ class PatternTracker:
 
     def __post_init__(self) -> None:
         if self.barrier is None:
-            self.barrier = 3 if self.selected_group is Group.OVER else 6
+            self.barrier = DEFAULT_BARRIER
         if not validate_barrier(self.barrier) or not barrier_valid_for(self.selected_group, self.barrier):
             raise ValueError("Barrier is not valid for the selected direction.")
         if type(self.trigger_digit) is not int or self.trigger_digit not in digits_for(self.selected_group, self.barrier):
