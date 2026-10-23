@@ -93,6 +93,11 @@ def barrier_valid_for(group: Group, barrier: int) -> bool:
     return barrier >= 1
 
 
+def strategy_profile_supported(group: Group, barrier: int) -> bool:
+    """Only fully specified strategy profiles may qualify or emit signals."""
+    return (group is Group.OVER and barrier == 3) or (group is Group.UNDER and barrier == 6)
+
+
 def digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
     """Digits evaluated by the selected barrier: Over <= B, Under >= B."""
     if not validate_barrier(barrier):
@@ -171,6 +176,8 @@ def evaluate_thresholds(
         return False, "Barrier must be an integer digit from 0 to 9."
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
+    if not strategy_profile_supported(group, barrier):
+        return False, f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
     digits = digits_for(group, barrier)
     if not digits.issubset(percentages):
         return False, "Missing one or more barrier-filter percentages."
@@ -196,6 +203,8 @@ def evaluate_color_positions(
     """Place all four colour ranks on the correct side of the selected barrier."""
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
+    if not strategy_profile_supported(group, barrier):
+        return False, f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
     try:
         ranks = rank_bar_colors(percentages)
     except ValueError as exc:
@@ -275,6 +284,9 @@ def evaluate_group(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> GroupEvaluation:
+    if not strategy_profile_supported(group, barrier):
+        reason = f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
+        return GroupEvaluation(group, False, False, False, False, False, reason)
     threshold_ok, threshold_reason = evaluate_thresholds(percentages, group, barrier)
     stability_ok, stability_reason = evaluate_stability(observations)
     color_ok, color_reason = evaluate_color_positions(percentages, group, barrier)
