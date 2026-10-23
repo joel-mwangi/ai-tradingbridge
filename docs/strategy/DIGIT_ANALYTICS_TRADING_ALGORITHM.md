@@ -1,60 +1,103 @@
-# TradeBridge Digit Strategy — Percentage Source and Live Feed
+# TradeBridge Digit Strategy — Over 3 and Under 6
 
-The strategy consumes backend-calculated `digit_frequency` snapshots emitted by
-`/deriv/live/market`. This is the source of truth for TradeBridge's displayed
-and strategy-consumed percentages.
+This document describes the implemented, observation-only strategy profiles. The
+backend consumes TradeBridge-calculated frequencies from
+`/deriv/live/market`; these are observed-tick frequencies, not official Deriv
+Digit Analytics percentages, not predictions, and not proof of a future outcome.
 
-**Important distinction:** these are TradeBridge-calculated observed-tick
-frequencies over up to the most recent 1,000 valid tick points. They are not
-official Deriv Digit Analytics percentages, are not predictions, and do not
-establish that a digit is more likely on the next tick.
+## Explicit strategy profiles
 
-## Source contract
+The automatic selector supports these two named profiles only:
+
+| Rule | Over 3 | Under 6 |
+|---|---|---|
+| Percentage filter digits | 0, 1, 2, 3 | 6, 7, 8, 9 |
+| Red and Yellow colour zone | 0–4 | 5–9 |
+| Green and Blue colour zone | 5–9 | 0–4 |
+| Extra Red/Yellow threshold | Both strictly below 9% | None |
+| Activity digits after percentage trigger | 0–3 | 6–9 |
+| Confirmation digits | 6–9 | 0–3 |
+
+These are profile rules, not a generic formula for arbitrary barriers. Do not
+silently turn Over 3 into Over 6 or Under 6 into Under 3. A new barrier needs
+its own explicit filter, colour-position, and sequence rules.
+
+## Colour ranking
+
+Rank all ten digits by their current percentage within the selected tick window:
+
+- Green: highest frequency.
+- Blue: second-highest distinct frequency level.
+- Red: lowest frequency.
+- Yellow: second-lowest distinct frequency level.
+
+Every digit tied at a rank receives that colour; ranks must not be broken by
+digit order. If two or more digits tie for the lowest frequency, entry is
+blocked until exactly one Red digit remains.
+
+## Percentage filter
+
+For the four digits listed in a profile, qualify when all four percentages are
+strictly below 9.7%, or when exactly three are below 9.7% and the remaining
+digit is no greater than 10.5%. More than one digit at or above 9.7%, or any
+exception value above 10.5%, fails the filter.
+
+Over 3 additionally requires both the Red and Yellow digits to be strictly
+below 9%. Under 6 has no separate Red/Yellow below-9% threshold.
+
+## Fifteen-second Red/Green stability
+
+Do not start stability until a valid snapshot provides all ten percentages and
+exactly one Red digit. The identities of the Red and Green digit sets must remain
+unchanged continuously for 15 seconds. A change in either set, a Red tie, or a
+live-event gap longer than the configured feed freshness limit resets the timer.
+The percentage values themselves may change; this check tracks colour identity,
+not percentage spread.
+
+The automatic selector chooses Over 3 or Under 6 only when exactly one profile
+passes its percentage filter, current colour positions, unique-trigger condition,
+and Red/Green stability. If neither or both qualify, the algorithm continues
+observing rather than choosing arbitrarily.
+
+## Entry sequence
+
+After profile selection, record the selected trigger digit's current percentage
+as its baseline. The trigger is a rise of at least 0.1 percentage points from
+that baseline, measured from a new percentage snapshot. The trigger digit does
+not have to appear as a tick.
+
+After the percentage trigger, ignore the market tick that produced that
+frequency snapshot. Then require at least two consecutive activity digits from
+the selected profile's activity zone, followed by a confirmation digit from its
+opposite zone:
+
+- Over 3: two or more consecutive digits from 0–3, then a digit from 6–9.
+- Under 6: two or more consecutive digits from 6–9, then a digit from 0–3.
+
+Digits 4 and 5 break the activity sequence. If Red/Green identities, colour
+positions, or percentage filters become invalid before the signal, cancel the
+pending setup and resume observation.
+
+A completed sequence generates an **entry signal only**. The current strategy
+does not submit a contract. Contract execution, settlement-aware loss counting,
+the maximum-three-trades control, and the two-consecutive-loss stop must be
+implemented and validated in the execution/risk layer before trading is enabled.
+
+## Source and freshness contract
 
 - Source identifier: `tradebridge_backend_tick_frequency`.
-- Market: the payload's `symbol`, which must match the active strategy market.
-- Window: `windows["1000"]`, with at least 2 and at most 1,000 valid observed ticks.
-- Percentages: all ten digits, finite numeric values from 0 through 100.
-- Observation timestamp: provider-supplied `latest_tick_epoch`, not server calculation time.
-- Event identity: market symbol + stable latest source tick event ID + window.
-- Calculation timestamp: retained as diagnostic metadata; it is not substituted for source time.
-- Tick ordering: duplicate or non-increasing live ticks block the active strategy session.
-- Receipt timestamp: assigned by the receiving process; it must be timezone-aware.
-- Health validation: normalized snapshots must pass `PercentageFeedHealth` for source,
-  market, freshness, timestamp ordering, duplicate IDs, and complete percentages.
-
-The adapter rejects malformed data and does not synthesize percentage updates.
-The live WebSocket bridge ignores historical responses for strategy observations:
-history may seed the frequency calculator, but the 10-second observation window
-starts at the user's explicit Start command and uses only subsequent live tick
-events. A transport disconnect blocks the session; a new connection requires a
-fresh Start and a rebuilt observation window.
-
-The live bridge accepts these messages on `/deriv/live/market`:
-
-```json
-{"strategy":{"action":"start","symbol":"1HZ100V"}}
-{"strategy":{"action":"status"}}
-{"strategy":{"action":"stop"}}
-```
-
-The response type is `strategy_status`. It reports state, reason, selected
-group, trigger digit, feed state, observation count, qualification summary, and
-`execution_enabled: false`. The start command also requests 1,000 points of
-history to seed the frequency calculator and subscribes to the selected market's
-live ticks. It does not place a contract.
-
-Set `TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS` to a positive finite value
-appropriate for the observed market update cadence (default: 5 seconds). If
-source freshness, timestamp order, event identity, market, or data integrity
-fails validation, the session blocks rather than using suspect data.
+- Market symbol must match the active session.
+- Window: the user's selected 50, 100, 250, 500, or 1,000 valid observed ticks.
+- Percentages must agree with the counts and sample size and include all ten digits.
+- Source tick timestamps and event identities must be strictly increasing.
+- The feed health monitor rejects stale, duplicated, invalid, or out-of-order
+  events. A source disconnect blocks the active session.
+- A new session must build a new 15-second Red/Green stability interval.
 
 ## Tests
 
-```powershell
-python -m pytest tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_live_strategy_feed.py -v
-```
+Run the strategy tests with:
 
-This integration does not add trade execution. Live safety-breach rules,
-purchase/settlement reconciliation, and tie handling remain separate work.
-Real-account execution remains disabled.
+```powershell
+python -m pytest tests/test_digit_strategy.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_live_strategy_feed.py -v
+```
