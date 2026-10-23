@@ -129,7 +129,7 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.SELECTED)
         self.assertEqual(self.session.selected_group, Group.OVER)
         self.assertFalse(self.session.signal_generated)
-        self.assertIn("Over 4 qualifies", update.reason)
+        self.assertIn("Over 4 automatically selected", update.reason)
 
     def test_red_tie_blocks_and_does_not_start_timer(self):
         tied = over3_percentages()
