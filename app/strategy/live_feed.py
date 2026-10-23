@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from app.market_analysis import extract_last_digit
-from app.strategy.digit_strategy import STABILITY_SECONDS
+from app.strategy.digit_strategy import DEFAULT_BARRIER, STABILITY_SECONDS, validate_barrier
 from app.strategy.feed_health import FeedState, PercentageFeedHealth
 from app.strategy.market_frequency_adapter import SOURCE_ID, to_percentage_snapshot
 from app.strategy.session import DigitStrategySession, SessionState
@@ -22,6 +22,7 @@ class LiveStrategyFeed:
     def __init__(self) -> None:
         self.symbol: str | None = None
         self.window_size: int = 1000
+        self.barrier: int = DEFAULT_BARRIER
         self.session: DigitStrategySession | None = None
         self.feed_health: PercentageFeedHealth | None = None
 
@@ -40,26 +41,29 @@ class LiveStrategyFeed:
             raise ValueError("TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS must be a positive finite number.")
         return value
 
-    def start(self, symbol: str, window_size: int = 1000) -> dict[str, Any]:
+    def start(self, symbol: str, window_size: int = 1000, barrier: int = DEFAULT_BARRIER) -> dict[str, Any]:
         if not isinstance(symbol, str) or not symbol.strip():
             raise ValueError("A valid market symbol is required to start strategy observation.")
         if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
             raise ValueError("Strategy window_size must be one of 50, 100, 250, 500, or 1000 ticks.")
+        if not validate_barrier(barrier):
+            raise ValueError("Strategy barrier must be an integer digit from 0 to 9.")
         now = self._now()
         self.symbol = symbol
         self.window_size = window_size
+        self.barrier = barrier
         self.feed_health = PercentageFeedHealth(
             expected_source_id=SOURCE_ID,
             expected_market_id=symbol,
             max_age_seconds=self._max_age_seconds(),
         )
-        self.session = DigitStrategySession(feed_health=self.feed_health, window_seconds=STABILITY_SECONDS)
+        self.session = DigitStrategySession(feed_health=self.feed_health, barrier=barrier, window_seconds=STABILITY_SECONDS)
         self.session.start(now)
 
         reason = (
             "Strategy started in observation-only mode. Waiting for a fresh "
             "TradeBridge backend frequency snapshot for the selected market "
-            f"and {self.window_size}-tick window; Red/Green identities must remain unchanged "
+            f"and {self.window_size}-tick window; selected barrier is {self.barrier}; Red/Green identities must remain unchanged "
             f"for {STABILITY_SECONDS:.0f} seconds. These are observed-tick frequencies, not "
             "official Deriv Digit Analytics percentages or predictions."
         )
@@ -143,6 +147,7 @@ class LiveStrategyFeed:
             "state": session.state.value if session else SessionState.IDLE.value,
             "reason": reason,
             "selected_group": session.selected_group.value if session and session.selected_group else None,
+            "barrier": self.barrier,
             "trigger_digit": session.trigger_digit if session else None,
             "trigger_baseline_percentage": session.percentage_baseline if session else None,
             "percentage_triggered": session.percentage_triggered if session else False,
