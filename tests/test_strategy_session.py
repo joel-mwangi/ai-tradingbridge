@@ -120,16 +120,16 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(self.session.selected_group, Group.UNDER)
         self.assertEqual(self.session.trigger_digit, 6)
 
-    def test_unsupported_barrier_stays_observation_only(self):
+    def test_over4_can_select_after_stability_using_generalized_rules(self):
         self.session = DigitStrategySession(self.monitor, barrier=4)
         self.session.start(self.start)
-        self.add(1, over3_percentages(), "unsupported-1")
-        self.add(8, over3_percentages(), "unsupported-2")
-        update = self.add(16, over3_percentages(), "unsupported-3")
-        self.assertNotEqual(update.state, SessionState.SELECTED)
-        self.assertIsNone(self.session.selected_group)
+        self.add(1, over3_percentages(), "over4-1")
+        self.add(8, over3_percentages(), "over4-2")
+        update = self.add(16, over3_percentages(), "over4-3")
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.selected_group, Group.OVER)
         self.assertFalse(self.session.signal_generated)
-        self.assertIn("no complete approved strategy profile", update.reason)
+        self.assertIn("Over 4 automatically selected", update.reason)
 
     def test_red_tie_blocks_and_does_not_start_timer(self):
         tied = over3_percentages()

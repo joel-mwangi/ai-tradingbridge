@@ -9,6 +9,9 @@ from app.strategy.digit_strategy import (
     TimestampedPercentageObservation,
     choose_group,
     choose_group_from_timestamped_observations,
+    activity_digits_for,
+    confirmation_digits_for,
+    strategy_profile_supported,
     evaluate_stability,
     evaluate_thresholds,
     evaluate_color_positions,
@@ -214,18 +217,18 @@ class TimestampedStabilityTests(unittest.TestCase):
 
 class PatternSequenceTests(unittest.TestCase):
     def test_over3_percentage_trigger_then_two_activity_ticks_and_confirmation(self):
-        tracker = PatternTracker(Group.OVER, trigger_digit=2)
+        tracker = PatternTracker(Group.OVER, trigger_digit=2, barrier=3)
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 7]], [False, False, False])
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 6]], [False, False, False, True])
 
     def test_under6_sequence_uses_upper_activity_then_lower_confirmation(self):
-        tracker = PatternTracker(Group.UNDER, trigger_digit=7)
+        tracker = PatternTracker(Group.UNDER, trigger_digit=7, barrier=6)
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [6, 8, 2]], [False, False, True])
 
     def test_one_activity_tick_followed_by_confirmation_completes(self):
-        tracker = PatternTracker(Group.UNDER, trigger_digit=6)
+        tracker = PatternTracker(Group.UNDER, trigger_digit=6, barrier=6)
         tracker.arm()
         self.assertFalse(tracker.on_tick(6))
         self.assertTrue(tracker.on_tick(2))
@@ -251,27 +254,24 @@ class BarrierGeneralizationTests(unittest.TestCase):
         self.assertEqual(digits_for(Group.UNDER, 6), frozenset({6, 7, 8, 9}))
         self.assertEqual(digits_for(Group.UNDER, 3), frozenset({3, 4, 5, 6, 7, 8, 9}))
 
-    def test_unsupported_barrier_percentage_filter_fails_closed(self):
+    def test_generalized_over6_percentage_filter_uses_selected_barrier(self):
         p = {d: 8.0 for d in range(10)}
         p[6] = 10.1
-        ok, reason = evaluate_thresholds(p, Group.OVER, barrier=6)
-        self.assertFalse(ok)
-        self.assertIn("no complete approved strategy profile", reason)
+        ok, _ = evaluate_thresholds(p, Group.OVER, barrier=6)
+        self.assertTrue(ok)
 
-    def test_unsupported_barrier_never_selects_or_qualifies(self):
+    def test_over4_can_qualify_from_generalized_rules(self):
         p = over3_percentages()
         result = choose_group(p, [p, p], barrier=4)
-        self.assertEqual(result.decision, Decision.OBSERVE)
-        self.assertFalse(result.over.qualifies)
-        self.assertFalse(result.under.qualifies)
-        self.assertIn("observation only", result.reason + result.over.reason + result.under.reason)
+        self.assertEqual(result.decision, Decision.SELECT_OVER)
+        self.assertTrue(result.over.qualifies)
 
-    def test_supported_profiles_are_over3_and_under6_only(self):
+    def test_barrier_profiles_are_generalized_where_sequence_is_possible(self):
         from app.strategy.digit_strategy import strategy_profile_supported
         self.assertTrue(strategy_profile_supported(Group.OVER, 3))
         self.assertTrue(strategy_profile_supported(Group.UNDER, 6))
-        self.assertFalse(strategy_profile_supported(Group.OVER, 4))
-        self.assertFalse(strategy_profile_supported(Group.UNDER, 3))
+        self.assertTrue(strategy_profile_supported(Group.OVER, 4))
+        self.assertTrue(strategy_profile_supported(Group.UNDER, 3))
 
     def test_barrier_validation_excludes_impossible_direction(self):
         from app.strategy.digit_strategy import barrier_valid_for
@@ -285,15 +285,25 @@ class BarrierGeneralizationTests(unittest.TestCase):
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [0, 4, 9]], [False, False, True])
 
-    def test_only_complete_profiles_pass_color_position_gate(self):
+    def test_generalized_over4_color_positions_pass(self):
         self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=3)[0])
+        self.assertTrue(evaluate_color_positions(over3_percentages(), Group.OVER, barrier=4)[0])
+
+    def test_generalized_under5_color_positions_pass(self):
         self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=6)[0])
-        ok, reason = evaluate_color_positions(over3_percentages(), Group.OVER, barrier=6)
-        self.assertFalse(ok)
-        self.assertIn("observation only", reason)
-        ok, reason = evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=3)
-        self.assertFalse(ok)
-        self.assertIn("observation only", reason)
+        self.assertTrue(evaluate_color_positions(under6_percentages(), Group.UNDER, barrier=5)[0])
+
+    def test_barrier_relative_activity_and_confirmation_sets(self):
+        self.assertEqual(activity_digits_for(Group.OVER, 4), frozenset({0, 1, 2, 3, 4}))
+        self.assertEqual(confirmation_digits_for(Group.OVER, 4), frozenset({7, 8, 9}))
+        self.assertEqual(activity_digits_for(Group.UNDER, 5), frozenset({5, 6, 7, 8, 9}))
+        self.assertEqual(confirmation_digits_for(Group.UNDER, 5), frozenset({0, 1, 2}))
+
+    def test_profiles_supported_only_when_confirmation_band_is_nonempty(self):
+        self.assertTrue(strategy_profile_supported(Group.OVER, 4))
+        self.assertTrue(strategy_profile_supported(Group.UNDER, 5))
+        self.assertFalse(strategy_profile_supported(Group.OVER, 7))
+        self.assertFalse(strategy_profile_supported(Group.UNDER, 2))
 
 
 if __name__ == "__main__":
