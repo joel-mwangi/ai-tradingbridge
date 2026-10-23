@@ -1,102 +1,129 @@
-# TradeBridge Digit Strategy — Over 3 and Under 6
+# TradeBridge Barrier-Aware Digit Strategy
 
-This document describes the implemented, observation-only strategy profiles. The
-backend consumes TradeBridge-calculated frequencies from
-`/deriv/live/market`; these are observed-tick frequencies, not official Deriv
-Digit Analytics percentages, not predictions, and not proof of a future outcome.
+The strategy uses the barrier digit selected in TradeBridge's Digit Analysis
+controls, evaluates both eligible directions, and automatically selects Over
+or Under only when exactly one direction qualifies.
 
-## Explicit strategy profiles
+The backend consumes TradeBridge-calculated frequencies from
+`/deriv/live/market`. These are observed-tick frequencies, not official Deriv
+Digit Analytics percentages or predictions. The strategy generates signals
+only; it does not submit contracts.
 
-The automatic selector supports these two named profiles only:
+## Selected barrier and digit filters
 
-| Rule | Over 3 | Under 6 |
-|---|---|---|
-| Percentage filter digits | 0, 1, 2, 3 | 6, 7, 8, 9 |
-| Red and Yellow colour zone | 0–4 | 5–9 |
-| Green and Blue colour zone | 5–9 | 0–4 |
-| Extra Red/Yellow threshold | Both strictly below 9% | None |
-| Activity digits after percentage trigger | 0–3 | 6–9 |
-| Confirmation digits | 6–9 | 0–3 |
+Let the selected barrier be `B` (an integer from 0 to 9):
 
-These are profile rules, not a generic formula for arbitrary barriers. Do not
-silently turn Over 3 into Over 6 or Under 6 into Under 3. A new barrier needs
-its own explicit filter, colour-position, and sequence rules.
+- **Over B candidate:** evaluate percentages for every digit from 0 through B,
+  inclusive. These digits are at or below the barrier.
+- **Under B candidate:** evaluate percentages for every digit from B through 9,
+  inclusive. These digits are at or above the barrier.
+- The selector automatically evaluates both directions at the same B. Over 9
+  is not eligible because no last digit can be above 9; Under 0 is not eligible
+  because no last digit can be below 0. At B=0 only Over is eligible; at B=9
+  only Under is eligible.
+- A barrier change starts a fresh stability/strategy session. It must not reuse
+  an old candidate, trigger baseline, or entry sequence.
 
-## Colour ranking
+Over 3 and Under 6 remain the examples from the original specification:
+Over 3 filters digits 0–3; Under 6 filters digits 6–9.
 
-Rank all ten digits by their current percentage within the selected tick window:
+## Colour ranking and positions
 
-- Green: highest frequency.
+Rank all ten digit percentages together, not just the barrier-filter set:
+
+- Green: highest observed frequency.
 - Blue: second-highest distinct frequency level.
-- Red: lowest frequency.
+- Red: lowest observed frequency.
 - Yellow: second-lowest distinct frequency level.
 
-Every digit tied at a rank receives that colour; ranks must not be broken by
-digit order. If two or more digits tie for the lowest frequency, entry is
-blocked until exactly one Red digit remains.
+Ties must be preserved; never break them by digit order. If multiple digits tie
+for the lowest frequency, every tied digit is Red and entry is blocked until
+exactly one Red digit remains.
 
-## Percentage filter
+The source specification defines the colour zones by direction:
 
-For the four digits listed in a profile, qualify when all four percentages are
-strictly below 9.7%, or when exactly three are below 9.7% and the remaining
-digit is no greater than 10.5%. More than one digit at or above 9.7%, or any
-exception value above 10.5%, fails the filter.
+| Direction candidate | Red and Yellow | Green and Blue |
+|---|---|---|
+| Over | Digits 0–4 | Digits 5–9 |
+| Under | Digits 5–9 | Digits 0–4 |
 
-Over 3 additionally requires both the Red and Yellow digits to be strictly
-below 9%. Under 6 has no separate Red/Yellow below-9% threshold.
+These zones remain direction-based for every selected barrier. The selected
+barrier dynamically changes the percentage-filter digits and tick-sequence
+digits above, rather than inventing a different colour-zone rule for each
+barrier.
+
+For all Over candidates, Red and Yellow must both be strictly below 9%.
+Under candidates do not have this extra Red/Yellow percentage threshold.
+
+## Percentage threshold
+
+Apply the filter to every digit in that candidate's barrier range. Qualify when
+either:
+- every selected digit is strictly below 9.7%; or
+- at most one selected digit is at or above 9.7%, and that one digit is no
+  greater than 10.5%.
+
+This reproduces the original four-digit rule for Over 3 and Under 6 while
+extending its explicitly stated “only one digit may be at or above 9.7%” rule
+to a selected barrier range of a different size.
 
 ## Fifteen-second Red/Green stability
 
-Do not start stability until a valid snapshot provides all ten percentages and
-exactly one Red digit. The identities of the Red and Green digit sets must remain
-unchanged continuously for 15 seconds. A change in either set, a Red tie, or a
-live-event gap longer than the configured feed freshness limit resets the timer.
-The percentage values themselves may change; this check tracks colour identity,
-not percentage spread.
+Do not start the timer until a valid snapshot includes all ten digit
+percentages and exactly one Red digit. Red and Green identities must remain
+unchanged continuously for 15 seconds. A change in either identity, a tie at
+the lowest frequency, or a source-event gap longer than the feed freshness
+limit resets the timer. Percentage values may fluctuate: this check is about
+rank identities, not max/min percentage spread.
 
-The automatic selector chooses Over 3 or Under 6 only when exactly one profile
-passes its percentage filter, current colour positions, unique-trigger condition,
-and Red/Green stability. If neither or both qualify, the algorithm continues
-observing rather than choosing arbitrarily.
+Every real snapshot is validated for source, active market, freshness,
+increasing source timestamps, unique event identity, and valid percentages.
+Reconnect or barrier change requires a fresh stability interval.
 
-## Entry sequence
+## Percentage trigger and tick sequence
 
-After profile selection, record the selected trigger digit's current percentage
-as its baseline. The trigger is a rise of at least 0.1 percentage points from
-that baseline, measured from a new percentage snapshot. The trigger digit does
-not have to appear as a tick.
+After a sole candidate qualifies, record the lowest-percentage digit inside
+that candidate's barrier-filter set as the trigger digit and record its current
+percentage as the baseline. If that selected digit is tied for the lowest
+percentage in the filter set, do not choose a trigger.
 
-After the percentage trigger, ignore the market tick that produced that
-frequency snapshot. Then require at least two consecutive activity digits from
-the selected profile's activity zone, followed by a confirmation digit from its
-opposite zone:
+The percentage trigger is a rise of at least 0.1 percentage points from the
+recorded baseline in a subsequent frequency snapshot. The trigger digit does
+not have to appear as an actual tick. Ignore the tick that produced the
+frequency snapshot which detected the rise; only later tick events can count.
 
-- Over 3: two or more consecutive digits from 0–3, then a digit from 6–9.
-- Under 6: two or more consecutive digits from 6–9, then a digit from 0–3.
+After the percentage trigger:
+- **Over B:** require at least two consecutive activity ticks with digits 0–B,
+  followed by a confirmation tick that is above B and in the high confirmation
+  zone 6–9.
+- **Under B:** require at least two consecutive activity ticks with digits B–9,
+  followed by a confirmation tick below B and in the low confirmation zone 0–3.
 
-Digits 4 and 5 break the activity sequence. If Red/Green identities, colour
-positions, or percentage filters become invalid before the signal, cancel the
-pending setup and resume observation.
+Digits outside the activity or confirmation sets break the consecutive
+sequence. For the original examples this yields Over 3 activity 0–3 followed
+by confirmation 6–9, and Under 6 activity 6–9 followed by confirmation 0–3.
+The confirmation bands narrow toward the barrier so the confirmation tick must
+remain on the contract's opposite side. Barriers whose conditions cannot
+produce a valid sequence remain observation-only and cannot submit a signal.
 
-A completed sequence generates an **entry signal only**. The current strategy
-does not submit a contract. Contract execution, settlement-aware loss counting,
-the maximum-three-trades control, and the two-consecutive-loss stop must be
-implemented and validated in the execution/risk layer before trading is enabled.
+If Red/Green identities, colour positions, or percentage filters become
+invalid before the signal, cancel the pending setup and return to observation.
 
-## Source and freshness contract
+## Signal, execution, and risk
 
-- Source identifier: `tradebridge_backend_tick_frequency`.
-- Market symbol must match the active session.
-- Window: the user's selected 50, 100, 250, 500, or 1,000 valid observed ticks.
-- Percentages must agree with the counts and sample size and include all ten digits.
-- Source tick timestamps and event identities must be strictly increasing.
-- The feed health monitor rejects stale, duplicated, invalid, or out-of-order
-  events. A source disconnect blocks the active session.
-- A new session must build a new 15-second Red/Green stability interval.
+A completed sequence generates an **entry signal only**. Execution remains
+disabled. The maximum-three-trades-per-cycle limit, settlement-aware
+two-consecutive-loss stop, and purchase/settlement reconciliation must be
+implemented and validated in the execution/risk layer before any trading is
+enabled.
 
-## Tests
+## Selected data window and tests
 
-Run the strategy tests with:
+The strategy uses the user-selected 50, 100, 250, 500, or 1,000 observed-tick
+window. Percentages must agree with the backend-calculated counts and sample
+size. These are not official Deriv Digit Analytics percentages.
+
+Run:
 
 ```powershell
 python -m pytest tests/test_digit_strategy.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_live_strategy_feed.py -v
