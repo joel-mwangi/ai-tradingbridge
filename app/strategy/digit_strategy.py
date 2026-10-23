@@ -108,16 +108,15 @@ def activity_digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozens
 
 
 def confirmation_digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
-    """The opposite-side confirmation class, preserving the example profiles.
+    """Opposite-side confirmation band with the two-digit buffer from the examples.
 
-    Over 3 confirms on 6–9; Over B uses digits above its barrier within 6–9.
-    Under 6 confirms on 0–3; Under B uses digits below its barrier within 0–3.
+    Over 3 confirms on 6–9 (B+3..9); Under 6 confirms on 0–3 (0..B-3).
     """
     if not validate_barrier(barrier):
         raise ValueError("Barrier must be an integer digit from 0 to 9.")
     if group is Group.OVER:
-        return frozenset(range(max(barrier + 1, 6), 10))
-    return frozenset(range(0, min(barrier, 4)))
+        return frozenset(range(barrier + 3, 10))
+    return frozenset(range(0, max(barrier - 2, 0)))
 
 
 def _valid_percentage(value: object) -> bool:
@@ -191,7 +190,7 @@ def evaluate_color_positions(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Apply direction-specific colour zones and the Over-only <9% rule."""
+    """Place all four colour ranks on the correct side of the selected barrier."""
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
     try:
@@ -205,18 +204,28 @@ def evaluate_color_positions(
         return False, "Colour positions cannot be qualified without distinct second-lowest and second-highest ranks."
 
     if group is Group.OVER:
-        if not ranks.red.issubset(LOW_COLOR_ZONE) or not ranks.yellow.issubset(LOW_COLOR_ZONE):
-            return False, "Over requires Red and Yellow among digits 0–4."
-        if not ranks.green.issubset(HIGH_COLOR_ZONE) or not ranks.blue.issubset(HIGH_COLOR_ZONE):
-            return False, "Over requires Green and Blue among digits 5–9."
+        # Over B's documented Over 3 example uses 0..B+1 for Red/Yellow
+        # and B+2..9 for Green/Blue.
+        boundary = min(barrier + 2, 10)
+        red_yellow_zone = frozenset(range(0, boundary))
+        green_blue_zone = frozenset(range(boundary, 10))
+        if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
+            return False, f"Over {barrier} requires Red and Yellow among digits 0–{min(barrier + 1, 9)}."
+        if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
+            return False, f"Over {barrier} requires Green and Blue among digits {boundary}–9."
         if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
-            return False, "Over requires both Red and Yellow percentages to be strictly below 9%."
+            return False, f"Over {barrier} requires both Red and Yellow percentages to be strictly below 9%."
         return True, f"Over {barrier} colour positions pass; Red and Yellow are <9%."
 
-    if not ranks.red.issubset(HIGH_COLOR_ZONE) or not ranks.yellow.issubset(HIGH_COLOR_ZONE):
-        return False, "Under requires Red and Yellow among digits 5–9."
-    if not ranks.green.issubset(LOW_COLOR_ZONE) or not ranks.blue.issubset(LOW_COLOR_ZONE):
-        return False, "Under requires Green and Blue among digits 0–4."
+    # Under B's documented Under 6 example uses B-1..9 for Red/Yellow
+    # and 0..B-2 for Green/Blue.
+    boundary = max(barrier - 1, 0)
+    green_blue_zone = frozenset(range(0, boundary))
+    red_yellow_zone = frozenset(range(boundary, 10))
+    if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
+        return False, f"Under {barrier} requires Red and Yellow among digits {boundary}–9."
+    if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
+        return False, f"Under {barrier} requires Green and Blue among digits 0–{max(barrier - 2, 0)}."
     return True, f"Under {barrier} colour positions pass; no additional Red/Yellow <9% threshold applies."
 
 
