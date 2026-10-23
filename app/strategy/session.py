@@ -1,8 +1,4 @@
-"""Small, side-effect-free session state machine for the digit strategy.
-
-This module does not connect to a transport or place trades. Callers must only
-submit snapshots accepted by a configured PercentageFeedHealth monitor.
-"""
+"""Side-effect-free state machine for TradeBridge's Over 3 / Under 6 strategy."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,12 +6,16 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from app.strategy.digit_strategy import (
+    PERCENTAGE_TRIGGER_RISE,
+    STABILITY_SECONDS,
+    BarColorRanks,
     Decision,
     Group,
     PatternTracker,
     QualificationResult,
     TimestampedPercentageObservation,
-    choose_group_from_timestamped_observations,
+    choose_group,
+    rank_bar_colors,
 )
 from app.strategy.feed_health import FeedHealthResult, PercentageFeedHealth, PercentageSnapshot
 
@@ -35,21 +35,21 @@ class SessionUpdate:
     reason: str
     qualification: QualificationResult | None = None
     pattern_completed: bool = False
+    percentage_triggered: bool = False
 
 
 @dataclass
 class DigitStrategySession:
-    """One fresh strategy session; no trade-execution responsibilities.
+    """Maintain live ranking stability, automatic profile choice, and signal state.
 
-    Every call to start() clears observations, selection, pattern progress, and
-    session-local counters. It does not reset the feed monitor: transport/feed
-    continuity is managed separately. Snapshots must first be accepted by that
-    monitor. An invalid feed event blocks this session until a new session is
-    started after feed recovery.
+    This class never places trades. A candidate remains pending only while its
+    percentage filter, colour positions, and Red/Green stability still qualify.
+    The percentage increase arms a tick-sequence tracker; the trigger digit
+    itself does not have to appear as a tick.
     """
 
     feed_health: PercentageFeedHealth
-    window_seconds: float = 10.0
+    window_seconds: float = STABILITY_SECONDS
     state: SessionState = SessionState.IDLE
     started_at: datetime | None = None
     observations: list[TimestampedPercentageObservation] = field(default_factory=list)
@@ -57,6 +57,14 @@ class DigitStrategySession:
     trigger_digit: int | None = None
     pattern_tracker: PatternTracker | None = None
     qualification: QualificationResult | None = None
+    stable_since: datetime | None = None
+    bar_colors: BarColorRanks | None = None
+    percentage_baseline: float | None = None
+    percentage_triggered: bool = False
+    skip_current_tick: bool = False
+    signal_generated: bool = False
+    _rank_signature: tuple[frozenset[int], frozenset[int]] | None = None
+    _last_observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -66,22 +74,41 @@ class DigitStrategySession:
         ):
             raise ValueError("window_seconds must be positive.")
 
+    def _clear_candidate(self) -> None:
+        self.selected_group = None
+        self.trigger_digit = None
+        self.pattern_tracker = None
+        self.percentage_baseline = None
+        self.percentage_triggered = False
+        self.skip_current_tick = False
+        self.signal_generated = False
+
     def start(self, started_at: datetime) -> SessionUpdate:
         if not isinstance(started_at, datetime) or started_at.tzinfo is None or started_at.utcoffset() is None:
             raise ValueError("Session start must be timezone-aware.")
         self.started_at = started_at.astimezone(timezone.utc)
         self.observations.clear()
-        self.selected_group = None
-        self.trigger_digit = None
-        self.pattern_tracker = None
+        self._clear_candidate()
+        self._rank_signature = None
+        self._last_observed_at = None
+        self.stable_since = None
+        self.bar_colors = None
         self.qualification = None
         self.state = SessionState.OBSERVING
-        return SessionUpdate(self.state, "Fresh session started; initial observation window reset.")
+        return SessionUpdate(
+            self.state,
+            "Fresh session started. Waiting for valid live frequency data before starting Red/Green stability.",
+        )
 
-    def add_snapshot(
-        self, snapshot: PercentageSnapshot, now: datetime
-    ) -> SessionUpdate:
-        if self.state not in (SessionState.OBSERVING, SessionState.WAITING_FOR_MORE_DATA) or self.started_at is None:
+    def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
+        if (
+            self.state not in (
+                SessionState.OBSERVING,
+                SessionState.WAITING_FOR_MORE_DATA,
+                SessionState.SELECTED,
+            )
+            or self.started_at is None
+        ):
             return SessionUpdate(self.state, "Session is not accepting observations.")
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             self.state = SessionState.BLOCKED
@@ -90,100 +117,249 @@ class DigitStrategySession:
         health: FeedHealthResult = self.feed_health.accept(snapshot, now)
         if not health.accepted or health.snapshot is None:
             self.state = SessionState.BLOCKED
+            self._clear_candidate()
             return SessionUpdate(self.state, f"Feed rejected snapshot: {health.reason}")
 
         observed_at = health.snapshot.observed_at.astimezone(timezone.utc)
         if observed_at < self.started_at:
             self.state = SessionState.BLOCKED
+            self._clear_candidate()
             return SessionUpdate(self.state, "Snapshot predates this strategy session.")
+
+        # A source-event gap longer than the configured freshness interval means
+        # continuous 15-second stability was not observed; restart the timer.
+        if (
+            self._last_observed_at is not None
+            and observed_at - self._last_observed_at > self.feed_health.max_age
+        ):
+            self.stable_since = None
+            self._rank_signature = None
+            self._clear_candidate()
 
         self.observations.append(
             TimestampedPercentageObservation(observed_at, dict(health.snapshot.percentages))
         )
-        if self.state is SessionState.WAITING_FOR_MORE_DATA:
-            # Reassess on each new real percentage event, never on ticks.
-            return self.evaluate(now)
-        return SessionUpdate(self.state, "Fresh timestamped snapshot recorded.")
+        self._last_observed_at = observed_at
+        # Bound memory use on long-running sessions. Stable identity continuity
+        # is checked on every accepted event and retained in stable_since/signature.
+        retention = max(self.window_seconds * 2, 60.0)
+        cutoff = observed_at - timedelta(seconds=retention)
+        self.observations = [item for item in self.observations if item.observed_at >= cutoff]
+        return self._progress(now.astimezone(timezone.utc))
 
     def evaluate(self, now: datetime) -> SessionUpdate:
-        if self.state not in (SessionState.OBSERVING, SessionState.WAITING_FOR_MORE_DATA) or self.started_at is None:
-            return SessionUpdate(self.state, "Session is not ready for percentage-window evaluation.", self.qualification)
+        """Reassess current state without inventing a new source observation."""
+        if self.state not in (
+            SessionState.OBSERVING,
+            SessionState.WAITING_FOR_MORE_DATA,
+            SessionState.SELECTED,
+        ) or not self.observations:
+            return SessionUpdate(self.state, "Session has no current observation to evaluate.", self.qualification)
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             self.state = SessionState.BLOCKED
+            self._clear_candidate()
             return SessionUpdate(self.state, "Evaluation timestamp must be timezone-aware.")
-        now_utc = now.astimezone(timezone.utc)
-        if now_utc < self.started_at + timedelta(seconds=self.window_seconds):
-            return SessionUpdate(self.state, "Initial observation window has not elapsed.")
-
-        if self.state is SessionState.OBSERVING:
-            window_start = self.started_at
-            window_end = self.started_at + timedelta(seconds=self.window_seconds)
-            if now_utc < window_end:
-                return SessionUpdate(self.state, "Initial observation window has not elapsed.")
-            # Initial qualification uses only events from the first window.
-            window_observations = [
-                item for item in self.observations
-                if window_start <= item.observed_at.astimezone(timezone.utc) <= window_end
-            ]
-        else:
-            # Rolling reassessment excludes expired observations.
-            window_start = now_utc - timedelta(seconds=self.window_seconds)
-            window_observations = [
-                item for item in self.observations
-                if window_start <= item.observed_at.astimezone(timezone.utc) <= now_utc
-            ]
-            self.observations = window_observations
-
-        if len(window_observations) < 2:
-            if self.state is SessionState.OBSERVING:
-                self.state = SessionState.BLOCKED
-                return SessionUpdate(self.state, "Initial window needs at least two real percentage updates.")
+        # Do not let a wall-clock timer substitute for actual live percentage
+        # events: _progress requires the latest source event to span 15 seconds.
+        if self.state is SessionState.SELECTED:
             return SessionUpdate(
                 self.state,
-                "Waiting for at least two real percentage updates inside the rolling 10-second window.",
+                "Selected setup remains under live monitoring for filter, stability, and entry conditions.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
+        return self._progress(now.astimezone(timezone.utc))
+
+    def _progress(self, now_utc: datetime) -> SessionUpdate:
+        latest = self.observations[-1]
+        observed_at = latest.observed_at.astimezone(timezone.utc)
+        percentages = latest.percentages
+
+        try:
+            ranks = rank_bar_colors(percentages)
+        except ValueError as exc:
+            self.state = SessionState.BLOCKED
+            self._clear_candidate()
+            return SessionUpdate(self.state, f"Invalid percentage snapshot: {exc}")
+
+        self.bar_colors = ranks
+        signature = ranks.stability_signature
+
+        # A Red tie blocks entry and cannot accumulate stability. When exactly
+        # one Red returns, its new identity starts a fresh 15-second interval.
+        if len(ranks.red) != 1:
+            self._rank_signature = signature
+            self.stable_since = None
+            self._clear_candidate()
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            return SessionUpdate(
+                self.state,
+                "Multiple digits are tied Red. Wait until exactly one Red digit remains; stability has not started.",
                 self.qualification,
             )
 
-        result = choose_group_from_timestamped_observations(
-            window_observations, window_start, now_utc, self.window_seconds
-        )
-        self.qualification = result
-        if result.decision is Decision.SELECT_UNDER:
-            self.selected_group = Group.UNDER
-        elif result.decision is Decision.SELECT_OVER:
-            self.selected_group = Group.OVER
-        elif result.decision is Decision.INVALID_DATA:
+        if signature != self._rank_signature:
+            prior_signature = self._rank_signature
+            self._rank_signature = signature
+            self.stable_since = observed_at
+            self._clear_candidate()
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            reason = (
+                "First valid Red/Green ranking observed; 15-second stability timer started."
+                if prior_signature is None
+                else "Red or Green identity changed; pending setup cancelled and 15-second timer restarted."
+            )
+            return SessionUpdate(self.state, reason, self.qualification)
+
+        if self.stable_since is None:
+            self.stable_since = observed_at
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            return SessionUpdate(self.state, "Red/Green ranking restored; 15-second stability timer started.")
+
+        elapsed = max(0.0, (observed_at - self.stable_since).total_seconds())
+        if elapsed < self.window_seconds:
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            remaining = self.window_seconds - elapsed
+            return SessionUpdate(
+                self.state,
+                f"Red and Green identities unchanged for {elapsed:.1f}/{self.window_seconds:.0f} seconds; {remaining:.1f} seconds remain.",
+                self.qualification,
+            )
+
+        stable_rows = [
+            item.percentages for item in self.observations
+            if item.observed_at.astimezone(timezone.utc) >= self.stable_since
+        ]
+        if len(stable_rows) < 2:
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            return SessionUpdate(
+                self.state,
+                "Waiting for at least two real frequency snapshots within the stable ranking interval.",
+                self.qualification,
+            )
+
+        current_result = choose_group(percentages, stable_rows)
+        self.qualification = current_result
+
+        if self.selected_group is not None:
+            still_qualifies = (
+                current_result.decision is Decision.SELECT_UNDER and self.selected_group is Group.UNDER
+            ) or (
+                current_result.decision is Decision.SELECT_OVER and self.selected_group is Group.OVER
+            )
+            if not still_qualifies:
+                # Filter/colour invalidation cancels the candidate. The existing
+                # Red/Green timer remains valid if its identities did not change.
+                self._clear_candidate()
+                self.state = SessionState.WAITING_FOR_MORE_DATA
+            else:
+                if not self.percentage_triggered and self.trigger_digit is not None and self.percentage_baseline is not None:
+                    current_value = float(percentages[self.trigger_digit])
+                    if current_value + 1e-9 >= self.percentage_baseline + PERCENTAGE_TRIGGER_RISE:
+                        self.percentage_triggered = True
+                        if self.pattern_tracker is not None:
+                            self.pattern_tracker.arm()
+                        # The gateway calls on_tick for the same market event
+                        # immediately after on_frequency. That event's tick is
+                        # not "after" its own percentage trigger.
+                        self.skip_current_tick = True
+                        return SessionUpdate(
+                            self.state,
+                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                            self.qualification,
+                            percentage_triggered=True,
+                        )
+                return SessionUpdate(
+                    self.state,
+                    "Setup qualified; monitoring the trigger percentage and subsequent tick sequence."
+                    if not self.percentage_triggered
+                    else "Percentage trigger confirmed; waiting for two consecutive activity ticks and an opposite-zone confirmation.",
+                    self.qualification,
+                    percentage_triggered=self.percentage_triggered,
+                )
+
+        # A profile can be selected only after actual percentage observations
+        # span the full 15 seconds without Red/Green identities changing.
+        if current_result.decision is Decision.SELECT_UNDER:
+            self._activate_candidate(Group.UNDER, current_result, percentages)
+        elif current_result.decision is Decision.SELECT_OVER:
+            self._activate_candidate(Group.OVER, current_result, percentages)
+        elif current_result.decision is Decision.INVALID_DATA:
             self.state = SessionState.BLOCKED
-            return SessionUpdate(self.state, result.reason, result)
+            return SessionUpdate(self.state, current_result.reason, current_result)
         else:
             self.state = SessionState.WAITING_FOR_MORE_DATA
             return SessionUpdate(
                 self.state,
-                f"{result.reason} Reassessing on each new percentage snapshot using a rolling {self.window_seconds:g}-second window.",
-                result,
+                f"{current_result.reason} Red/Green have been stable for {elapsed:.1f} seconds; continue observing.",
+                current_result,
             )
 
-        self.trigger_digit = result.trigger_digit
-        self.pattern_tracker = PatternTracker(self.selected_group, self.trigger_digit)
+        return SessionUpdate(
+            self.state,
+            f"{self.selected_group.value.title()} profile automatically selected after {elapsed:.1f} seconds of stable Red/Green identities. Baseline recorded; waiting for a 0.1 percentage-point rise.",
+            current_result,
+        )
+
+    def _activate_candidate(
+        self,
+        group: Group,
+        qualification: QualificationResult,
+        percentages: dict[int, float] | object,
+    ) -> None:
+        self.selected_group = group
+        self.trigger_digit = qualification.trigger_digit
+        if self.trigger_digit is None:
+            self._clear_candidate()
+            self.state = SessionState.WAITING_FOR_MORE_DATA
+            return
+        self.percentage_baseline = float(percentages[self.trigger_digit])  # type: ignore[index]
+        self.percentage_triggered = False
+        self.skip_current_tick = False
+        self.signal_generated = False
+        self.pattern_tracker = PatternTracker(group, self.trigger_digit)
         self.state = SessionState.SELECTED
-        return SessionUpdate(self.state, result.reason, result)
 
     def on_tick(self, digit: int) -> SessionUpdate:
         if self.state is not SessionState.SELECTED or self.pattern_tracker is None:
-            return SessionUpdate(self.state, "Pattern tracking is unavailable until one group is selected.")
+            return SessionUpdate(self.state, "Pattern tracking is unavailable until one profile is selected.")
+        if self.skip_current_tick:
+            self.skip_current_tick = False
+            return SessionUpdate(
+                self.state,
+                "Ignored the tick that produced the percentage trigger; only subsequent ticks count.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
+        if not self.percentage_triggered:
+            return SessionUpdate(
+                self.state,
+                "Waiting for the selected trigger digit's percentage to rise by 0.1 percentage points.",
+                self.qualification,
+            )
         try:
             completed = self.pattern_tracker.on_tick(digit)
         except ValueError as exc:
             self.state = SessionState.BLOCKED
-            return SessionUpdate(self.state, str(exc))
+            self._clear_candidate()
+            return SessionUpdate(self.state, str(exc), self.qualification)
+        if completed:
+            self.signal_generated = True
+            return SessionUpdate(
+                self.state,
+                "Entry signal generated; no trade was submitted.",
+                self.qualification,
+                pattern_completed=True,
+                percentage_triggered=True,
+            )
         return SessionUpdate(
             self.state,
-            "Pattern completed; no trade was submitted." if completed else "Pattern not yet complete.",
+            f"Post-trigger sequence progress: {self.pattern_tracker.progress} consecutive activity tick(s); two are required before confirmation.",
             self.qualification,
-            pattern_completed=completed,
+            percentage_triggered=True,
         )
 
     def stop(self) -> SessionUpdate:
         self.state = SessionState.STOPPED
-        self.pattern_tracker = None
+        self._clear_candidate()
         return SessionUpdate(self.state, "Session stopped; no new strategy events will be processed.")
