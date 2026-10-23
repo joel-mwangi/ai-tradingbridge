@@ -223,12 +223,12 @@ class PatternSequenceTests(unittest.TestCase):
         self.assertEqual([tracker.on_tick(d) for d in [0, 3, 2, 6]], [False, False, False, True])
 
     def test_under6_sequence_uses_upper_activity_then_lower_confirmation(self):
-        tracker = PatternTracker(Group.UNDER, trigger_digit=7)
+        tracker = PatternTracker(Group.UNDER, trigger_digit=7, barrier=6)
         tracker.arm()
         self.assertEqual([tracker.on_tick(d) for d in [6, 8, 2]], [False, False, True])
 
     def test_one_activity_tick_followed_by_confirmation_completes(self):
-        tracker = PatternTracker(Group.UNDER, trigger_digit=6)
+        tracker = PatternTracker(Group.UNDER, trigger_digit=6, barrier=6)
         tracker.arm()
         self.assertFalse(tracker.on_tick(6))
         self.assertTrue(tracker.on_tick(2))
