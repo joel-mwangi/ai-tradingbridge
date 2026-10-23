@@ -34,7 +34,7 @@ class PercentageThresholdTests(unittest.TestCase):
     def test_all_four_profile_digits_strictly_below_9_7_pass(self):
         p = over3_percentages()
         p.update({0: 9.0, 1: 9.2, 2: 9.4, 3: 9.6})
-        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_three_below_9_7_and_one_at_9_7_pass(self):
         p = over3_percentages()
@@ -59,7 +59,7 @@ class PercentageThresholdTests(unittest.TestCase):
     def test_under_6_checks_only_digits_6_to_9(self):
         p = under6_percentages()
         p.update({0: math.nan})  # Outside the Under 6 percentage-filter group.
-        self.assertTrue(evaluate_thresholds(p, Group.UNDER)[0])
+        self.assertTrue(evaluate_thresholds(p, Group.UNDER, barrier=6)[0])
 
     def test_nan_in_filter_digits_fails(self):
         p = over3_percentages()
@@ -109,7 +109,7 @@ class BarColorTests(unittest.TestCase):
 class AutomaticSelectionTests(unittest.TestCase):
     def test_over3_qualifies_and_chooses_trigger_digit_automatically(self):
         p = over3_percentages()
-        result = choose_group(p, [p, p])
+        result = choose_group(p, [p, p], barrier=3)
         self.assertEqual(result.decision, Decision.SELECT_OVER)
         self.assertEqual(result.trigger_digit, 0)
         self.assertTrue(result.over.threshold_passes)
@@ -142,7 +142,7 @@ class AutomaticSelectionTests(unittest.TestCase):
         second = dict(first)
         second[5] = 11.0
         second[9] = 10.7
-        result = choose_group(first, [first, second])
+        result = choose_group(first, [first, second], barrier=3)
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
     def test_invalid_percentage_anywhere_rejects_full_rankings(self):
@@ -173,13 +173,13 @@ class TimestampedStabilityTests(unittest.TestCase):
             TimestampedPercentageObservation(self.started + timedelta(seconds=14), self.values),
         ]
         result = choose_group_from_timestamped_observations(
-            observations, self.started, self.started + timedelta(seconds=14)
+            observations, self.started, self.started + timedelta(seconds=14), barrier=3
         )
         self.assertEqual(result.decision, Decision.INVALID_DATA)
 
     def test_timestamped_selector_uses_fifteen_seconds_and_selects_over3(self):
         result = choose_group_from_timestamped_observations(
-            self.observations, self.started, self.started + timedelta(seconds=15)
+            self.observations, self.started, self.started + timedelta(seconds=15), barrier=3
         )
         self.assertEqual(result.decision, Decision.SELECT_OVER)
         self.assertEqual(result.trigger_digit, 0)
@@ -218,6 +218,39 @@ class PatternSequenceTests(unittest.TestCase):
             tracker.on_tick(True)
         with self.assertRaises(ValueError):
             PatternTracker(Group.OVER, trigger_digit=True)
+
+
+
+class BarrierGeneralizationTests(unittest.TestCase):
+    def test_over_filter_changes_with_selected_barrier(self):
+        from app.strategy.digit_strategy import digits_for
+        self.assertEqual(digits_for(Group.OVER, 3), frozenset({0, 1, 2, 3}))
+        self.assertEqual(digits_for(Group.OVER, 6), frozenset({0, 1, 2, 3, 4, 5, 6}))
+
+    def test_under_filter_changes_with_selected_barrier(self):
+        from app.strategy.digit_strategy import digits_for
+        self.assertEqual(digits_for(Group.UNDER, 6), frozenset({6, 7, 8, 9}))
+        self.assertEqual(digits_for(Group.UNDER, 3), frozenset({3, 4, 5, 6, 7, 8, 9}))
+
+    def test_selected_barrier_filter_allows_at_most_one_exception(self):
+        from app.strategy.digit_strategy import evaluate_thresholds
+        p = {d: 8.0 for d in range(10)}
+        p[6] = 10.1
+        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=6)[0])
+        p[5] = 9.7
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=6)[0])
+
+    def test_barrier_validation_excludes_impossible_direction(self):
+        from app.strategy.digit_strategy import barrier_valid_for
+        self.assertTrue(barrier_valid_for(Group.OVER, 0))
+        self.assertFalse(barrier_valid_for(Group.UNDER, 0))
+        self.assertFalse(barrier_valid_for(Group.OVER, 9))
+        self.assertTrue(barrier_valid_for(Group.UNDER, 9))
+
+    def test_pattern_confirmation_adapts_to_selected_barrier(self):
+        tracker = PatternTracker(Group.OVER, trigger_digit=6, barrier=6)
+        tracker.arm()
+        self.assertEqual([tracker.on_tick(d) for d in [0, 4, 7]], [False, False, True])
 
 
 if __name__ == "__main__":
