@@ -131,6 +131,30 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertTrue(self.session.signal_generated)
         self.assertEqual(self.session.state, SessionState.SELECTED)
 
+    def test_completed_pattern_emits_exactly_one_signal(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1
+        self.add(17, increased, "once-trigger")
+        self.session.on_tick(2)  # trigger-producing tick is skipped
+        self.session.on_tick(0)
+        self.session.on_tick(2)
+        completed = self.session.on_tick(7)
+        self.assertTrue(completed.pattern_completed)
+        self.assertTrue(self.session.signal_generated)
+        duplicate = self.session.on_tick(7)
+        self.assertFalse(duplicate.pattern_completed)
+        self.assertIn("duplicate signals are suppressed", duplicate.reason)
+
+    def test_stale_frequency_snapshot_blocks_pattern_ticks(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1
+        self.add(17, increased, "stale-trigger")
+        update = self.session.on_tick(0, now=self.start + timedelta(seconds=40))
+        self.assertEqual(update.state, SessionState.BLOCKED)
+        self.assertFalse(self.session.signal_generated)
+        self.assertIsNone(self.session.selected_group)
     def test_selected_setup_is_cancelled_if_red_green_changes(self):
         self.start_stable_over3()
         changed = dict(over3_percentages())
