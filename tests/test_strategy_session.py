@@ -131,6 +131,15 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertTrue(self.session.signal_generated)
         self.assertEqual(self.session.state, SessionState.SELECTED)
 
+    def test_over3_second_lowest_digit_percentage_can_trigger(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[1] = 8.3
+        update = self.add(17, increased, "second-lowest-trigger")
+        self.assertTrue(update.percentage_triggered)
+        self.assertEqual(self.session.trigger_digit, 1)
+        self.assertEqual(self.session.pattern_tracker.trigger_digit, 1)
+        self.assertTrue(self.session.skip_current_tick)
     def test_completed_pattern_emits_exactly_one_signal(self):
         self.start_stable_over3()
         increased = over3_percentages()
