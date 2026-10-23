@@ -889,8 +889,12 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
                                 await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
                                 continue
+                            barrier = control.get("barrier", 5)
+                            if type(barrier) is not int or barrier not in range(10):
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
+                                continue
                             try:
-                                status = strategy_feed.start(symbol, window_size=window_size)
+                                status = strategy_feed.start(symbol, window_size=window_size, barrier=barrier)
                             except ValueError as exc:
                                 await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
                                 continue

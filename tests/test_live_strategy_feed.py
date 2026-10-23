@@ -119,6 +119,27 @@ def test_strategy_uses_the_selected_digit_window_for_snapshots():
     assert result["execution_enabled"] is False
 
 
+
+def test_start_uses_the_selected_barrier_and_fifteen_second_window():
+    runtime = LiveStrategyFeed()
+    status = runtime.start("1HZ100V", window_size=250, barrier=6)
+    assert status["barrier"] == 6
+    assert status["digit_window_size"] == 250
+    assert status["window_seconds"] == 15.0
+    assert runtime.session is not None
+    assert runtime.session.barrier == 6
+
+
+def test_strategy_rejects_non_digit_barrier():
+    runtime = LiveStrategyFeed()
+    try:
+        runtime.start("1HZ100V", barrier=10)
+    except ValueError as exc:
+        assert "integer digit from 0 to 9" in str(exc)
+    else:
+        raise AssertionError("Invalid barrier should be rejected")
+
+
 def test_strategy_rejects_unsupported_selected_digit_window():
     runtime = LiveStrategyFeed()
     try:

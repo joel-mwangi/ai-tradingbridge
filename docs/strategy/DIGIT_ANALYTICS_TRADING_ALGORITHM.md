@@ -1,60 +1,131 @@
-# TradeBridge Digit Strategy — Percentage Source and Live Feed
+# TradeBridge Barrier-Aware Digit Strategy
 
-The strategy consumes backend-calculated `digit_frequency` snapshots emitted by
-`/deriv/live/market`. This is the source of truth for TradeBridge's displayed
-and strategy-consumed percentages.
+The strategy uses the barrier digit selected in TradeBridge's Digit Analysis
+controls, evaluates both eligible directions, and automatically selects Over
+or Under only when exactly one direction qualifies.
 
-**Important distinction:** these are TradeBridge-calculated observed-tick
-frequencies over up to the most recent 1,000 valid tick points. They are not
-official Deriv Digit Analytics percentages, are not predictions, and do not
-establish that a digit is more likely on the next tick.
+The backend consumes TradeBridge-calculated frequencies from
+`/deriv/live/market`. These are observed-tick frequencies, not official Deriv
+Digit Analytics percentages or predictions. The strategy generates signals
+only; it does not submit contracts.
 
-## Source contract
+## Selected barrier and digit filters
 
-- Source identifier: `tradebridge_backend_tick_frequency`.
-- Market: the payload's `symbol`, which must match the active strategy market.
-- Window: `windows["1000"]`, with at least 2 and at most 1,000 valid observed ticks.
-- Percentages: all ten digits, finite numeric values from 0 through 100.
-- Observation timestamp: provider-supplied `latest_tick_epoch`, not server calculation time.
-- Event identity: market symbol + stable latest source tick event ID + window.
-- Calculation timestamp: retained as diagnostic metadata; it is not substituted for source time.
-- Tick ordering: duplicate or non-increasing live ticks block the active strategy session.
-- Receipt timestamp: assigned by the receiving process; it must be timezone-aware.
-- Health validation: normalized snapshots must pass `PercentageFeedHealth` for source,
-  market, freshness, timestamp ordering, duplicate IDs, and complete percentages.
+Let the selected barrier be `B` (an integer from 0 to 9):
 
-The adapter rejects malformed data and does not synthesize percentage updates.
-The live WebSocket bridge ignores historical responses for strategy observations:
-history may seed the frequency calculator, but the 10-second observation window
-starts at the user's explicit Start command and uses only subsequent live tick
-events. A transport disconnect blocks the session; a new connection requires a
-fresh Start and a rebuilt observation window.
+- **Over B candidate:** evaluate percentages for every digit from 0 through B,
+  inclusive. These digits are at or below the barrier.
+- **Under B candidate:** evaluate percentages for every digit from B through 9,
+  inclusive. These digits are at or above the barrier.
+- The selector automatically evaluates both directions at the same B. Over 9
+  is not eligible because no last digit can be above 9; Under 0 is not eligible
+  because no last digit can be below 0. At B=0 only Over is eligible; at B=9
+  only Under is eligible.
+- A barrier change starts a fresh stability/strategy session. It must not reuse
+  an old candidate, trigger baseline, or entry sequence.
 
-The live bridge accepts these messages on `/deriv/live/market`:
+Over 3 and Under 6 remain the examples from the original specification:
+Over 3 filters digits 0–3; Under 6 filters digits 6–9.
 
-```json
-{"strategy":{"action":"start","symbol":"1HZ100V"}}
-{"strategy":{"action":"status"}}
-{"strategy":{"action":"stop"}}
-```
+## Colour ranking and positions
 
-The response type is `strategy_status`. It reports state, reason, selected
-group, trigger digit, feed state, observation count, qualification summary, and
-`execution_enabled: false`. The start command also requests 1,000 points of
-history to seed the frequency calculator and subscribes to the selected market's
-live ticks. It does not place a contract.
+Rank all ten digit percentages together, not just the barrier-filter set:
 
-Set `TRADEBRIDGE_STRATEGY_FEED_MAX_AGE_SECONDS` to a positive finite value
-appropriate for the observed market update cadence (default: 5 seconds). If
-source freshness, timestamp order, event identity, market, or data integrity
-fails validation, the session blocks rather than using suspect data.
+- Green: highest observed frequency.
+- Blue: second-highest distinct frequency level.
+- Red: lowest observed frequency.
+- Yellow: second-lowest distinct frequency level.
 
-## Tests
+Ties must be preserved; never break them by digit order. If multiple digits tie
+for the lowest frequency, every tied digit is Red and entry is blocked until
+exactly one Red digit remains.
+
+The documented examples define the colour-zone boundary relative to the
+selected barrier:
+
+| Direction candidate | Red and Yellow | Green and Blue |
+|---|---|---|
+| Over B | Digits 0 through B+1 | Digits B+2 through 9 |
+| Under B | Digits B−1 through 9 | Digits 0 through B−2 |
+
+This reproduces Over 3 (Red/Yellow 0–4; Green/Blue 5–9) and Under 6
+(Red/Yellow 5–9; Green/Blue 0–4). The zones move when the selected barrier
+changes. A direction whose colour zone is too small to contain the required
+distinct ranks fails qualification; the other eligible direction is still
+evaluated automatically.
+
+For all Over candidates, Red and Yellow must both be strictly below 9%.
+Under candidates do not have this extra Red/Yellow percentage threshold.
+
+## Percentage threshold
+
+Apply the filter to every digit in that candidate's barrier range. Qualify when
+either:
+- every selected digit is strictly below 9.7%; or
+- at most one selected digit is at or above 9.7%, and that one digit is no
+  greater than 10.5%.
+
+This reproduces the original four-digit rule for Over 3 and Under 6 while
+extending its explicitly stated “only one digit may be at or above 9.7%” rule
+to a selected barrier range of a different size.
+
+## Fifteen-second Red/Green stability
+
+Do not start the timer until a valid snapshot includes all ten digit
+percentages and exactly one Red digit. Red and Green identities must remain
+unchanged continuously for 15 seconds. A change in either identity, a tie at
+the lowest frequency, or a source-event gap longer than the feed freshness
+limit resets the timer. Percentage values may fluctuate: this check is about
+rank identities, not max/min percentage spread.
+
+Every real snapshot is validated for source, active market, freshness,
+increasing source timestamps, unique event identity, and valid percentages.
+Reconnect or barrier change requires a fresh stability interval.
+
+## Percentage trigger and tick sequence
+
+After a sole candidate qualifies, record the lowest-percentage digit inside
+that candidate's barrier-filter set as the trigger digit and record its current
+percentage as the baseline. If that selected digit is tied for the lowest
+percentage in the filter set, do not choose a trigger.
+
+The percentage trigger is a rise of at least 0.1 percentage points from the
+recorded baseline in a subsequent frequency snapshot. The trigger digit does
+not have to appear as an actual tick. Ignore the tick that produced the
+frequency snapshot which detected the rise; only later tick events can count.
+
+After the percentage trigger:
+- **Over B:** require at least two consecutive activity ticks with digits 0–B,
+  followed by a confirmation digit in B+3…9 (the Over 3 example is 6–9).
+- **Under B:** require at least two consecutive activity ticks with digits B–9,
+  followed by a confirmation digit in 0…B−3 (the Under 6 example is 0–3).
+
+Digits outside the activity or confirmation sets break the consecutive
+sequence. For the original examples this yields Over 3 activity 0–3 followed
+by confirmation 6–9, and Under 6 activity 6–9 followed by confirmation 0–3.
+The colour zones and confirmation bands narrow or widen with the selected
+barrier; confirmation must remain on the contract's opposite side. Barriers whose conditions cannot
+produce a valid sequence remain observation-only and cannot submit a signal.
+
+If Red/Green identities, colour positions, or percentage filters become
+invalid before the signal, cancel the pending setup and return to observation.
+
+## Signal, execution, and risk
+
+A completed sequence generates an **entry signal only**. Execution remains
+disabled. The maximum-three-trades-per-cycle limit, settlement-aware
+two-consecutive-loss stop, and purchase/settlement reconciliation must be
+implemented and validated in the execution/risk layer before any trading is
+enabled.
+
+## Selected data window and tests
+
+The strategy uses the user-selected 50, 100, 250, 500, or 1,000 observed-tick
+window. Percentages must agree with the backend-calculated counts and sample
+size. These are not official Deriv Digit Analytics percentages.
+
+Run:
 
 ```powershell
-python -m pytest tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_live_strategy_feed.py -v
+python -m pytest tests/test_digit_strategy.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_feed_health.py tests/test_live_strategy_feed.py -v
 ```
-
-This integration does not add trade execution. Live safety-breach rules,
-purchase/settlement reconciliation, and tie handling remain separate work.
-Real-account execution remains disabled.
