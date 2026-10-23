@@ -116,7 +116,7 @@ class LiveStrategyFeed:
             if self.feed_health:
                 self.feed_health.mark_disconnected("Could not safely extract a last digit from a live tick.")
             return self._status("Strategy blocked: could not safely extract the live tick's last digit.")
-        update = self.session.on_tick(digit)
+        update = self.session.on_tick(digit, now=self._now())
         return self._status(update.reason, update.qualification)
 
     def reject_tick(self, reason: str) -> dict[str, Any] | None:

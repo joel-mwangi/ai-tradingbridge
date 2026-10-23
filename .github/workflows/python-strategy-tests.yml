@@ -7,12 +7,18 @@ on:
       - "tests/test_digit_strategy.py"
       - "tests/test_feed_health.py"
       - "tests/test_strategy_session.py"
+      - "tests/test_live_strategy_feed.py"
+      - "tests/test_market_frequency_adapter.py"
       - ".github/workflows/python-strategy-tests.yml"
       - "requirements.txt"
   pull_request:
     paths:
       - "app/strategy/**"
       - "tests/test_digit_strategy.py"
+      - "tests/test_feed_health.py"
+      - "tests/test_strategy_session.py"
+      - "tests/test_live_strategy_feed.py"
+      - "tests/test_market_frequency_adapter.py"
       - ".github/workflows/python-strategy-tests.yml"
       - "requirements.txt"
   workflow_dispatch:
@@ -35,4 +41,4 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest
       - name: Run digit strategy tests
-        run: python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py -v
+        run: python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_live_strategy_feed.py -v
