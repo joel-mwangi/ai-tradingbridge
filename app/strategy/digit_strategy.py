@@ -1,9 +1,9 @@
-"""Pure rule engine for TradeBridge's explicit Over 3 / Under 6 profiles.
+"""Pure rule engine for barrier-aware TradeBridge digit strategies.
 
-This module ranks all ten observed digit frequencies and evaluates the two
-profiles in the approved strategy specification. It has no transport, database,
-UI, or trade-execution side effects. Percentages are TradeBridge-calculated
-observed-tick frequencies unless a separately verified source is configured.
+The selected barrier configures both candidate directions: Over evaluates digits
+0..barrier and Under evaluates digits barrier..9. Red/Yellow and Green/Blue
+zones remain the documented directional halves (0–4 / 5–9). No transport,
+database, UI, or order-execution side effects belong in this module.
 """
 from __future__ import annotations
 
@@ -14,33 +14,21 @@ from enum import Enum
 from typing import Mapping, Sequence
 
 ALL_DIGITS = frozenset(range(10))
-
-# The two strategy profiles are intentionally explicit. Do not infer a new
-# barrier profile from these sets: Over 6, Under 3, etc. need their own rules.
-OVER_3_FILTER_DIGITS = frozenset({0, 1, 2, 3})
-UNDER_6_FILTER_DIGITS = frozenset({6, 7, 8, 9})
-
-OVER_3_RED_YELLOW_ZONE = frozenset({0, 1, 2, 3, 4})
-OVER_3_GREEN_BLUE_ZONE = frozenset({5, 6, 7, 8, 9})
-UNDER_6_RED_YELLOW_ZONE = frozenset({5, 6, 7, 8, 9})
-UNDER_6_GREEN_BLUE_ZONE = frozenset({0, 1, 2, 3, 4})
-
-OVER_3_ACTIVITY_DIGITS = OVER_3_FILTER_DIGITS
-OVER_3_CONFIRM_DIGITS = frozenset({6, 7, 8, 9})
-UNDER_6_ACTIVITY_DIGITS = UNDER_6_FILTER_DIGITS
-UNDER_6_CONFIRM_DIGITS = frozenset({0, 1, 2, 3})
+LOW_COLOR_ZONE = frozenset(range(5))
+HIGH_COLOR_ZONE = frozenset(range(5, 10))
 
 STABILITY_SECONDS = 15.0
 PERCENTAGE_TRIGGER_RISE = 0.1
-OVER_3_RED_YELLOW_MAX_PERCENT = 9.0
+OVER_RED_YELLOW_MAX_PERCENT = 9.0
 FILTER_LIMIT = 9.7
 FILTER_EXCEPTION_MAX = 10.5
 MIN_ACTIVITY_TICKS = 2
+DEFAULT_BARRIER = 5
 
 
 class Group(str, Enum):
-    UNDER = "under"  # Explicitly means the documented Under 6 profile.
-    OVER = "over"    # Explicitly means the documented Over 3 profile.
+    UNDER = "under"
+    OVER = "over"
 
 
 class Decision(str, Enum):
@@ -91,17 +79,45 @@ class QualificationResult:
     reason: str = ""
 
 
-def digits_for(group: Group) -> frozenset[int]:
-    """Return the percentage-filter/trigger digits for the documented profile."""
-    return UNDER_6_FILTER_DIGITS if group is Group.UNDER else OVER_3_FILTER_DIGITS
+def validate_barrier(barrier: object) -> bool:
+    """Accept a digit barrier 0–9; each direction applies its own valid range."""
+    return type(barrier) is int and barrier in ALL_DIGITS
 
 
-def activity_digits_for(group: Group) -> frozenset[int]:
-    return UNDER_6_ACTIVITY_DIGITS if group is Group.UNDER else OVER_3_ACTIVITY_DIGITS
+def barrier_valid_for(group: Group, barrier: int) -> bool:
+    """Deriv digit contracts cannot win at Over 9 or Under 0."""
+    if not validate_barrier(barrier):
+        return False
+    if group is Group.OVER:
+        return barrier <= 8
+    return barrier >= 1
 
 
-def confirmation_digits_for(group: Group) -> frozenset[int]:
-    return UNDER_6_CONFIRM_DIGITS if group is Group.UNDER else OVER_3_CONFIRM_DIGITS
+def digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
+    """Digits evaluated by the selected barrier: Over <= B, Under >= B."""
+    if not validate_barrier(barrier):
+        raise ValueError("Barrier must be an integer digit from 0 to 9.")
+    if group is Group.OVER:
+        return frozenset(range(0, barrier + 1))
+    return frozenset(range(barrier, 10))
+
+
+def activity_digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
+    """The selected direction's barrier-dependent activity class."""
+    return digits_for(group, barrier)
+
+
+def confirmation_digits_for(group: Group, barrier: int = DEFAULT_BARRIER) -> frozenset[int]:
+    """The opposite-side confirmation class, preserving the example profiles.
+
+    Over 3 confirms on 6–9; Over B uses digits above its barrier within 6–9.
+    Under 6 confirms on 0–3; Under B uses digits below its barrier within 0–3.
+    """
+    if not validate_barrier(barrier):
+        raise ValueError("Barrier must be an integer digit from 0 to 9.")
+    if group is Group.OVER:
+        return frozenset(range(max(barrier + 1, 6), 10))
+    return frozenset(range(0, min(barrier, 4)))
 
 
 def _valid_percentage(value: object) -> bool:
@@ -124,11 +140,10 @@ def _valid_percentage_map(percentages: Mapping[int, float]) -> bool:
 
 
 def rank_bar_colors(percentages: Mapping[int, float]) -> BarColorRanks:
-    """Rank percentages across digits 0–9, preserving every frequency tie.
+    """Rank percentages across digits 0–9, preserving ties in each rank.
 
-    Rank order is based on distinct percentage levels (dense ranks): lowest is
-    Red, next distinct level Yellow, highest Green, and previous distinct level
-    Blue. A tied level includes every digit at that percentage.
+    Dense ranks use distinct percentage levels: lowest is Red, next distinct
+    level Yellow, highest Green, and the preceding distinct level Blue.
     """
     if not _valid_percentage_map(percentages):
         raise ValueError("All ten digit percentages must be finite values from 0 to 100.")
@@ -139,7 +154,6 @@ def rank_bar_colors(percentages: Mapping[int, float]) -> BarColorRanks:
     high = levels[-1]
     second_low = levels[1] if len(levels) >= 2 else None
     second_high = levels[-2] if len(levels) >= 2 else None
-
     return BarColorRanks(
         red=frozenset(d for d, value in numeric.items() if value == low),
         yellow=frozenset(d for d, value in numeric.items() if second_low is not None and value == second_low),
@@ -149,30 +163,37 @@ def rank_bar_colors(percentages: Mapping[int, float]) -> BarColorRanks:
 
 
 def evaluate_thresholds(
-    percentages: Mapping[int, float], group: Group
+    percentages: Mapping[int, float],
+    group: Group,
+    barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Apply the profile's four-digit <9.7% / single <=10.5% exception."""
-    digits = digits_for(group)
+    """Allow at most one selected digit >=9.7%, and it must be <=10.5%."""
+    if not validate_barrier(barrier):
+        return False, "Barrier must be an integer digit from 0 to 9."
+    if not barrier_valid_for(group, barrier):
+        return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
+    digits = digits_for(group, barrier)
     if not digits.issubset(percentages):
-        return False, "Missing one or more profile-filter percentages."
+        return False, "Missing one or more barrier-filter percentages."
     if any(not _valid_percentage(percentages[d]) for d in digits):
-        return False, "Profile percentages must be finite numbers between 0 and 100."
+        return False, "Barrier-filter percentages must be finite numbers between 0 and 100."
 
-    values = [float(percentages[d]) for d in sorted(digits)]
-    below_limit = sum(value < FILTER_LIMIT for value in values)
-    if below_limit == 4:
-        return True, "All four profile digits are strictly below 9.7%."
-    if below_limit == 3:
-        exception_values = [value for value in values if value >= FILTER_LIMIT]
-        if len(exception_values) == 1 and exception_values[0] <= FILTER_EXCEPTION_MAX:
-            return True, "Three digits are below 9.7%; the remaining digit is <= 10.5%."
-    return False, "Percentage filter failed: require four digits <9.7%, or three <9.7% with the remaining digit <=10.5%."
+    exceptions = [float(percentages[d]) for d in digits if float(percentages[d]) >= FILTER_LIMIT]
+    if not exceptions:
+        return True, f"All {len(digits)} digits in the {group.value.title()} {barrier} filter are below 9.7%."
+    if len(exceptions) == 1 and exceptions[0] <= FILTER_EXCEPTION_MAX:
+        return True, f"Only one selected digit is >=9.7%, and it is <=10.5%."
+    return False, "Percentage filter failed: at most one selected digit may be >=9.7%, and it must be <=10.5%."
 
 
 def evaluate_color_positions(
-    percentages: Mapping[int, float], group: Group
+    percentages: Mapping[int, float],
+    group: Group,
+    barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Enforce the documented colour zones and Over 3's extra <9% filter."""
+    """Apply direction-specific colour zones and the Over-only <9% rule."""
+    if not barrier_valid_for(group, barrier):
+        return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
     try:
         ranks = rank_bar_colors(percentages)
     except ValueError as exc:
@@ -184,23 +205,19 @@ def evaluate_color_positions(
         return False, "Colour positions cannot be qualified without distinct second-lowest and second-highest ranks."
 
     if group is Group.OVER:
-        red_yellow_zone = OVER_3_RED_YELLOW_ZONE
-        green_blue_zone = OVER_3_GREEN_BLUE_ZONE
-        if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
-            return False, "Over 3 requires Red and Yellow among digits 0–4."
-        if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
-            return False, "Over 3 requires Green and Blue among digits 5–9."
-        if any(float(percentages[d]) >= OVER_3_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
-            return False, "Over 3 requires both Red and Yellow percentages to be strictly below 9%."
-        return True, "Over 3 colour zones pass; Red and Yellow are <9%."
+        if not ranks.red.issubset(LOW_COLOR_ZONE) or not ranks.yellow.issubset(LOW_COLOR_ZONE):
+            return False, "Over requires Red and Yellow among digits 0–4."
+        if not ranks.green.issubset(HIGH_COLOR_ZONE) or not ranks.blue.issubset(HIGH_COLOR_ZONE):
+            return False, "Over requires Green and Blue among digits 5–9."
+        if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
+            return False, "Over requires both Red and Yellow percentages to be strictly below 9%."
+        return True, f"Over {barrier} colour positions pass; Red and Yellow are <9%."
 
-    red_yellow_zone = UNDER_6_RED_YELLOW_ZONE
-    green_blue_zone = UNDER_6_GREEN_BLUE_ZONE
-    if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
-        return False, "Under 6 requires Red and Yellow among digits 5–9."
-    if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
-        return False, "Under 6 requires Green and Blue among digits 0–4."
-    return True, "Under 6 colour zones pass; no additional Red/Yellow <9% filter applies."
+    if not ranks.red.issubset(HIGH_COLOR_ZONE) or not ranks.yellow.issubset(HIGH_COLOR_ZONE):
+        return False, "Under requires Red and Yellow among digits 5–9."
+    if not ranks.green.issubset(LOW_COLOR_ZONE) or not ranks.blue.issubset(LOW_COLOR_ZONE):
+        return False, "Under requires Green and Blue among digits 0–4."
+    return True, f"Under {barrier} colour positions pass; no additional Red/Yellow <9% threshold applies."
 
 
 def evaluate_stability(
@@ -208,12 +225,7 @@ def evaluate_stability(
     group: Group | None = None,
     max_spread: float | None = None,
 ) -> tuple[bool, str]:
-    """Check unchanged Red/Green identity sets across snapshots.
-
-    The legacy group and max_spread arguments are accepted for compatibility,
-    but stability is identity-based, not a percentage-spread calculation.
-    Elapsed time is enforced by the timestamped validator/session state machine.
-    """
+    """Check unchanged Red/Green identity sets, not percentage spread."""
     del group, max_spread
     if len(observations) < 2:
         return False, "At least two real percentage snapshots are required to check Red/Green stability."
@@ -233,8 +245,10 @@ def evaluate_stability(
     return True, "Red and Green digit identities remained unchanged across the supplied snapshots."
 
 
-def _trigger_digit(percentages: Mapping[int, float], group: Group) -> int | None:
-    digits = digits_for(group)
+def _trigger_digit(
+    percentages: Mapping[int, float], group: Group, barrier: int
+) -> int | None:
+    digits = digits_for(group, barrier)
     values = {digit: float(percentages[digit]) for digit in digits}
     low = min(values.values())
     lowest = [digit for digit, value in values.items() if value == low]
@@ -245,27 +259,35 @@ def evaluate_group(
     percentages: Mapping[int, float],
     observations: Sequence[Mapping[int, float]],
     group: Group,
+    barrier: int = DEFAULT_BARRIER,
 ) -> GroupEvaluation:
-    threshold_ok, threshold_reason = evaluate_thresholds(percentages, group)
+    threshold_ok, threshold_reason = evaluate_thresholds(percentages, group, barrier)
     stability_ok, stability_reason = evaluate_stability(observations)
-    color_ok, color_reason = evaluate_color_positions(percentages, group)
-    trigger_digit = _trigger_digit(percentages, group) if _valid_percentage_map(percentages) else None
+    color_ok, color_reason = evaluate_color_positions(percentages, group, barrier)
+    trigger_digit = (
+        _trigger_digit(percentages, group, barrier)
+        if validate_barrier(barrier) and barrier_valid_for(group, barrier) and _valid_percentage_map(percentages)
+        else None
+    )
     trigger_ok = trigger_digit is not None
     trigger_reason = (
-        f"Unique trigger digit {trigger_digit} selected from profile digits."
+        f"Unique trigger digit {trigger_digit} selected from the {group.value.title()} {barrier} digit range."
         if trigger_ok
-        else "Trigger blocked: the lowest percentage within the profile digits is tied."
+        else "Trigger blocked: the barrier range is invalid or its lowest-frequency digit is tied."
     )
     qualifies = threshold_ok and stability_ok and color_ok and trigger_ok
-    reasons = [threshold_reason, stability_reason, color_reason, trigger_reason]
-    return GroupEvaluation(group, threshold_ok, stability_ok, color_ok, trigger_ok, qualifies, " ".join(reasons))
+    return GroupEvaluation(
+        group, threshold_ok, stability_ok, color_ok, trigger_ok, qualifies,
+        " ".join((threshold_reason, stability_reason, color_reason, trigger_reason)),
+    )
 
 
 def choose_group(
     percentages: Mapping[int, float],
     observations: Sequence[Mapping[int, float]],
+    barrier: int = DEFAULT_BARRIER,
 ) -> QualificationResult:
-    """Automatically select the sole qualifying explicit profile; never break ties."""
+    """Automatically select only the sole qualifying direction for this barrier."""
     invalid_under = GroupEvaluation(Group.UNDER, False, False, False, False, False, "Incomplete or invalid data.")
     invalid_over = GroupEvaluation(Group.OVER, False, False, False, False, False, "Incomplete or invalid data.")
     if not _valid_percentage_map(percentages):
@@ -273,32 +295,36 @@ def choose_group(
             Decision.INVALID_DATA, invalid_under, invalid_over,
             reason="All ten current digit percentages must be finite values from 0 to 100.",
         )
+    if not validate_barrier(barrier):
+        return QualificationResult(
+            Decision.INVALID_DATA, invalid_under, invalid_over,
+            reason="Selected barrier must be an integer digit from 0 to 9.",
+        )
 
-    under = evaluate_group(percentages, observations, Group.UNDER)
-    over = evaluate_group(percentages, observations, Group.OVER)
+    under = evaluate_group(percentages, observations, Group.UNDER, barrier)
+    over = evaluate_group(percentages, observations, Group.OVER, barrier)
     if under.qualifies and over.qualifies:
         return QualificationResult(
             Decision.WAIT_BOTH_QUALIFY, under, over,
-            reason="Both explicit profiles qualify; do not choose a direction arbitrarily.",
+            reason="Both directions qualify for the selected barrier; continue observing instead of choosing arbitrarily.",
         )
     if not under.qualifies and not over.qualifies:
         return QualificationResult(
             Decision.OBSERVE, under, over,
-            reason="Neither explicit profile qualifies; continue observing.",
+            reason=f"Neither direction qualifies for barrier {barrier}; continue observing.",
         )
 
     group = Group.UNDER if under.qualifies else Group.OVER
-    digit = _trigger_digit(percentages, group)
+    digit = _trigger_digit(percentages, group, barrier)
     if digit is None:
-        # Defensive guard: evaluate_group should already have failed this case.
         return QualificationResult(
             Decision.OBSERVE, under, over,
-            reason="The profile's lowest-frequency trigger digit is tied; continue observing.",
+            reason="The lowest-frequency digit in the selected barrier range is tied; continue observing.",
         )
     decision = Decision.SELECT_UNDER if group is Group.UNDER else Decision.SELECT_OVER
     return QualificationResult(
         decision, under, over, trigger_digit=digit,
-        reason=f"{group.value.title()} profile alone qualifies; automatic direction selected.",
+        reason=f"{group.value.title().title()} {barrier} alone qualifies; direction selected automatically.",
     )
 
 
@@ -361,6 +387,7 @@ def choose_group_from_timestamped_observations(
     started_at: datetime,
     evaluated_at: datetime,
     window_seconds: float = STABILITY_SECONDS,
+    barrier: int = DEFAULT_BARRIER,
 ) -> QualificationResult:
     """Validate elapsed time, source timestamps, rankings, filters, and direction."""
     valid, reason = validate_initial_observation_window(
@@ -372,35 +399,41 @@ def choose_group_from_timestamped_observations(
         return QualificationResult(Decision.INVALID_DATA, invalid_under, invalid_over, reason=reason)
 
     snapshots = [observation.percentages for observation in observations]
-    return choose_group(snapshots[-1], snapshots)
+    return choose_group(snapshots[-1], snapshots, barrier)
 
 
 @dataclass
 class PatternTracker:
-    """After a percentage trigger, require 2+ activity digits then a confirmation digit.
+    """After a percentage trigger, require 2+ activity digits then confirmation.
 
     The trigger is a percentage increase, not the trigger digit appearing as a
     tick. The caller arms this tracker only after the trigger percentage rises.
     """
     selected_group: Group
     trigger_digit: int
+    barrier: int | None = None
     required_activity_ticks: int = MIN_ACTIVITY_TICKS
     progress: int = 0
     completed_patterns: int = 0
     armed: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.trigger_digit) is not int or self.trigger_digit not in digits_for(self.selected_group):
-            raise ValueError("Trigger digit must be an integer belonging to the selected profile's four digits.")
-        if type(self.required_activity_ticks) is not int or self.required_activity_ticks < 2:
+        if self.barrier is None:
+            self.barrier = 3 if self.selected_group is Group.OVER else 6
+        if not validate_barrier(self.barrier) or not barrier_valid_for(self.selected_group, self.barrier):
+            raise ValueError("Barrier is not valid for the selected direction.")
+        if type(self.trigger_digit) is not int or self.trigger_digit not in digits_for(self.selected_group, self.barrier):
+            raise ValueError("Trigger digit must belong to the selected barrier's digit range.")
+        if type(self.required_activity_ticks) is not int or self.required_activity_ticks < MIN_ACTIVITY_TICKS:
             raise ValueError("At least two activity ticks are required.")
-    
+
     def arm(self) -> None:
         self.progress = 0
         self.armed = True
 
     def reset(self) -> None:
         self.progress = 0
+        self.armed = False
 
     def on_tick(self, digit: int) -> bool:
         if type(digit) is not int or digit not in ALL_DIGITS:
@@ -408,8 +441,8 @@ class PatternTracker:
         if not self.armed:
             return False
 
-        activity = activity_digits_for(self.selected_group)
-        confirmation = confirmation_digits_for(self.selected_group)
+        activity = activity_digits_for(self.selected_group, self.barrier)
+        confirmation = confirmation_digits_for(self.selected_group, self.barrier)
         if digit in activity:
             self.progress += 1
             return False
@@ -422,6 +455,6 @@ class PatternTracker:
             self.progress = 0
             return False
 
-        # Middle digits (4 and 5) break the consecutive activity sequence.
+        # Digits outside the activity/confirmation bands break the sequence.
         self.progress = 0
         return False
