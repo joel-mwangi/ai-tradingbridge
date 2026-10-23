@@ -91,7 +91,19 @@ class DigitStrategySession:
         self.skip_current_tick = False
         self.signal_generated = False
 
-    def start(self, started_at: datetime) -> SessionUpdate:
+    def start(
+        self,
+        started_at: datetime,
+        initial_percentages: dict[int, float] | None = None,
+        initial_observed_at: datetime | None = None,
+    ) -> SessionUpdate:
+        """Start a fresh run, anchoring stability to Run only when identities are known.
+
+        If a fresh pre-existing market snapshot is supplied, its Red/Green identities
+        are captured at Run and the 15-second clock starts immediately. Without a
+        fresh snapshot, identities are unknowable at click time, so the clock starts
+        at the first valid snapshot instead of falsely counting unobserved time.
+        """
         if not isinstance(started_at, datetime) or started_at.tzinfo is None or started_at.utcoffset() is None:
             raise ValueError("Session start must be timezone-aware.")
         self.started_at = started_at.astimezone(timezone.utc)
@@ -103,9 +115,32 @@ class DigitStrategySession:
         self.bar_colors = None
         self.qualification = None
         self.state = SessionState.OBSERVING
+
+        initial_is_fresh = (
+            isinstance(initial_observed_at, datetime)
+            and initial_observed_at.tzinfo is not None
+            and initial_observed_at.utcoffset() is not None
+            and initial_observed_at.astimezone(timezone.utc) <= self.started_at
+            and self.started_at - initial_observed_at.astimezone(timezone.utc) <= self.feed_health.max_age
+            and isinstance(initial_percentages, dict)
+        )
+        if initial_is_fresh:
+            try:
+                ranks = rank_bar_colors(initial_percentages)
+            except (TypeError, ValueError):
+                ranks = None
+            if ranks is not None and len(ranks.red) == 1:
+                self.bar_colors = ranks
+                self._rank_signature = ranks.stability_signature
+                self.stable_since = self.started_at
+                return SessionUpdate(
+                    self.state,
+                    "Fresh Red/Green identities captured at Run; the 15-second stability timer started.",
+                )
+
         return SessionUpdate(
             self.state,
-            "Fresh session started. Waiting for valid live frequency data before starting Red/Green stability.",
+            "Run started, but no fresh initial Red/Green snapshot was available. The 15-second timer will start at the first valid snapshot; unobserved time will not count.",
         )
 
     def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
