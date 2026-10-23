@@ -416,7 +416,7 @@ def choose_group_from_timestamped_observations(
 
 @dataclass
 class PatternTracker:
-    """After a percentage trigger, require 2+ activity digits then confirmation.
+    """After a percentage trigger, require one or more consecutive activity digits then confirmation.
 
     The trigger is a percentage increase, not the trigger digit appearing as a
     tick. The caller arms this tracker only after the trigger percentage rises.
