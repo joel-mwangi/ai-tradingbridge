@@ -11,6 +11,7 @@ from app.strategy.digit_strategy import (
     choose_group_from_timestamped_observations,
     evaluate_stability,
     evaluate_thresholds,
+    evaluate_color_positions,
     rank_bar_colors,
     validate_initial_observation_window,
 )
@@ -133,15 +134,11 @@ class AutomaticSelectionTests(unittest.TestCase):
 
     def test_under6_red_and_yellow_must_both_be_strictly_below_9_percent(self):
         p = under6_percentages()
-        self.assertTrue(__import__("app.strategy.digit_strategy", fromlist=["evaluate_color_positions"]).evaluate_color_positions(
-            p, Group.UNDER, barrier=6
-        )[0])
+        self.assertTrue(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
 
         # The second-lowest (Yellow) bar is exactly 9%; strict threshold must fail.
         p[5] = 9.0
-        self.assertFalse(__import__("app.strategy.digit_strategy", fromlist=["evaluate_color_positions"]).evaluate_color_positions(
-            p, Group.UNDER, barrier=6
-        )[0])
+        self.assertFalse(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
 
     def test_under6_red_exactly_9_percent_fails(self):
         p = under6_percentages()
