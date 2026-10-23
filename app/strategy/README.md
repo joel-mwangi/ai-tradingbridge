@@ -7,7 +7,7 @@ It does not submit trades.
 - `digit_strategy.py`: thresholds, stability spread, group selection, trigger digit, and pattern recognition.
 - `feed_health.py`: fail-closed source/market/freshness/order/duplicate validation.
 - `market_frequency_adapter.py`: normalizes backend `digit_frequency` payloads.
-- `session.py`: fresh-session lifecycle, initial 10-second observation window, rolling 10-second reassessment, group selection, and pattern tracking.
+- `session.py`: fresh-session lifecycle, initial 15-second Red/Green stability window, rolling reassessment, group selection, and pattern tracking.
 - `live_feed.py`: binds actual live percentage snapshots and ticks to one isolated strategy session; reports state only.
 
 ## Percentage source
@@ -40,7 +40,7 @@ which are handled by TradeBridge and are not forwarded to Deriv:
 
 Start creates a fresh per-connection session, requests recent tick history to
 seed the frequency calculator, subscribes to live ticks for the chosen market,
-and begins the 10-second observation window. Historical seed data is never
+and begins the 15-second Red/Green stability window. Historical seed data is never
 counted as a post-Start observation. Only subsequent live tick events with
 valid frequency snapshots can advance the strategy.
 
@@ -67,5 +67,6 @@ python -m pytest tests/test_market_frequency_adapter.py tests/test_feed_health.p
 - Live safety-breach predicate.
 - Trade submission/settlement and purchase-acknowledgement reconciliation.
 - Tie-break for equal lowest percentages.
+- Real-money execution, purchase acknowledgements, and settlement reconciliation.
 
 No trade execution is implemented here. Real-account execution remains disabled.
