@@ -39,22 +39,22 @@ class PercentageThresholdTests(unittest.TestCase):
     def test_three_below_9_7_and_one_at_9_7_pass(self):
         p = over3_percentages()
         p.update({0: 9.1, 1: 9.2, 2: 9.6, 3: 9.7})
-        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_one_remaining_digit_at_10_5_passes(self):
         p = over3_percentages()
         p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.5})
-        self.assertTrue(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_one_remaining_digit_above_10_5_fails(self):
         p = over3_percentages()
         p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.6})
-        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_two_digits_at_or_above_9_7_fail(self):
         p = over3_percentages()
         p.update({0: 9.7, 1: 9.8, 2: 8.0, 3: 8.5})
-        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_under_6_checks_only_digits_6_to_9(self):
         p = under6_percentages()
@@ -64,12 +64,12 @@ class PercentageThresholdTests(unittest.TestCase):
     def test_nan_in_filter_digits_fails(self):
         p = over3_percentages()
         p[2] = math.nan
-        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_boolean_is_not_a_percentage(self):
         p = over3_percentages()
         p[1] = True
-        self.assertFalse(evaluate_thresholds(p, Group.OVER)[0])
+        self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
 
 class BarColorTests(unittest.TestCase):
@@ -118,7 +118,7 @@ class AutomaticSelectionTests(unittest.TestCase):
 
     def test_under6_qualifies_and_chooses_trigger_digit_automatically(self):
         p = under6_percentages()
-        result = choose_group(p, [p, p])
+        result = choose_group(p, [p, p], barrier=6)
         self.assertEqual(result.decision, Decision.SELECT_UNDER)
         self.assertEqual(result.trigger_digit, 6)
         self.assertTrue(result.under.threshold_passes)
@@ -128,13 +128,13 @@ class AutomaticSelectionTests(unittest.TestCase):
     def test_over3_red_and_yellow_must_both_be_below_9_percent(self):
         p = over3_percentages()
         p.update({1: 9.0, 2: 9.1, 3: 9.2, 4: 9.3})  # Yellow is exactly 9%.
-        result = choose_group(p, [p, p])
+        result = choose_group(p, [p, p], barrier=3)
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
     def test_red_tie_prevents_arbitrary_selection(self):
         p = over3_percentages()
         p[1] = p[0]
-        result = choose_group(p, [p, p])
+        result = choose_group(p, [p, p], barrier=3)
         self.assertNotEqual(result.decision, Decision.SELECT_OVER)
 
     def test_changed_red_or_green_identity_prevents_selection(self):
@@ -148,7 +148,7 @@ class AutomaticSelectionTests(unittest.TestCase):
     def test_invalid_percentage_anywhere_rejects_full_rankings(self):
         p = over3_percentages()
         p[7] = math.inf
-        result = choose_group(p, [p, p])
+        result = choose_group(p, [p, p], barrier=3)
         self.assertEqual(result.decision, Decision.INVALID_DATA)
 
 
