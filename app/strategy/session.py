@@ -1,4 +1,4 @@
-"""Side-effect-free state machine for TradeBridge's Over 3 / Under 6 strategy."""
+"""Side-effect-free state machine for barrier-generalized TradeBridge digit strategies."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
