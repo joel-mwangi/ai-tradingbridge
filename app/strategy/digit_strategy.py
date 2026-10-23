@@ -473,7 +473,7 @@ class PatternTracker:
         if type(self.trigger_digit) is not int or self.trigger_digit not in digits_for(self.selected_group, self.barrier):
             raise ValueError("Trigger digit must belong to the selected barrier's digit range.")
         if type(self.required_activity_ticks) is not int or self.required_activity_ticks < MIN_ACTIVITY_TICKS:
-            raise ValueError("At least two activity ticks are required.")
+            raise ValueError("At least one activity tick is required before confirmation.")
 
     def arm(self) -> None:
         self.progress = 0
