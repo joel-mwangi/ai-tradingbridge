@@ -174,3 +174,12 @@ class DigitStrategySessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    def test_user_selected_direction_is_not_replaced_by_other_qualifying_direction(self):
+        self.session = DigitStrategySession(self.monitor, barrier=3, requested_group=Group.UNDER)
+        self.session.start(self.start)
+        self.add(1, over3_percentages(), "direction1")
+        self.add(8, over3_percentages(), "direction2")
+        update = self.add(16, over3_percentages(), "direction3")
+        self.assertNotEqual(update.state, SessionState.SELECTED)
+        self.assertIsNone(self.session.selected_group)
+        self.assertIn("other direction will not be substituted", update.reason)
