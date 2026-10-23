@@ -24,7 +24,7 @@ class DigitStrategySessionTests(unittest.TestCase):
     def setUp(self):
         self.start = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
         self.monitor = PercentageFeedHealth("verified-feed-v1", "1HZ100V", 20.0)
-        self.session = DigitStrategySession(self.monitor)
+        self.session = DigitStrategySession(self.monitor, barrier=3)
         self.session.start(self.start)
 
     def add(self, seconds, percentages, event_id):
@@ -73,6 +73,8 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertFalse(self.session.percentage_triggered)
 
     def test_selects_under6_automatically_after_stability(self):
+        self.session = DigitStrategySession(self.monitor, barrier=6)
+        self.session.start(self.start)
         self.add(1, under6_percentages(), "u1")
         self.add(8, under6_percentages(), "u2")
         update = self.add(16, under6_percentages(), "u3")
