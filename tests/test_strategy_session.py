@@ -120,6 +120,18 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(self.session.selected_group, Group.UNDER)
         self.assertEqual(self.session.trigger_digit, 6)
 
+    def test_under6_second_lowest_candidate_can_trigger(self):
+        self.session = DigitStrategySession(self.monitor, barrier=6)
+        self.session.start(self.start)
+        self.add(1, under6_percentages(), "u-second-1")
+        self.add(8, under6_percentages(), "u-second-2")
+        self.add(16, under6_percentages(), "u-second-3")
+        increased = under6_percentages()
+        increased[7] = 8.3
+        update = self.add(17, increased, "u-second-trigger")
+        self.assertTrue(update.percentage_triggered)
+        self.assertEqual(self.session.trigger_digit, 7)
+
     def test_over4_can_select_after_stability_using_generalized_rules(self):
         self.session = DigitStrategySession(self.monitor, barrier=4)
         self.session.start(self.start)
@@ -179,6 +191,23 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertTrue(update.pattern_completed)
         self.assertTrue(self.session.signal_generated)
         self.assertEqual(self.session.state, SessionState.SELECTED)
+
+    def test_trigger_requires_exactly_one_tenth_percentage_point(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.2
+        update = self.add(17, increased, "too-large-trigger")
+        self.assertFalse(update.percentage_triggered)
+        self.assertFalse(self.session.percentage_triggered)
+
+    def test_simultaneous_exact_triggers_choose_lowest_percentage(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1
+        increased[1] = 8.3
+        update = self.add(17, increased, "same-size-triggers")
+        self.assertTrue(update.percentage_triggered)
+        self.assertEqual(self.session.trigger_digit, 0)
 
     def test_over3_second_lowest_digit_percentage_can_trigger(self):
         self.start_stable_over3()

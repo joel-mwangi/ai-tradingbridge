@@ -313,14 +313,14 @@ class DigitStrategySession:
                 if not self.percentage_triggered and self.trigger_baselines:
                     risen_digits = [
                         digit for digit, baseline in self.trigger_baselines.items()
-                        if float(percentages[digit]) + 1e-9 >= baseline + PERCENTAGE_TRIGGER_RISE
+                        if abs(float(percentages[digit]) - baseline - PERCENTAGE_TRIGGER_RISE) <= 1e-9
                     ]
                     if risen_digits:
-                        # If both candidate digits rise in the same snapshot, use
-                        # the larger increase; stable digit order breaks exact ties.
-                        self.trigger_digit = max(
+                        # If multiple candidates rise by exactly 0.1, use the
+                        # candidate with the lowest baseline percentage.
+                        self.trigger_digit = min(
                             risen_digits,
-                            key=lambda digit: (float(percentages[digit]) - self.trigger_baselines[digit], -digit),
+                            key=lambda digit: (self.trigger_baselines[digit], digit),
                         )
                         self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
                         self.percentage_triggered = True
@@ -333,7 +333,7 @@ class DigitStrategySession:
                         self.skip_current_tick = True
                         return SessionUpdate(
                             self.state,
-                            f"Trigger digit {self.trigger_digit} rose by at least 0.1 percentage points; now waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
+                            f"Trigger digit {self.trigger_digit} rose by exactly 0.1 percentage points; now waiting for one or more consecutive activity ticks and an opposite-zone confirmation.",
                             self.qualification,
                             percentage_triggered=True,
                         )
@@ -372,14 +372,14 @@ class DigitStrategySession:
     def _requested_trigger_digits(self, percentages: dict[int, float] | object, group: Group) -> tuple[int, ...]:
         """Return trigger candidates derived from the selected direction and barrier.
 
-        Over monitors digits at either of the two lowest distinct percentage
-        levels within 0..B. Under monitors the lowest distinct level within B..9.
+        Both directions monitor digits at either of the two lowest distinct
+        percentage levels within their selected barrier range.
         Preserve ties instead of silently breaking them by digit order.
         """
         selected = digits_for(group, self.barrier)
         values = {digit: float(percentages[digit]) for digit in selected}  # type: ignore[index]
         levels = sorted(set(values.values()))
-        candidate_levels = set(levels[:2] if group is Group.OVER else levels[:1])
+        candidate_levels = set(levels[:2])
         return tuple(sorted(digit for digit, value in values.items() if value in candidate_levels))
 
     def _activate_candidate(
@@ -440,7 +440,7 @@ class DigitStrategySession:
         if not self.percentage_triggered:
             return SessionUpdate(
                 self.state,
-                "Waiting for the selected trigger digit's percentage to rise by 0.1 percentage points.",
+                "Waiting for the selected trigger digit's percentage to rise by exactly 0.1 percentage points.",
                 self.qualification,
             )
         try:

@@ -10,7 +10,7 @@ This document is authoritative for the digit strategy. Implementations must not 
 4. If Red or Green changes at any point, cancel the pending setup and restart a fresh 15-second stability window. Do not carry elapsed time, a candidate, a percentage baseline, or an entry sequence across the reset.
 5. Use the user's selected tick window for all digit percentages and colour rankings. Colours are recalculated from the ten digit frequencies: Green = most frequent, Blue = second most frequent, Red = least frequent, Yellow = second least frequent. Ties must not be broken by digit order; exactly one Red digit is required.
 6. After stability, every applicable qualification must pass: barrier-specific percentage thresholds, colour positions, exactly one Red bar, the percentage-increase trigger, and the required subsequent tick sequence. Qualification alone is not an entry signal.
-7. The trigger is an increase of 0.1 percentage point (for example, 8.4% to 8.5%) in the specified trigger digit's frequency percentage. Only ticks after the tick/event that detected the increase count toward the sequence.
+7. The trigger is an increase of exactly 0.1 percentage point (for example, 8.4% to 8.5%) in the specified trigger digit's frequency percentage. An increase of 0.2 or more does not trigger. If multiple candidates increase by exactly 0.1 in the same snapshot, choose the candidate with the lowest baseline percentage. Only ticks after the tick/event that detected the increase count toward the sequence.
 8. A valid completed tick sequence creates one entry signal. That signal can start one execution sequence of up to three sequential buys. Wait for each contract to settle and reconcile before submitting the next.
 9. Stop the sequence immediately after two consecutive settled losses. A win or breakeven resets the consecutive-loss count. Never submit buy 3 after two consecutive losses. Never submit more than three buys from one signal.
 10. When the sequence completes or is stopped by two consecutive losses, stop the strategy session. Do not restart automatically. The user must click Run to create a fresh session and signal.
@@ -26,7 +26,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 - **Percentage set:** digits `0..B` (inclusive), containing `B+1` digits. At least `B` of these digits must be strictly below 9.7%; the one remaining digit, if any, must be strictly below 10.5%. If all selected digits are below 9.7%, the rule passes. This is the generalized interpretation of Over 3 and Over 4.
 - **Colour positions:** Red and Yellow must be within digits `0..B+1` and each strictly below 9%; Green and Blue must be within digits `B+2..9`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
-- **Trigger:** monitor digits in `0..B` at either of the two lowest distinct frequency-percentage levels. A candidate triggers when its percentage rises by at least 0.1 percentage point.
+- **Trigger:** monitor digits in `0..B` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.
 - **Activity sequence:** after the percentage trigger, require one or more ticks in `0..B`, followed by a confirmation tick in `B+3..9`.
 - **Valid signal range:** the selected barrier must be valid for Over and the confirmation set `B+3..9` must be non-empty. If the formula cannot produce a confirmation digit, keep the session observation-only.
 
@@ -35,7 +35,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 - **Percentage set:** digits `B..9` (inclusive), containing `10-B` digits. At least `(10-B)-1` digits must be strictly below 9.7%. The remaining digit, if any, has no separate 10.5% cap; this follows the Under 6 example.
 - **Colour positions:** Red and Yellow must be within digits `B-1..9` and each strictly below 9%; Green and Blue must be within digits `0..B-2`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
-- **Trigger:** monitor the least-frequency distinct level within digits `B..9`. A candidate triggers when its percentage rises by at least 0.1 percentage point.
+- **Trigger:** monitor digits in `B..9` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.
 - **Activity sequence:** after the percentage trigger, require one or more ticks in `B..9`, followed by a confirmation tick in `0..B-3`.
 - **Valid signal range:** the selected barrier must be valid for Under and the confirmation set `0..B-3` must be non-empty. If the formula cannot produce a confirmation digit, keep the session observation-only.
 

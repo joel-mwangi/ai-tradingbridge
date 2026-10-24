@@ -283,9 +283,9 @@ def _trigger_digit(
     ordered_levels = sorted(set(values.values()))
     if not ordered_levels:
         return None
-    # Over monitors either of the two least-frequency levels. Under monitors
-    # only the least-frequency level. The session tracks every tied candidate.
-    candidate_levels = set(ordered_levels[:2] if group is Group.OVER else ordered_levels[:1])
+    # Both directions monitor either of the two least-frequency levels. The
+    # session tracks every candidate at those levels.
+    candidate_levels = set(ordered_levels[:2])
     candidates = [digit for digit, value in values.items() if value in candidate_levels]
     return min(candidates) if candidates else None
 
