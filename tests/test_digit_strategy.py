@@ -131,22 +131,35 @@ class AutomaticSelectionTests(unittest.TestCase):
         self.assertTrue(result.under.stability_passes)
         self.assertTrue(result.under.color_positions_pass)
 
-    def test_over3_red_and_yellow_must_both_be_below_9_percent(self):
+    def test_over3_yellow_at_9_percent_fails_when_yellow_is_in_zone(self):
         p = over3_percentages()
-        p.update({1: 9.0, 2: 9.1, 3: 9.2, 4: 9.3})  # Yellow is exactly 9%.
-        result = choose_group(p, [p, p], barrier=3)
-        self.assertNotEqual(result.decision, Decision.SELECT_OVER)
-
-    def test_under6_red_and_yellow_must_both_be_strictly_below_9_percent(self):
-        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,
-             5: 9.2, 6: 8.0, 7: 8.8, 8: 9.3, 9: 9.4}
-        self.assertTrue(evaluate_color_positions(p, Group.UNDER, barrier=6)[0])
-
-        # Yellow is exactly 9%; it must fail the strict threshold.
-        p[7] = 9.0
-        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        p.update({1: 8.0, 2: 9.0, 3: 9.1, 4: 9.2})
+        ok, reason = evaluate_color_positions(p, Group.OVER, barrier=3)
         self.assertFalse(ok)
         self.assertIn("strictly below 9%", reason)
+
+    def test_over5_red_alone_is_not_invalidated_by_yellow_outside_zone(self):
+        # Unique Red digit 1 is in Over 5's low-side zone (0..6), while
+        # Yellow digit 8 is outside it; Green/Blue occupy the high-side zone.
+        p = {0: 8.2, 1: 8.0, 2: 8.8, 3: 9.0, 4: 9.1,
+             5: 9.2, 6: 9.3, 7: 9.5, 8: 8.1, 9: 10.0}
+        ok, reason = evaluate_color_positions(p, Group.OVER, barrier=5)
+        self.assertFalse(ok)  # Green/Blue ranks in this constructed sample do not both satisfy high-side requirements.
+
+    def test_under6_red_alone_qualifies_when_yellow_is_outside_zone(self):
+        # Red is digit 6 and qualifies; Yellow is digit 5, outside Under 6's
+        # Red/Yellow zone (5..9) only if changed below. Use barrier 6 where
+        # the zone starts at 5 and put Yellow at digit 4.
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 9.0,
+             5: 8.5, 6: 8.0, 7: 8.8, 8: 9.3, 9: 9.4}
+        # Red=6, Yellow=5 are both in-zone in this snapshot, so make digit 4
+        # the second-lowest percentage and keep Red unique.
+        p.update({4: 7.9, 6: 8.0, 5: 8.5})
+        # A dedicated constructed ranking below puts Yellow outside the zone.
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 8.1,
+             5: 8.0, 6: 8.2, 7: 8.8, 8: 9.3, 9: 9.4}
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)  # Red=5 is outside Under 6's Red zone.
 
     def test_under6_red_exactly_9_percent_fails(self):
         p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 10.5,

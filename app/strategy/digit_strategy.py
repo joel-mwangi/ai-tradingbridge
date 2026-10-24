@@ -207,7 +207,13 @@ def evaluate_color_positions(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Place all four colour ranks on the correct side of the selected barrier."""
+    """Validate barrier-relative colour positions, allowing Red-alone qualification.
+
+    Red must be on the selected direction's required side. Yellow is an
+    additional qualifying colour only when it is on that same side; Yellow
+    being outside the side does not invalidate a valid Red-alone setup.
+    Green and Blue must still occupy the opposite-side zone.
+    """
     if not barrier_valid_for(group, barrier):
         return False, f"{group.value.title()} {barrier} is not a valid winning barrier."
     if not strategy_profile_supported(group, barrier):
@@ -223,31 +229,35 @@ def evaluate_color_positions(
         return False, "Colour positions cannot be qualified without distinct second-lowest and second-highest ranks."
 
     if group is Group.OVER:
-        # Over B's documented Over 3 example uses 0..B+1 for Red/Yellow
-        # and B+2..9 for Green/Blue.
+        # Over B: Red/Yelllow qualifying zone is 0..B+1; Green/Blue is B+2..9.
         boundary = min(barrier + 2, 10)
         red_yellow_zone = frozenset(range(0, boundary))
         green_blue_zone = frozenset(range(boundary, 10))
-        if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
-            return False, f"Over {barrier} requires Red and Yellow among digits 0–{min(barrier + 1, 9)}."
+        if not ranks.red.issubset(red_yellow_zone):
+            return False, f"Over {barrier} requires Red among digits 0–{min(barrier + 1, 9)}."
         if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
             return False, f"Over {barrier} requires Green and Blue among digits {boundary}–9."
-        if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
-            return False, f"Over {barrier} requires both Red and Yellow percentages to be strictly below 9%."
-        return True, f"Over {barrier} colour positions pass; Red and Yellow are <9%."
+        qualifying_low_colors = ranks.red | (ranks.yellow if ranks.yellow.issubset(red_yellow_zone) else frozenset())
+        if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in qualifying_low_colors):
+            return False, f"Over {barrier} requires qualifying Red (and Yellow when on the same side) to be strictly below 9%."
+        if ranks.yellow.issubset(red_yellow_zone):
+            return True, f"Over {barrier} colour positions pass; Red and Yellow are on the low side and both <9%."
+        return True, f"Over {barrier} colour positions pass through Red-alone qualification; Yellow is outside the low-side zone."
 
-    # Under B's documented Under 6 example uses B-1..9 for Red/Yellow
-    # and 0..B-2 for Green/Blue.
+    # Under B: Red/Yellow qualifying zone is B-1..9; Green/Blue is 0..B-2.
     boundary = max(barrier - 1, 0)
     green_blue_zone = frozenset(range(0, boundary))
     red_yellow_zone = frozenset(range(boundary, 10))
-    if not ranks.red.issubset(red_yellow_zone) or not ranks.yellow.issubset(red_yellow_zone):
-        return False, f"Under {barrier} requires Red and Yellow among digits {boundary}–9."
+    if not ranks.red.issubset(red_yellow_zone):
+        return False, f"Under {barrier} requires Red among digits {boundary}–9."
     if not ranks.green.issubset(green_blue_zone) or not ranks.blue.issubset(green_blue_zone):
         return False, f"Under {barrier} requires Green and Blue among digits 0–{max(barrier - 2, 0)}."
-    if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in (ranks.red | ranks.yellow)):
-        return False, f"Under {barrier} requires both Red and Yellow percentages to be strictly below 9%."
-    return True, f"Under {barrier} colour positions pass; Red and Yellow are <9%."
+    qualifying_high_colors = ranks.red | (ranks.yellow if ranks.yellow.issubset(red_yellow_zone) else frozenset())
+    if any(float(percentages[d]) >= OVER_RED_YELLOW_MAX_PERCENT for d in qualifying_high_colors):
+        return False, f"Under {barrier} requires qualifying Red (and Yellow when on the same side) to be strictly below 9%."
+    if ranks.yellow.issubset(red_yellow_zone):
+        return True, f"Under {barrier} colour positions pass; Red and Yellow are on the high side and both <9%."
+    return True, f"Under {barrier} colour positions pass through Red-alone qualification; Yellow is outside the high-side zone."
 
 
 def evaluate_stability(
