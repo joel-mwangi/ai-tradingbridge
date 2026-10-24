@@ -716,6 +716,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             pending_proposal_requests: set[int] = set()
             pending_strategy_proposals: set[int] = set()
             pending_strategy_buys: set[int] = set()
+            strategy_request_deadlines: dict[int, tuple[str, float]] = {}
             valid_proposals: dict[str, float] = {}
             strategy_feed = LiveStrategyFeed()
             strategy_execution: StrategyExecution | None = None
@@ -726,9 +727,34 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
 
             def next_strategy_request_id() -> int:
                 request_id = secrets.randbelow(1_000_000) + 9_000_000
-                while request_id in pending_strategy_proposals or request_id in pending_strategy_buys:
+                while request_id in pending_strategy_proposals or request_id in pending_strategy_buys or request_id in strategy_request_deadlines:
                     request_id = secrets.randbelow(1_000_000) + 9_000_000
                 return request_id
+
+            def register_strategy_deadline(request_id: int, phase: str) -> None:
+                timeout = float(os.getenv("TRADEBRIDGE_STRATEGY_RESPONSE_TIMEOUT_SECONDS", "15"))
+                if not math.isfinite(timeout) or timeout <= 0:
+                    timeout = 15.0
+                strategy_request_deadlines[request_id] = (phase, time.monotonic() + timeout)
+
+            async def strategy_response_timeout_monitor() -> None:
+                while True:
+                    await asyncio.sleep(0.25)
+                    if strategy_execution is None:
+                        continue
+                    now = time.monotonic()
+                    expired = [
+                        request_id for request_id, (_, deadline) in strategy_request_deadlines.items()
+                        if deadline <= now
+                    ]
+                    for request_id in expired:
+                        phase, _ = strategy_request_deadlines.pop(request_id)
+                        pending_strategy_proposals.discard(request_id)
+                        pending_strategy_buys.discard(request_id)
+                        strategy_execution.block(f"Timed out waiting for Deriv {phase} response.")
+                        await websocket.send_json(
+                            strategy_execution.status(f"Automatic execution blocked: Deriv {phase} response timed out.")
+                        )
 
             async def client_to_deriv() -> None:
                 while True:
@@ -903,6 +929,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                     if strategy_execution is not None and isinstance(request_id, int):
                         if request_id in pending_strategy_proposals:
                             pending_strategy_proposals.discard(request_id)
+                            strategy_request_deadlines.pop(request_id, None)
                             if provider_message.get("error"):
                                 strategy_execution.block("Deriv rejected the strategy proposal.")
                                 await websocket.send_json(strategy_execution.status("Strategy execution blocked: proposal was rejected."))
@@ -918,10 +945,12 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                     await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid proposal response."))
                                 else:
                                     pending_strategy_buys.add(buy_request_id)
+                                    register_strategy_deadline(buy_request_id, "buy")
                                     await upstream.send(json.dumps(buy_message, separators=(",", ":")))
                                     await websocket.send_json(strategy_execution.status("Proposal received; submitting the next sequential buy."))
                         elif request_id in pending_strategy_buys:
                             pending_strategy_buys.discard(request_id)
+                            strategy_request_deadlines.pop(request_id, None)
                             if provider_message.get("error"):
                                 strategy_execution.block("Deriv rejected the strategy buy.")
                                 await websocket.send_json(strategy_execution.status("Strategy execution blocked: buy was rejected."))
@@ -949,6 +978,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                 )
                                 if next_proposal is not None:
                                     pending_strategy_proposals.add(next_request_id)
+                                    register_strategy_deadline(next_request_id, "proposal")
                                     await upstream.send(json.dumps(next_proposal, separators=(",", ":")))
                                     await websocket.send_json(strategy_execution.status("Contract settled; requesting the next sequential buy."))
                                 elif strategy_execution.state is ExecutionState.STOPPED:
@@ -1013,6 +1043,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                                 proposal_message = strategy_execution.begin_signal(proposal_request_id)
                                                 if proposal_message is not None:
                                                     pending_strategy_proposals.add(proposal_request_id)
+                                                    register_strategy_deadline(proposal_request_id, "proposal")
                                                     await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
                                                     await websocket.send_json(strategy_execution.status("Confirmed signal received; requesting the first automatic buy."))
 
@@ -1036,6 +1067,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
             tasks = {
                 asyncio.create_task(client_to_deriv()),
                 asyncio.create_task(deriv_to_client()),
+                asyncio.create_task(strategy_response_timeout_monitor()),
             }
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:

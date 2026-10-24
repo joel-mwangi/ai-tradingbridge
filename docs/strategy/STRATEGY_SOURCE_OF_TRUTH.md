@@ -23,7 +23,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 
 ### Over B
 
-- **Percentage set:** digits `0..B` (inclusive), containing `B+1` digits. At least `B` of these digits must be strictly below 9.7%; the one remaining digit, if any, must be strictly below 10.5%. If all selected digits are below 9.7%, the rule passes. This is the generalized interpretation of Over 3 and Over 4.
+- **Percentage set:** digits `0..B` (inclusive), containing `B+1` digits. At least `B` of these digits must be strictly below 10.0%; the one remaining digit, if any, must be strictly below 10.5%. If all selected digits are below 10.0%, the rule passes. This is the generalized interpretation of Over 3 and Over 4.
 - **Colour positions:** Red and Yellow must be within digits `0..B+1` and each strictly below 9%; Green and Blue must be within digits `B+2..9`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
 - **Trigger:** monitor digits in `0..B` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.
@@ -32,7 +32,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 
 ### Under B
 
-- **Percentage set:** digits `B..9` (inclusive), containing `10-B` digits. At least `(10-B)-1` digits must be strictly below 9.7%. The remaining digit, if any, must be strictly below 10.5%.
+- **Percentage set:** digits `B..9` (inclusive), containing `10-B` digits. At least `(10-B)-1` digits must be strictly below 10.0%. The remaining digit, if any, must be strictly below 10.5%.
 - **Colour positions:** Red and Yellow must be within digits `B-1..9` and each strictly below 9%; Green and Blue must be within digits `0..B-2`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
 - **Trigger:** monitor digits in `B..9` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.

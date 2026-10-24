@@ -20,7 +20,7 @@ HIGH_COLOR_ZONE = frozenset(range(5, 10))
 STABILITY_SECONDS = 15.0
 PERCENTAGE_TRIGGER_RISE = 0.1
 OVER_RED_YELLOW_MAX_PERCENT = 9.0
-FILTER_LIMIT = 9.7
+FILTER_LIMIT = 10.0
 FILTER_EXCEPTION_MAX = 10.5
 MIN_ACTIVITY_TICKS = 1
 DEFAULT_BARRIER = 5
@@ -178,7 +178,7 @@ def evaluate_thresholds(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Allow at most one selected digit >=9.7%, strictly below 10.5%."""
+    """Allow at most one selected digit >=10.0%, strictly below 10.5%."""
     if not validate_barrier(barrier):
         return False, "Barrier must be an integer digit from 0 to 9."
     if not barrier_valid_for(group, barrier):
@@ -194,12 +194,12 @@ def evaluate_thresholds(
     below_limit = [d for d in digits if float(percentages[d]) < FILTER_LIMIT]
     required_below = len(digits) - 1
     if len(below_limit) < required_below:
-        return False, f"Percentage filter failed: at least {required_below} of {len(digits)} selected digits must be strictly below 9.7%."
+        return False, f"Percentage filter failed: at least {required_below} of {len(digits)} selected digits must be strictly below 10.0%."
     exceptions = [d for d in digits if float(percentages[d]) >= FILTER_LIMIT]
     if exceptions:
         if len(exceptions) != 1 or not float(percentages[exceptions[0]]) < FILTER_EXCEPTION_MAX:
             return False, f"{group.value.title()} percentage filter failed: the one remaining digit must be strictly below 10.5%."
-    return True, f"{group.value.title()} {barrier} percentage filter passes: at least {required_below} selected digits are below 9.7%."
+    return True, f"{group.value.title()} {barrier} percentage filter passes: at least {required_below} selected digits are below 10.0%."
 
 
 def evaluate_color_positions(

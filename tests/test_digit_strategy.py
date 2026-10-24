@@ -35,14 +35,14 @@ def under6_percentages():
 
 
 class PercentageThresholdTests(unittest.TestCase):
-    def test_all_four_profile_digits_strictly_below_9_7_pass(self):
+    def test_all_four_profile_digits_strictly_below_10_pass(self):
         p = over3_percentages()
-        p.update({0: 9.0, 1: 9.2, 2: 9.4, 3: 9.6})
+        p.update({0: 9.0, 1: 9.2, 2: 9.4, 3: 9.9})
         self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
-    def test_three_below_9_7_and_one_at_9_7_pass(self):
+    def test_three_below_10_and_one_at_10_pass(self):
         p = over3_percentages()
-        p.update({0: 9.1, 1: 9.2, 2: 9.6, 3: 9.7})
+        p.update({0: 9.1, 1: 9.2, 2: 9.6, 3: 10.0})
         self.assertTrue(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_one_remaining_digit_at_10_5_fails_strict_upper_bound(self):
@@ -55,9 +55,9 @@ class PercentageThresholdTests(unittest.TestCase):
         p.update({0: 8.1, 1: 8.2, 2: 9.6, 3: 10.6})
         self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
-    def test_two_digits_at_or_above_9_7_fail(self):
+    def test_two_digits_at_or_above_10_fail(self):
         p = over3_percentages()
-        p.update({0: 9.7, 1: 9.8, 2: 8.0, 3: 8.5})
+        p.update({0: 10.0, 1: 10.1, 2: 8.0, 3: 8.5})
         self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
     def test_under_6_checks_only_digits_6_to_9_and_applies_10_5_cap(self):
