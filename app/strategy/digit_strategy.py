@@ -178,7 +178,7 @@ def evaluate_thresholds(
     group: Group,
     barrier: int = DEFAULT_BARRIER,
 ) -> tuple[bool, str]:
-    """Allow at most one selected digit >=9.7%, and it must be <=10.5%."""
+    """Allow at most one selected digit >=9.7%, strictly below 10.5%."""
     if not validate_barrier(barrier):
         return False, "Barrier must be an integer digit from 0 to 9."
     if not barrier_valid_for(group, barrier):
@@ -196,9 +196,9 @@ def evaluate_thresholds(
     if len(below_limit) < required_below:
         return False, f"Percentage filter failed: at least {required_below} of {len(digits)} selected digits must be strictly below 9.7%."
     exceptions = [d for d in digits if float(percentages[d]) >= FILTER_LIMIT]
-    if group is Group.OVER and exceptions:
+    if exceptions:
         if len(exceptions) != 1 or not float(percentages[exceptions[0]]) < FILTER_EXCEPTION_MAX:
-            return False, "Over percentage filter failed: the one remaining digit must be strictly below 10.5%."
+            return False, f"{group.value.title()} percentage filter failed: the one remaining digit must be strictly below 10.5%."
     return True, f"{group.value.title()} {barrier} percentage filter passes: at least {required_below} selected digits are below 9.7%."
 
 

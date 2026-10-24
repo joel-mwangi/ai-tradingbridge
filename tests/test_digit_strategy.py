@@ -60,10 +60,12 @@ class PercentageThresholdTests(unittest.TestCase):
         p.update({0: 9.7, 1: 9.8, 2: 8.0, 3: 8.5})
         self.assertFalse(evaluate_thresholds(p, Group.OVER, barrier=3)[0])
 
-    def test_under_6_checks_only_digits_6_to_9_and_has_no_10_5_cap(self):
+    def test_under_6_checks_only_digits_6_to_9_and_applies_10_5_cap(self):
         p = under6_percentages()
-        p.update({0: math.nan, 9: 10.8})  # Digit 0 is outside the filter; fourth selected digit has no 10.5 cap.
+        p.update({0: math.nan, 9: 10.4})  # Digit 0 is outside the filter; the exception remains below 10.5%.
         self.assertTrue(evaluate_thresholds(p, Group.UNDER, barrier=6)[0])
+        p[9] = 10.8
+        self.assertFalse(evaluate_thresholds(p, Group.UNDER, barrier=6)[0])
 
     def test_nan_in_filter_digits_fails(self):
         p = over3_percentages()
