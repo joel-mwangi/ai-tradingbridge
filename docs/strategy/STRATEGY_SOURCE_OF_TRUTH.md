@@ -6,8 +6,8 @@ This document is authoritative for the digit strategy. Implementations must not 
 
 1. The user chooses **Over or Under**, selects a barrier digit, and clicks **Run**.
 2. Run starts a fresh strategy session bound to the selected market and the user's selected frequency window (50, 100, 250, 500, or 1,000 observed ticks).
-3. At Run, begin observing the current Red and Green digit identities. Stability passes only if both identities remain unchanged continuously for 15 seconds.
-4. If Red or Green changes at any point, cancel the pending setup and restart a fresh 15-second stability window. Do not carry elapsed time, a candidate, a percentage baseline, or an entry sequence across the reset.
+3. At Run, begin observing the current Red and Green digit identities. The initial stability gate passes only if both identities remain unchanged continuously for 15 seconds.
+4. Before the initial stability gate passes, a Red or Green change cancels the pending setup and starts a fresh 15-second window. After stability has passed once, do not restart or reapply the 15-second market-stability timer; live percentage filters and the entry sequence continue independently.
 5. Use the user's selected tick window for all digit percentages and colour rankings. Colours are recalculated from the ten digit frequencies: Green = most frequent, Blue = second most frequent, Red = least frequent, Yellow = second least frequent. Ties must not be broken by digit order; exactly one Red digit is required.
 6. After stability, every applicable qualification must pass: barrier-specific percentage thresholds, colour positions, exactly one Red bar, the percentage-increase trigger, and the required subsequent tick sequence. Qualification alone is not an entry signal.
 7. The trigger is an increase of exactly 0.1 percentage point (for example, 8.4% to 8.5%) in the specified trigger digit's frequency percentage. An increase of 0.2 or more does not trigger. If multiple candidates increase by exactly 0.1 in the same snapshot, choose the candidate with the lowest baseline percentage. Only ticks after the tick/event that detected the increase count toward the sequence.
@@ -48,7 +48,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 
 ## Stability and execution rules
 
-- **Stability:** beginning at Run, Red and Green digit identities must remain unchanged continuously for 15 seconds. A change resets the full stability period and clears pending trigger/sequence state.
+- **Stability:** beginning at Run, Red and Green digit identities must remain unchanged continuously for 15 seconds. A change before the first pass resets the full stability period and clears pending trigger/sequence state. Once stability has passed, the 15-second identity timer is not restarted; Red/Green changes do not invalidate the completed stability gate.
 - **Signal:** qualification alone is not an entry signal. The selected direction's percentage trigger and subsequent sequence must complete first.
 - **Automatic buys:** one confirmed signal starts up to three sequential buys. Await settlement and reconcile each result before the next buy.
 - **Loss protection:** stop immediately after two consecutive settled losses; never submit buy 3 after two losses. A win or breakeven resets the consecutive-loss count.

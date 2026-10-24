@@ -166,6 +166,16 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.SELECTED)
         self.assertEqual(self.session.selected_group, Group.OVER)
 
+    def test_red_green_change_after_stability_does_not_restart_timer(self):
+        self.start_stable_over3()
+        self.assertTrue(self.session.stability_passed)
+        passed_at = self.session.stable_since
+        changed = dict(over3_percentages())
+        changed[5] = 11.0
+        self.add(17, changed, "post-stability-change")
+        self.assertTrue(self.session.stability_passed)
+        self.assertEqual(self.session.stable_since, passed_at)
+
     def test_feed_gap_resets_stability(self):
         self.add(1, over3_percentages(), "gap1")
         self.add(8, over3_percentages(), "gap2")
@@ -242,15 +252,17 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.BLOCKED)
         self.assertFalse(self.session.signal_generated)
         self.assertIsNone(self.session.selected_group)
-    def test_selected_setup_is_cancelled_if_red_green_changes(self):
+    def test_selected_setup_is_not_reset_by_red_green_change_after_stability_passed(self):
         self.start_stable_over3()
+        passed_at = self.session.stable_since
         changed = dict(over3_percentages())
         changed[5] = 11.0
         update = self.add(17, changed, "e4")
-        self.assertEqual(update.state, SessionState.WAITING_FOR_MORE_DATA)
-        self.assertIsNone(self.session.selected_group)
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.selected_group, Group.OVER)
         self.assertFalse(self.session.percentage_triggered)
-        self.assertEqual(self.session.stable_since, self.start + timedelta(seconds=17))
+        self.assertTrue(self.session.stability_passed)
+        self.assertEqual(self.session.stable_since, passed_at)
 
     def test_stop_prevents_future_observations_and_ticks(self):
         self.session.stop()

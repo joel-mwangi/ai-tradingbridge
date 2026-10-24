@@ -305,12 +305,17 @@ def evaluate_group(
     observations: Sequence[Mapping[int, float]],
     group: Group,
     barrier: int = DEFAULT_BARRIER,
+    stability_passed: bool = False,
 ) -> GroupEvaluation:
     if not strategy_profile_supported(group, barrier):
         reason = f"{group.value.title()} {barrier} has no complete approved strategy profile; observation only."
         return GroupEvaluation(group, False, False, False, False, False, reason)
     threshold_ok, threshold_reason = evaluate_thresholds(percentages, group, barrier)
-    stability_ok, stability_reason = evaluate_stability(observations)
+    stability_ok, stability_reason = (
+        (True, "Red/Green market stability already passed at Run; not rechecked after qualification.")
+        if stability_passed
+        else evaluate_stability(observations)
+    )
     color_ok, color_reason = evaluate_color_positions(percentages, group, barrier)
     trigger_digit = (
         _trigger_digit(percentages, group, barrier)
@@ -334,6 +339,7 @@ def choose_group(
     percentages: Mapping[int, float],
     observations: Sequence[Mapping[int, float]],
     barrier: int = DEFAULT_BARRIER,
+    stability_passed: bool = False,
 ) -> QualificationResult:
     """Automatically select only the sole qualifying direction for this barrier."""
     invalid_under = GroupEvaluation(Group.UNDER, False, False, False, False, False, "Incomplete or invalid data.")
@@ -359,8 +365,8 @@ def choose_group(
             Decision.OBSERVE, unsupported_under, unsupported_over, reason=reason
         )
 
-    under = evaluate_group(percentages, observations, Group.UNDER, barrier)
-    over = evaluate_group(percentages, observations, Group.OVER, barrier)
+    under = evaluate_group(percentages, observations, Group.UNDER, barrier, stability_passed)
+    over = evaluate_group(percentages, observations, Group.OVER, barrier, stability_passed)
     if under.qualifies and over.qualifies:
         return QualificationResult(
             Decision.WAIT_BOTH_QUALIFY, under, over,

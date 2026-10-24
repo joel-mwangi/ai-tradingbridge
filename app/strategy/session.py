@@ -62,6 +62,7 @@ class DigitStrategySession:
     pattern_tracker: PatternTracker | None = None
     qualification: QualificationResult | None = None
     stable_since: datetime | None = None
+    stability_passed: bool = False
     bar_colors: BarColorRanks | None = None
     percentage_baseline: float | None = None
     trigger_baselines: dict[int, float] = field(default_factory=dict)
@@ -112,6 +113,7 @@ class DigitStrategySession:
         self._rank_signature = None
         self._last_observed_at = None
         self.stable_since = None
+        self.stability_passed = False
         self.bar_colors = None
         self.qualification = None
         self.state = SessionState.OBSERVING
@@ -175,9 +177,10 @@ class DigitStrategySession:
             self._last_observed_at is not None
             and observed_at - self._last_observed_at > self.feed_health.max_age
         ):
-            self.stable_since = None
-            self._rank_signature = None
-            self._clear_candidate()
+            if not self.stability_passed:
+                self.stable_since = None
+                self._rank_signature = None
+                self._clear_candidate()
 
         self.observations.append(
             TimestampedPercentageObservation(observed_at, dict(health.snapshot.percentages))
@@ -232,7 +235,8 @@ class DigitStrategySession:
         # one Red returns, its new identity starts a fresh 15-second interval.
         if len(ranks.red) != 1:
             self._rank_signature = signature
-            self.stable_since = None
+            if not self.stability_passed:
+                self.stable_since = None
             self._clear_candidate()
             self.state = SessionState.WAITING_FOR_MORE_DATA
             return SessionUpdate(
@@ -244,15 +248,18 @@ class DigitStrategySession:
         if signature != self._rank_signature:
             prior_signature = self._rank_signature
             self._rank_signature = signature
-            self.stable_since = observed_at
-            self._clear_candidate()
-            self.state = SessionState.WAITING_FOR_MORE_DATA
-            reason = (
-                "First valid Red/Green ranking observed; 15-second stability timer started."
-                if prior_signature is None
-                else "Red or Green identity changed; pending setup cancelled and 15-second timer restarted."
-            )
-            return SessionUpdate(self.state, reason, self.qualification)
+            if self.stability_passed:
+                self.bar_colors = ranks
+            else:
+                self.stable_since = observed_at
+                self._clear_candidate()
+                self.state = SessionState.WAITING_FOR_MORE_DATA
+                reason = (
+                    "First valid Red/Green ranking observed; 15-second stability timer started."
+                    if prior_signature is None
+                    else "Red or Green identity changed; pending setup cancelled and 15-second timer restarted."
+                )
+                return SessionUpdate(self.state, reason, self.qualification)
 
         if self.stable_since is None:
             self.stable_since = observed_at
@@ -260,7 +267,7 @@ class DigitStrategySession:
             return SessionUpdate(self.state, "Red/Green ranking restored; 15-second stability timer started.")
 
         elapsed = max(0.0, (observed_at - self.stable_since).total_seconds())
-        if elapsed < self.window_seconds:
+        if elapsed < self.window_seconds and not self.stability_passed:
             self.state = SessionState.WAITING_FOR_MORE_DATA
             remaining = self.window_seconds - elapsed
             return SessionUpdate(
@@ -269,6 +276,8 @@ class DigitStrategySession:
                 self.qualification,
             )
 
+        if not self.stability_passed:
+            self.stability_passed = True
         stable_rows = [
             item.percentages for item in self.observations
             if item.observed_at.astimezone(timezone.utc) >= self.stable_since
@@ -281,7 +290,9 @@ class DigitStrategySession:
                 self.qualification,
             )
 
-        current_result = choose_group(percentages, stable_rows, self.barrier)
+        current_result = choose_group(
+            percentages, stable_rows, self.barrier, stability_passed=self.stability_passed
+        )
         if self.requested_group is not None:
             requested_evaluation = current_result.under if self.requested_group is Group.UNDER else current_result.over
             if requested_evaluation.qualifies:
