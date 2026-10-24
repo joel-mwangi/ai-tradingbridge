@@ -134,6 +134,18 @@ class LiveStrategyFeed:
             update = self.session.evaluate(self._now())
         return self._status(update.reason, update.qualification)
 
+    def lock_execution(self) -> dict[str, Any] | None:
+        if self.session is None:
+            return None
+        self.session.lock_execution()
+        return self._status("Execution started; market threshold requalification is locked until the trade sequence completes.", self.session.qualification)
+
+    def unlock_execution(self) -> dict[str, Any] | None:
+        if self.session is None:
+            return None
+        self.session.unlock_execution()
+        return self._status("Execution sequence ended; market qualification is available again.", self.session.qualification)
+
     def on_tick(self, symbol: str, tick: Mapping[str, Any], fallback_pip_size: Any = None) -> dict[str, Any] | None:
         if self.session is None or self.symbol != symbol or self.session.state is not SessionState.SELECTED:
             return None

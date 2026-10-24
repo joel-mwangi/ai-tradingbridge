@@ -69,6 +69,7 @@ class DigitStrategySession:
     percentage_triggered: bool = False
     skip_current_tick: bool = False
     signal_generated: bool = False
+    execution_locked: bool = False
     _rank_signature: tuple[frozenset[int], frozenset[int]] | None = None
     _last_observed_at: datetime | None = None
 
@@ -91,6 +92,14 @@ class DigitStrategySession:
         self.percentage_triggered = False
         self.skip_current_tick = False
         self.signal_generated = False
+        self.execution_locked = False
+
+    def lock_execution(self) -> None:
+        if self.signal_generated:
+            self.execution_locked = True
+
+    def unlock_execution(self) -> None:
+        self.execution_locked = False
 
     def start(
         self,
@@ -146,6 +155,13 @@ class DigitStrategySession:
         )
 
     def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
+        if self.execution_locked:
+            return SessionUpdate(
+                self.state,
+                "Execution in progress; market qualification is locked until the trade sequence completes.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
         if (
             self.state not in (
                 SessionState.OBSERVING,
@@ -462,6 +478,7 @@ class DigitStrategySession:
             return SessionUpdate(self.state, str(exc), self.qualification)
         if completed:
             self.signal_generated = True
+            self.execution_locked = True
             return SessionUpdate(
                 self.state,
                 "Entry signal generated; no trade was submitted.",

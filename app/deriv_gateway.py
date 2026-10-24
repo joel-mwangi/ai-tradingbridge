@@ -755,6 +755,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                         await websocket.send_json(
                             strategy_execution.status(f"Automatic execution blocked: Deriv {phase} response timed out.")
                         )
+                        await websocket.send_json(strategy_feed.unlock_execution())
 
             async def client_to_deriv() -> None:
                 while True:
@@ -933,6 +934,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                             if provider_message.get("error"):
                                 strategy_execution.block("Deriv rejected the strategy proposal.")
                                 await websocket.send_json(strategy_execution.status("Strategy execution blocked: proposal was rejected."))
+                                await websocket.send_json(strategy_feed.unlock_execution())
                             elif provider_message.get("msg_type") == "proposal":
                                 proposal = provider_message.get("proposal")
                                 buy_request_id = next_strategy_request_id()
@@ -943,6 +945,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                 )
                                 if buy_message is None:
                                     await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid proposal response."))
+                                    await websocket.send_json(strategy_feed.unlock_execution())
                                 else:
                                     pending_strategy_buys.add(buy_request_id)
                                     register_strategy_deadline(buy_request_id, "buy")
@@ -954,10 +957,12 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                             if provider_message.get("error"):
                                 strategy_execution.block("Deriv rejected the strategy buy.")
                                 await websocket.send_json(strategy_execution.status("Strategy execution blocked: buy was rejected."))
+                                await websocket.send_json(strategy_feed.unlock_execution())
                             elif provider_message.get("msg_type") == "buy":
                                 subscribe_message = strategy_execution.on_buy(request_id, provider_message)
                                 if subscribe_message is None:
                                     await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid buy response."))
+                                    await websocket.send_json(strategy_feed.unlock_execution())
                                 else:
                                     await upstream.send(json.dumps(subscribe_message, separators=(",", ":")))
                                     await websocket.send_json(strategy_execution.status("Buy accepted; waiting for contract settlement before continuing."))
@@ -986,6 +991,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                 elif strategy_execution.state is ExecutionState.COMPLETED:
                                     await websocket.send_json(strategy_execution.status("Three sequential buys completed; strategy execution stopped."))
                                 if strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
+                                    await websocket.send_json(strategy_feed.unlock_execution())
                                     await websocket.send_json(strategy_feed.stop())
 
                     if provider_message.get("msg_type") == "history":
@@ -1044,6 +1050,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                                                 if proposal_message is not None:
                                                     pending_strategy_proposals.add(proposal_request_id)
                                                     register_strategy_deadline(proposal_request_id, "proposal")
+                                                    strategy_feed.lock_execution()
                                                     await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
                                                     await websocket.send_json(strategy_execution.status("Confirmed signal received; requesting the first automatic buy."))
 

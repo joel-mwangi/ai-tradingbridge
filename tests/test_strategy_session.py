@@ -270,6 +270,26 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.STOPPED)
         self.assertEqual(self.session.observations, [])
 
+    def test_execution_lock_blocks_snapshots_and_unlocks_after_sequence(self):
+        update = self.start_stable_over3()
+        self.assertEqual(update.state, SessionState.SELECTED)
+        increased = over3_percentages()
+        increased[0] = 8.1
+        self.add(17, increased, "lock-trigger")
+        self.session.on_tick(2)
+        self.session.on_tick(0)
+        self.session.on_tick(2)
+        completed = self.session.on_tick(7)
+        self.assertTrue(completed.pattern_completed)
+        self.assertTrue(self.session.signal_generated)
+        self.assertTrue(self.session.execution_locked)
+
+        locked_update = self.add(18, increased, "locked-snapshot")
+        self.assertIn("locked", locked_update.reason.lower())
+
+        self.session.unlock_execution()
+        self.assertFalse(self.session.execution_locked)
+
 
 if __name__ == "__main__":
     unittest.main()
