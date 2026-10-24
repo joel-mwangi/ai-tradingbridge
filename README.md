@@ -1,7 +1,7 @@
 # TradeBridge AI
 
-A Python research API and authenticated Deriv session gateway for manual Demo trading.
-Automated bot execution has been removed. Real-account trading is not supported.
+A Python research API and authenticated Deriv session gateway for Demo trading.
+Strategy execution is Demo-only and real-account trading is not supported.
 
 ## Requirements
 
@@ -87,7 +87,7 @@ dialog to call analysis endpoints.
 - `DELETE /deriv/session` — disconnect; removes credential and account links.
 - `POST /deriv/accounts` — ownership-filtered account list.
 - `POST /deriv/ws-ticket` — issue a 30-second single-use WebSocket ticket.
-- `WS /deriv/ws?account_id=...` — authenticated Demo-only manual trading proxy.
+- `WS /deriv/ws?account_id=...` — authenticated Demo-only trading proxy and strategy executor.
 - `WS /deriv/live/market` — public market-data proxy; no persistence.
 
 ## Architecture
@@ -97,11 +97,12 @@ Browser / Next.js
   ├─ OAuth callback → POST /deriv/internal/oauth/exchange
   │    └─ FastAPI exchanges PKCE code, encrypts token, stores credential/account links
   ├─ POST /deriv/ws-ticket → short-lived, single-use WebSocket ticket
-  ├─ WS /deriv/ws?account_id=... → authenticated Demo-only manual trading proxy
+  ├─ WS /deriv/ws?account_id=... → authenticated Demo-only trading and strategy execution
   └─ WS /deriv/live/market → public market-data proxy
 
-FastAPI also exposes authenticated descriptive digit-analysis endpoints. No bot runner,
-strategy executor, bot configuration API, or automated order loop is registered.
+FastAPI also exposes authenticated descriptive digit-analysis endpoints. Strategy execution
+is only available through the authenticated Demo WebSocket; the public market WebSocket
+remains observation-only.
 ```
 
 Live market ticks and history are forwarded in memory only. Real-account execution remains
@@ -121,4 +122,4 @@ The public `/deriv/live/market` WebSocket enriches Deriv history/tick responses 
 
 The frontend must render these backend values rather than independently recomputing the displayed digit percentages. They are TradeBridge-calculated observed-tick frequencies, **not official Deriv Digit Analytics percentages**, and are not evidence that any digit predicts the next outcome.
 
-The strategy adapter `app.strategy.market_frequency_adapter.to_percentage_snapshot` converts the backend's 1,000-tick window into the existing fail-closed strategy feed format. The strategy still requires an explicitly configured `PercentageFeedHealth` monitor and a fresh observation window. This adapter does not start a strategy session, place orders, or enable trade execution. Live strategy orchestration remains separate.
+The strategy adapter `app.strategy.market_frequency_adapter.to_percentage_snapshot` converts the backend's selected tick window into the existing fail-closed strategy feed format. A strategy started on the authenticated Demo WebSocket requests the selected history window, observes live ticks, and can execute one confirmed signal as up to three sequential Demo buys. Each buy waits for settlement; two consecutive losses stop the sequence before a third buy. The public market WebSocket remains observation-only.
