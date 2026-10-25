@@ -44,6 +44,11 @@ class TradingProxySession:
         self.strategy_history_requests: dict[int, str] = {}
         self.active_poc_sub_id: str | None = None
         self.strategy_window_size = 1000
+        # Settlement reconciliation: maps profit_table req_id → contract_id being checked.
+        self.pending_settlement_checks: dict[int, str] = {}
+        # Deadline (monotonic) after which we fall back to profit_table if not settled.
+        self.settlement_fallback_deadline: float | None = None
+        self.settlement_fallback_seconds: float = 12.0
 
     def next_strategy_request_id(self) -> int:
         request_id = secrets.randbelow(1_000_000) + 9_000_000
@@ -51,6 +56,7 @@ class TradingProxySession:
             request_id in self.pending_strategy_proposals
             or request_id in self.pending_strategy_buys
             or request_id in self.strategy_request_deadlines
+            or request_id in self.pending_settlement_checks
         ):
             request_id = secrets.randbelow(1_000_000) + 9_000_000
         return request_id
@@ -94,13 +100,39 @@ class TradingProxySession:
         self.strategy_history_requests.clear()
         self.active_poc_sub_id = None
         self.strategy_window_size = 1000
+        self.pending_settlement_checks.clear()
+        self.settlement_fallback_deadline = None
 
-    async def strategy_response_timeout_monitor(self, websocket: WebSocket) -> None:
+    async def strategy_response_timeout_monitor(self, websocket: WebSocket, upstream: Any) -> None:
         while True:
             await asyncio.sleep(0.25)
             if self.strategy_execution is None:
                 continue
             now = time.monotonic()
+
+            # Settlement fallback: if waiting for settlement too long, query profit_table.
+            if (
+                self.settlement_fallback_deadline is not None
+                and now >= self.settlement_fallback_deadline
+                and self.strategy_execution.state.value == "waiting_settlement"
+                and self.strategy_execution.active_contract_id is not None
+            ):
+                self.settlement_fallback_deadline = None
+                contract_id = self.strategy_execution.active_contract_id
+                req_id = self.next_strategy_request_id()
+                self.pending_settlement_checks[req_id] = contract_id
+                _log.info("Settlement fallback: querying profit_table for contract %s", contract_id)
+                try:
+                    await upstream.send(json.dumps({
+                        "profit_table": 1,
+                        "description": 1,
+                        "limit": 10,
+                        "req_id": req_id,
+                    }, separators=(",", ":")))
+                except Exception:
+                    self.pending_settlement_checks.pop(req_id, None)
+
+            # Proposal/buy timeouts.
             expired = [
                 rid for rid, (_, deadline) in self.strategy_request_deadlines.items()
                 if deadline <= now

@@ -164,7 +164,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 tasks = {
                     asyncio.create_task(handle_client_messages(session, upstream, websocket)),
                     asyncio.create_task(handle_provider_messages(session, upstream, websocket)),
-                    asyncio.create_task(session.strategy_response_timeout_monitor(websocket)),
+                    asyncio.create_task(session.strategy_response_timeout_monitor(websocket, upstream)),
                     asyncio.create_task(session.credential_expiry_monitor(websocket, user_id)),
                 }
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

@@ -109,6 +109,11 @@ async def handle_provider_messages(
                         session.active_poc_sub_id = None
                         await upstream.send(json.dumps(subscribe_message, separators=(",", ":")))
                         await websocket.send_json(session.strategy_execution.status("Buy accepted; waiting for contract settlement before continuing."))
+                        # Set fallback deadline: if poc stream doesn't settle in time,
+                        # the timeout monitor will query profit_table.
+                        session.settlement_fallback_deadline = (
+                            time.monotonic() + session.settlement_fallback_seconds
+                        )
 
         # --- Contract settlement ---
         if session.strategy_execution is not None and provider_message.get("msg_type") == "proposal_open_contract":
@@ -130,6 +135,8 @@ async def handle_provider_messages(
                 terminal_status = contract_status in {"won", "lost"}
                 settled = is_sold_flag and (terminal_status or contract.get("profit") is not None)
                 if settled and isinstance(contract_id, (str, int)):
+                    # Settlement arrived via stream — cancel the fallback.
+                    session.settlement_fallback_deadline = None
                     if session.active_poc_sub_id:
                         try:
                             await upstream.send(json.dumps({"forget": session.active_poc_sub_id}, separators=(",", ":")))
@@ -158,6 +165,72 @@ async def handle_provider_messages(
                         await websocket.send_json(session.strategy_feed.unlock_execution())
                         await websocket.send_json(session.strategy_feed.stop())
                         session.strategy_execution.reset_for_next_signal()
+
+        # --- Settlement reconciliation via profit_table fallback ---
+        if provider_message.get("msg_type") == "profit_table" and session.strategy_execution is not None:
+            req_id = provider_message.get("req_id") if isinstance(request_id, int) else request_id
+            if isinstance(req_id, int) and req_id in session.pending_settlement_checks:
+                contract_id_wanted = session.pending_settlement_checks.pop(req_id)
+                if session.strategy_execution.state.value == "waiting_settlement":
+                    transactions = provider_message.get("profit_table", {}).get("transactions") or []
+                    matched = next(
+                        (t for t in transactions if str(t.get("contract_id", "")) == str(contract_id_wanted)),
+                        None,
+                    )
+                    if matched is not None:
+                        profit_raw = matched.get("profit", matched.get("sell_price"))
+                        try:
+                            profit = float(profit_raw)
+                        except (TypeError, ValueError):
+                            profit = 0.0
+                        outcome = "won" if profit > 0 else "lost"
+                        _log.info(
+                            "Settlement fallback resolved contract %s via profit_table: %s profit=%s",
+                            contract_id_wanted, outcome, profit,
+                        )
+                        # Clean up the poc subscription if still active.
+                        if session.active_poc_sub_id:
+                            try:
+                                await upstream.send(json.dumps(
+                                    {"forget": session.active_poc_sub_id}, separators=(",", ":")))
+                            except Exception:
+                                pass
+                            session.active_poc_sub_id = None
+
+                        next_request_id = session.next_strategy_request_id()
+                        next_proposal = session.strategy_execution.on_settlement(
+                            str(contract_id_wanted),
+                            outcome,
+                            profit,
+                            next_request_id,
+                            confirmed_settled=True,
+                        )
+                        if next_proposal is not None:
+                            session.pending_strategy_proposals.add(next_request_id)
+                            session.register_strategy_deadline(next_request_id, "proposal")
+                            await upstream.send(json.dumps(next_proposal, separators=(",", ":")))
+                            await websocket.send_json(session.strategy_execution.status(
+                                "Contract settled (reconciled via statement); requesting the next sequential buy."
+                            ))
+                        elif session.strategy_execution.state is ExecutionState.STOPPED:
+                            await websocket.send_json(session.strategy_execution.status(
+                                "Two consecutive losses reached; no further buys will be submitted."
+                            ))
+                        elif session.strategy_execution.state is ExecutionState.COMPLETED:
+                            await websocket.send_json(session.strategy_execution.status(
+                                "Three sequential buys completed; strategy execution stopped."
+                            ))
+                        if session.strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
+                            await websocket.send_json(session.strategy_feed.unlock_execution())
+                            await websocket.send_json(session.strategy_feed.stop())
+                            session.strategy_execution.reset_for_next_signal()
+                    else:
+                        # Contract not yet in profit_table — retry after a short delay.
+                        _log.info(
+                            "Settlement fallback: contract %s not yet in profit_table, retrying in 3s.",
+                            contract_id_wanted,
+                        )
+                        session.settlement_fallback_deadline = time.monotonic() + 3.0
 
         # --- History seeding ---
         if provider_message.get("msg_type") == "history":
