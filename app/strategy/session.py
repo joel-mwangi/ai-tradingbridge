@@ -72,6 +72,7 @@ class DigitStrategySession:
     execution_locked: bool = False
     _rank_signature: tuple[frozenset[int], frozenset[int]] | None = None
     _last_observed_at: datetime | None = None
+    _last_received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if type(self.barrier) is not int or self.barrier not in range(10):
@@ -121,6 +122,7 @@ class DigitStrategySession:
         self._clear_candidate()
         self._rank_signature = None
         self._last_observed_at = None
+        self._last_received_at = None
         self.stable_since = None
         self.stability_passed = False
         self.bar_colors = None
@@ -202,6 +204,7 @@ class DigitStrategySession:
             TimestampedPercentageObservation(observed_at, dict(health.snapshot.percentages))
         )
         self._last_observed_at = observed_at
+        self._last_received_at = health.snapshot.received_at.astimezone(timezone.utc)
         # Bound memory use on long-running sessions. Stable identity continuity
         # is checked on every accepted event and retained in stable_since/signature.
         retention = max(self.window_seconds * 2, 60.0)
@@ -443,9 +446,14 @@ class DigitStrategySession:
                 self.state = SessionState.BLOCKED
                 self._clear_candidate()
                 return SessionUpdate(self.state, "No accepted frequency observation is available for tick validation.")
-            latest_observed = self.observations[-1].observed_at.astimezone(timezone.utc)
             now_utc = now.astimezone(timezone.utc)
-            if now_utc < latest_observed or now_utc - latest_observed > self.feed_health.max_age:
+            latest_received = self._last_received_at
+            if latest_received is None:
+                self.state = SessionState.BLOCKED
+                self._clear_candidate()
+                return SessionUpdate(self.state, "No accepted frequency receipt is available for tick validation.")
+            latest_received = latest_received.astimezone(timezone.utc)
+            if now_utc < latest_received or now_utc - latest_received > self.feed_health.max_age:
                 self.state = SessionState.BLOCKED
                 self._clear_candidate()
                 return SessionUpdate(self.state, "Frequency feed is stale or timestamp-inconsistent; strategy blocked.")
