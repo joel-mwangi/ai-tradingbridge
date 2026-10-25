@@ -6,7 +6,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from cryptography.fernet import Fernet
 
-from app import deriv_gateway, main
+from app.deriv import router as _router  # noqa: F401 — ensure package is imported
+import app.deriv.credentials as _creds
+import app.deriv.security as _security
+from app.deriv.credentials import Credential
+from app.deriv.security import current_user
+from app import main
 
 client = TestClient(main.app)
 
@@ -16,7 +21,7 @@ def credential_store(monkeypatch):
     store = {}
 
     async def fake_store(user_id, access_token, expires_in):
-        credential = deriv_gateway.Credential(
+        credential = Credential(
             access_token=access_token,
             expires_at=time.time() + expires_in,
             updated_at=time.time(),
@@ -30,9 +35,9 @@ def credential_store(monkeypatch):
     async def fake_delete(user_id):
         store.pop(user_id, None)
 
-    monkeypatch.setattr(deriv_gateway, "_store_credential", fake_store)
-    monkeypatch.setattr(deriv_gateway, "_load_credential", fake_load)
-    monkeypatch.setattr(deriv_gateway, "_delete_credential", fake_delete)
+    monkeypatch.setattr(_creds, "_store_credential", fake_store)
+    monkeypatch.setattr(_creds, "_load_credential", fake_load)
+    monkeypatch.setattr(_creds, "_delete_credential", fake_delete)
     return store
 
 
@@ -76,16 +81,16 @@ def test_credential_transfer_never_returns_deriv_token(monkeypatch, credential_s
 
 
 def test_session_status_never_returns_credential(monkeypatch, credential_store):
-    credential_store["user-1"] = deriv_gateway.Credential(
+    credential_store["user-1"] = Credential(
         access_token="secret-token",
         expires_at=time.time() + 3600,
         updated_at=time.time(),
     )
-    main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "user-1"
+    main.app.dependency_overrides[current_user] = lambda: "user-1"
     try:
         response = client.get("/deriv/session")
     finally:
-        main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
+        main.app.dependency_overrides.pop(current_user, None)
     assert response.status_code == 200
     assert response.json()["connected"] is True
     assert "secret-token" not in response.text
@@ -93,41 +98,41 @@ def test_session_status_never_returns_credential(monkeypatch, credential_store):
 
 
 def test_expired_credentials_are_removed(credential_store):
-    credential_store["expired-user"] = deriv_gateway.Credential(
+    credential_store["expired-user"] = Credential(
         access_token="secret-token",
         expires_at=time.time() - 1,
         updated_at=time.time() - 10,
     )
-    main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "expired-user"
+    main.app.dependency_overrides[current_user] = lambda: "expired-user"
     try:
         response = client.post("/deriv/accounts")
     finally:
-        main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
+        main.app.dependency_overrides.pop(current_user, None)
     assert response.status_code == 401
     assert "expired-user" not in credential_store
 
 
 def test_websocket_ticket_is_short_lived_and_one_time(monkeypatch):
-    deriv_gateway._ws_tickets.clear()
-    main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "user-1"
+    _security._ws_tickets.clear()
+    main.app.dependency_overrides[current_user] = lambda: "user-1"
     try:
         response = client.post("/deriv/ws-ticket")
     finally:
-        main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
+        main.app.dependency_overrides.pop(current_user, None)
     assert response.status_code == 200
     payload = response.json()
     assert payload["expires_in"] == 30
     ticket = payload["ticket"]
-    assert deriv_gateway._ws_tickets[ticket][0] == "user-1"
-    assert deriv_gateway._ws_tickets[ticket][1] > time.time()
-    deriv_gateway._ws_tickets.clear()
+    assert _security._ws_tickets[ticket][0] == "user-1"
+    assert _security._ws_tickets[ticket][1] > time.time()
+    _security._ws_tickets.clear()
 
 
 def test_origin_allowlist_is_exact(monkeypatch):
     monkeypatch.setenv("TRADEBRIDGE_ALLOWED_ORIGINS", "https://swigtrade.vercel.app, http://localhost:3000")
-    assert deriv_gateway._origin_allowed("https://swigtrade.vercel.app")
-    assert deriv_gateway._origin_allowed("http://localhost:3000")
-    assert not deriv_gateway._origin_allowed("https://evil.example")
+    assert _security._origin_allowed("https://swigtrade.vercel.app")
+    assert _security._origin_allowed("http://localhost:3000")
+    assert not _security._origin_allowed("https://evil.example")
 
 
 def test_oauth_exchange_fails_closed_without_bridge_secret(monkeypatch):
@@ -167,14 +172,14 @@ def test_linked_account_lookup_fails_closed_without_service_role(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(deriv_gateway._linked_account_ids("user-1", ["CR123"]))
+        asyncio.run(_creds._linked_account_ids("user-1", ["CR123"]))
     assert exc.value.status_code == 503
 
 
 def test_credential_cipher_encrypts_and_round_trips_token(monkeypatch):
     key = Fernet.generate_key().decode("ascii")
     monkeypatch.setenv("TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY", key)
-    cipher = deriv_gateway._credential_cipher()
+    cipher = _creds._credential_cipher()
     token = "a-sensitive-deriv-token"
     encrypted = cipher.encrypt(token.encode("utf-8"))
     assert token.encode("utf-8") not in encrypted
@@ -192,7 +197,7 @@ def test_oauth_exchange_writes_account_links(monkeypatch, credential_store):
     async def fake_store_links(user_id: str, account_ids: list[str]) -> None:
         stored_links.append((user_id, account_ids))
 
-    monkeypatch.setattr(deriv_gateway, "_store_account_links", fake_store_links)
+    monkeypatch.setattr(_creds, "_store_account_links", fake_store_links)
 
     class FakeResponse:
         status_code = 200
@@ -248,14 +253,14 @@ def test_account_links_removed_on_disconnect(monkeypatch, credential_store):
     async def fake_delete_links(user_id: str) -> None:
         deleted_links.append(user_id)
 
-    monkeypatch.setattr(deriv_gateway, "_delete_credential", fake_delete_cred)
-    monkeypatch.setattr(deriv_gateway, "_delete_account_links", fake_delete_links)
+    monkeypatch.setattr(_creds, "_delete_credential", fake_delete_cred)
+    monkeypatch.setattr(_creds, "_delete_account_links", fake_delete_links)
 
-    main.app.dependency_overrides[deriv_gateway.current_user] = lambda: "user-1"
+    main.app.dependency_overrides[current_user] = lambda: "user-1"
     try:
         response = client.delete("/deriv/session")
     finally:
-        main.app.dependency_overrides.pop(deriv_gateway.current_user, None)
+        main.app.dependency_overrides.pop(current_user, None)
 
     assert response.status_code == 204
     assert "user-1" in deleted_creds

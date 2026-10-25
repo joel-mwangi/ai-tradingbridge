@@ -2,12 +2,6 @@
 
 OAuth credentials are encrypted at rest in a server-only Supabase table. The
 encryption key must remain separate from the database.
-
-The mutable credential helpers (``_store_credential`` / ``_load_credential`` /
-``_delete_credential`` / ``_store_account_links`` / ``_delete_account_links``)
-are looked up through the ``app.deriv_gateway`` shim at call time so that tests
-which ``monkeypatch.setattr(deriv_gateway, "_store_credential", ...)`` still take
-effect on the routes and ``_owned_credential`` that consume them.
 """
 from __future__ import annotations
 
@@ -19,13 +13,6 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
-
-# The credential helpers that routes/``_owned_credential`` consume are looked up
-# through the ``app.deriv_gateway`` shim at call time so tests that
-# ``monkeypatch.setattr(deriv_gateway, "_store_credential", ...)`` still take
-# effect. The import is deferred to call time (not module top level) to avoid an
-# import cycle: this module is imported before the shim, and the shim re-exports
-# these names back from here.
 
 
 @dataclass
@@ -185,13 +172,11 @@ async def _delete_account_links(user_id: str) -> None:
 
 
 async def _owned_credential(user_id: str) -> Credential:
-    import app.deriv_gateway as _gw
-
-    credential = await _gw._load_credential(user_id)
+    credential = await _load_credential(user_id)
     if credential is None:
         raise HTTPException(status_code=409, detail="Deriv is not connected to this backend session.")
     if credential.expires_at <= time.time():
-        await _gw._delete_credential(user_id)
+        await _delete_credential(user_id)
         raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect Deriv.")
     return credential
 
