@@ -158,12 +158,6 @@ class DigitStrategySession:
 
     def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
         if self.execution_locked:
-            health = self.feed_health.accept(snapshot, now)
-            if not health.accepted or health.snapshot is None:
-                self.state = SessionState.BLOCKED
-                self._clear_candidate()
-                return SessionUpdate(self.state, f"Feed rejected snapshot: {health.reason}")
-            self._last_received_at = health.snapshot.received_at.astimezone(timezone.utc)
             return SessionUpdate(
                 self.state,
                 "Execution in progress; market qualification is locked until the trade sequence completes.",
@@ -441,6 +435,20 @@ class DigitStrategySession:
 
     def on_tick(self, digit: int, now: datetime | None = None) -> SessionUpdate:
         """Consume a tick, optionally checking frequency freshness, and suppress duplicates."""
+        if self.execution_locked:
+            if self.signal_generated:
+                return SessionUpdate(
+                    self.state,
+                    "Entry signal already generated for this setup; duplicate signals are suppressed.",
+                    self.qualification,
+                    percentage_triggered=self.percentage_triggered,
+                )
+            return SessionUpdate(
+                self.state,
+                "Execution in progress; market threshold and tick checks are locked until the trade sequence stops.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
         if self.state is not SessionState.SELECTED or self.pattern_tracker is None:
             return SessionUpdate(self.state, "Pattern tracking is unavailable until one profile is selected.")
         if now is not None:
@@ -463,13 +471,6 @@ class DigitStrategySession:
                 self.state = SessionState.BLOCKED
                 self._clear_candidate()
                 return SessionUpdate(self.state, "Frequency feed is stale or timestamp-inconsistent; strategy blocked.")
-        if self.signal_generated:
-            return SessionUpdate(
-                self.state,
-                "Entry signal already generated for this setup; duplicate signals are suppressed.",
-                self.qualification,
-                percentage_triggered=self.percentage_triggered,
-            )
         if self.skip_current_tick:
             self.skip_current_tick = False
             return SessionUpdate(

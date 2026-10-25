@@ -274,28 +274,40 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(update.state, SessionState.BLOCKED)
         self.assertIn("stale or timestamp-inconsistent", update.reason)
 
-    def test_execution_lock_keeps_frequency_receipt_fresh(self):
+    def test_execution_lock_bypasses_freshness_and_market_checks(self):
         self.start_stable_over3()
         increased = over3_percentages()
         increased[0] = 8.1
         self.add(17, increased, "execution-trigger")
+        self.session.on_tick(2)
+        self.session.on_tick(0)
+        self.session.on_tick(2)
+        completed = self.session.on_tick(7)
+        self.assertTrue(completed.pattern_completed)
         self.session.lock_execution()
 
-        for seconds in range(18, 31):
-            snapshot_time = self.start + timedelta(seconds=seconds, milliseconds=100)
-            snapshot = PercentageSnapshot(
-                "verified-feed-v1",
-                "1HZ100V",
-                snapshot_time - timedelta(milliseconds=100),
-                snapshot_time,
-                over3_percentages(),
-                f"execution-event-{seconds}",
-            )
-            update = self.session.add_snapshot(snapshot, snapshot_time)
-            self.assertEqual(update.state, SessionState.SELECTED)
+        stale_snapshot_time = self.start + timedelta(minutes=5)
+        changed_percentages = dict(over3_percentages())
+        changed_percentages[5] = 12.0
+        stale_snapshot = PercentageSnapshot(
+            "verified-feed-v1",
+            "1HZ100V",
+            stale_snapshot_time - timedelta(seconds=40),
+            stale_snapshot_time - timedelta(seconds=40),
+            changed_percentages,
+            "stale-during-execution",
+        )
+        snapshot_update = self.session.add_snapshot(stale_snapshot, stale_snapshot_time)
+        self.assertEqual(snapshot_update.state, SessionState.SELECTED)
+        self.assertIn("execution", snapshot_update.reason.lower())
 
-            tick_update = self.session.on_tick(0, now=snapshot_time)
-            self.assertNotEqual(tick_update.state, SessionState.BLOCKED)
+        tick_update = self.session.on_tick(0, now=stale_snapshot_time)
+        self.assertEqual(tick_update.state, SessionState.SELECTED)
+        self.assertIn("duplicate signals are suppressed", tick_update.reason.lower())
+
+        self.session.unlock_execution()
+        post_unlock_update = self.session.on_tick(0, now=stale_snapshot_time + timedelta(seconds=21))
+        self.assertEqual(post_unlock_update.state, SessionState.BLOCKED)
     def test_selected_setup_is_not_reset_by_red_green_change_after_stability_passed(self):
         self.start_stable_over3()
         passed_at = self.session.stable_since

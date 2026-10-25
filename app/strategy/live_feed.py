@@ -107,6 +107,8 @@ class LiveStrategyFeed:
         """Consume one real frequency event while observing or monitoring a setup."""
         if self.session is None or self.feed_health is None or self.symbol is None:
             return None
+        if self.session.execution_locked:
+            return None
         if self.session.state in (SessionState.BLOCKED, SessionState.STOPPED, SessionState.IDLE):
             return None
         # Continue consuming real frequency snapshots after profile selection:
@@ -147,7 +149,11 @@ class LiveStrategyFeed:
         return self._status("Execution sequence ended; market qualification is available again.", self.session.qualification)
 
     def on_tick(self, symbol: str, tick: Mapping[str, Any], fallback_pip_size: Any = None) -> dict[str, Any] | None:
-        if self.session is None or self.symbol != symbol or self.session.state is not SessionState.SELECTED:
+        if self.session is None or self.symbol != symbol:
+            return None
+        if self.session.execution_locked and not self.session.signal_generated:
+            return None
+        if self.session.state is not SessionState.SELECTED:
             return None
         pip_size = tick.get("pip_size", fallback_pip_size)
         digit = extract_last_digit(tick.get("quote"), pip_size)
@@ -161,6 +167,8 @@ class LiveStrategyFeed:
 
     def reject_tick(self, reason: str) -> dict[str, Any] | None:
         """Fail closed when a live tick is invalid, duplicate, or out of order."""
+        if self.session is not None and self.session.execution_locked:
+            return None
         if self.feed_health is not None:
             self.feed_health.mark_disconnected(reason)
         if self.session is not None and self.session.state not in (SessionState.IDLE, SessionState.STOPPED):
