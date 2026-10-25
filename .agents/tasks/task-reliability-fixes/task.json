@@ -1,0 +1,7 @@
+{
+  "task_id": "task-reliability-fixes",
+  "task_description": "Implement 6 reliability fixes (Fixes 1-5 and 7; Fix 6 skipped per user) in deriv_gateway.py and optionally execution.py to make the TradeBridge strategy bot work correctly with the Deriv API under production conditions.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

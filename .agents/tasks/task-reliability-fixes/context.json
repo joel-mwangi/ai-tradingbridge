@@ -1,0 +1,23 @@
+{
+  "project_type": "FastAPI Python backend — Deriv trading gateway with WebSocket proxies",
+  "language": "Python 3.11+",
+  "build_system": "pip + requirements.txt, no build step, ASGI with uvicorn",
+  "test_framework": "pytest (project test files in tests/, run with python -m pytest -q)",
+  "build_command": "n/a — no compile step",
+  "test_command": ".\\aienv\\Scripts\\python.exe -m pytest -q",
+  "verification_instructions": "From d:\\ai-tradingbridge, run: .\\aienv\\Scripts\\python.exe -m pytest -q. All 187 existing tests must pass. No new test file is required for these fixes but tests in tests/test_strategy_execution.py and tests/test_deriv_gateway.py are the most relevant.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Always run pytest from d:\\ai-tradingbridge (the workspace root). Use .\\aienv\\Scripts\\python.exe, NOT the system python. Do NOT restart a running uvicorn server. Do NOT push to remote.",
+  "contribution_requirements": "Do NOT change any strategy logic (digit analysis, color positions, group selection). Do NOT change public method signatures in execution.py. Do NOT add new dependencies beyond requirements.txt (asyncio, websockets, fastapi, httpx are all available). Do NOT write documentation, README updates, or comment-only changes.",
+  "key_patterns": "Inner coroutines (client_to_deriv, deriv_to_client, client_to_upstream, upstream_to_client) are defined inside the WebSocket handler functions and close over local variables. The asyncio.wait(tasks, return_when=FIRST_COMPLETED) pattern is used to manage concurrent tasks inside each proxy. Strategy state variables (strategy_execution, strategy_feed, etc.) are local to the outer proxy function scope. ExecutionState enum values: IDLE, WAITING_PROPOSAL, WAITING_BUY, WAITING_SETTLEMENT, COMPLETED, STOPPED, BLOCKED.",
+  "relevant_files": [
+    "app/deriv_gateway.py",
+    "app/strategy/execution.py",
+    "app/strategy/live_feed.py",
+    "app/strategy/session.py",
+    "tests/test_strategy_execution.py",
+    "tests/test_deriv_gateway.py",
+    ".agents/tasks/reliability-fixes-plan.md"
+  ],
+  "directory_structure": "app/ — FastAPI app; app/strategy/ — strategy logic (session, execution, live_feed, digit_strategy, feed_health, market_frequency_adapter); tests/ — pytest tests; aienv/ — virtualenv (do not modify); requirements.txt — pinned deps"
+}

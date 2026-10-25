@@ -1,0 +1,530 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Fix `test_over3_yellow_at_9_percent_fails_when_yellow_is_in_zone`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912730263
+      },
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912855201
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912950352
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913735882
+      }
+    ],
+    "1.2 Fix `test_over5_red_alone_is_not_invalidated_by_yellow_outside_zone`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912735922
+      },
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912872385
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912957129
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913742048
+      }
+    ],
+    "1.3 Fix `test_under6_red_alone_qualifies_when_yellow_is_outside_zone`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912743505
+      },
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912900545
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912967578
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913749177
+      }
+    ],
+    "2.1 Add `test_yellow_at_exactly_9_percent_in_over_zone_fails` to `AutomaticSelectionTests`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912747540
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913757411
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913997335
+      }
+    ],
+    "2.2 Add `test_yellow_at_8_point_9_in_over_zone_passes` to `AutomaticSelectionTests`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912749136
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913763375
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914014314
+      }
+    ],
+    "2.3 Add `test_over_red_alone_qualifies_when_yellow_outside_zone` to `AutomaticSelectionTests`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912750903
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913794560
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914029656
+      }
+    ],
+    "2.4 Add `test_under_red_alone_qualifies_when_yellow_outside_zone` to `AutomaticSelectionTests`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912753192
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913807506
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914039875
+      }
+    ],
+    "3. Checkpoint — Ensure all tests pass, ask the user if questions arise.": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912755275
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914072116
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914391818
+      }
+    ],
+    "4.1 Add `block_reason: str | None = None` field to `StrategyExecution` dataclass in `app/strategy/execution.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912756620
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914416055
+      }
+    ],
+    "4.2 Update `block()` and `_block()` to accept and store an optional `block_reason` parameter": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912758402
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914416534
+      }
+    ],
+    "4.3 Fix `stop()` to preserve `active_contract_id` when it is set": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912759621
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914417021
+      }
+    ],
+    "5.1 Add active-state guard before creating a new `StrategyExecution` in `client_to_deriv()` in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912761487
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914417386
+      }
+    ],
+    "5.2 Add reconciliation-required guard for BLOCKED/STOPPED states with unresolved contract": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912775220
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914417756
+      }
+    ],
+    "5.3 Allow fresh start when state is `IDLE`, `COMPLETED`, `STOPPED` (no contract), or `BLOCKED` (no contract)": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912776666
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914418136
+      }
+    ],
+    "6.1 Add `subscribed_symbols: set[str] = set()` to connection-scoped variables in `deriv_websocket_proxy()` in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912778052
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914418500
+      }
+    ],
+    "6.2 Guard the `await upstream.send({\"ticks\": symbol, \"subscribe\": 1})` call in the `start` action handler": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912779679
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914418857
+      }
+    ],
+    "6.3 Add `forget_all` send on `stop` action when `subscribed_symbols` is non-empty": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912781032
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914419229
+      }
+    ],
+    "7. Checkpoint — Ensure all tests pass, ask the user if questions arise.": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912783281
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914419570
+      }
+    ],
+    "8.1 Update `strategy_response_timeout_monitor()` in `app/deriv_gateway.py` to call `block()` with `block_reason=\"UNKNOWN_OUTCOME\"`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912784653
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914419974
+      }
+    ],
+    "9.1 Add `pending_settlement_deadline_id: int | None = None` to connection-scoped variables in `deriv_websocket_proxy()` in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912786502
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914420353
+      }
+    ],
+    "9.2 Register a settlement deadline after `strategy_execution.on_buy()` returns a subscribe message": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912787797
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914420734
+      }
+    ],
+    "9.3 Cancel the settlement deadline when a terminal `proposal_open_contract` arrives before expiry": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912789041
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914421116
+      }
+    ],
+    "9.4 Confirm existing `strategy_response_timeout_monitor()` handles `phase == \"settlement\"` correctly": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912791532
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914421503
+      }
+    ],
+    "10.1 Add `pending_reconcile_requests: dict[int, str] = {}` to connection-scoped variables in `deriv_websocket_proxy()` in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912794175
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914421871
+      }
+    ],
+    "10.2 Add `\"reconcile\"` to the supported strategy actions list and implement the handler in `client_to_deriv()`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912796325
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914422246
+      }
+    ],
+    "10.3 Handle `profit_table` responses in `deriv_to_client()` for reconcile requests": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912798363
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914422615
+      }
+    ],
+    "11. Checkpoint — Ensure all tests pass, ask the user if questions arise.": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912800108
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914422969
+      }
+    ],
+    "12.1 Update `LiveStrategyFeed.start()` in `app/strategy/live_feed.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912801177
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914423336
+      }
+    ],
+    "12.2 Update the `/deriv/ws` start action handler in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912802555
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914423699
+      }
+    ],
+    "12.3 Update the `/deriv/live/market` start action handler in `app/deriv_gateway.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912803811
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914424066
+      }
+    ],
+    "13.1 Update `tests/test_live_strategy_feed.py` to replace all non-1000 `window_size` values": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912805897
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914424468
+      }
+    ],
+    "13.2 Add `test_window_size_1000_is_the_only_accepted_value` to `tests/test_live_strategy_feed.py`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912807044
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914424901
+      }
+    ],
+    "14.1 Add imports for `is_terminal_contract` and `normalize_settlement` from `app.contract_normalization` at the top of `app/deriv_gateway.py` (or inline at point of use)": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912808426
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914425721
+      }
+    ],
+    "14.2 Replace the inline settlement detection block in `deriv_to_client()` in `/deriv/ws`": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912809903
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914426067
+      }
+    ],
+    "15.1 Add Red-alone qualification clarification note to the colour-positions subsections of Over B and Under B": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912811257
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914426440
+      }
+    ],
+    "15.2 Update the **Generalized barrier formulas** introduction to clarify approved barrier coverage": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912812343
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914426831
+      }
+    ],
+    "16. Final checkpoint — Ensure all tests pass, ask the user if questions arise.": [
+      {
+        "executionId": "9c1e6cdd-4ee3-4a38-ba60-4ad950d72b04",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792912813297
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914427201
+      }
+    ],
+    "1. Fix three failing test fixtures in `tests/test_digit_strategy.py`": [
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792913750439
+      }
+    ],
+    "2. Add new targeted tests for Red-alone qualification behaviors": [
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914040973
+      }
+    ],
+    "1.4 Run `tests/test_digit_strategy.py` and confirm zero failures": [
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914454296
+      },
+      {
+        "executionId": "9e5e3069-50da-42ec-ab4f-d519a6da0f1e",
+        "chatSessionId": "sess_46d57f17-25b7-46b5-8c72-2815fd6b11be",
+        "timestamp": 1792914479989
+      }
+    ]
+  }
+}

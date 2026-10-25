@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Implement Fixes 2, 4, 5, 7 — all changes inside deriv_to_client (and upstream_to_client) within deriv_gateway.py. These are independent of the reconnect loop and can be applied to the current flat structure. Fix 4 adds a fail-safe for unparseable profit on confirmed-settled contracts. Fix 2 captures the proposal_open_contract subscription ID and sends forget on settlement. Fix 7 adds error-code-aware retry logic for RateLimit/TemporaryError. Fix 5 adds a DEBUG log when the underlying_symbol tick field is absent.",
+  "status": "pending",
+  "steps": [
+    "Add 'import logging' and 'import random' to the import block at the top of app/deriv_gateway.py (lines 1-20). logging is used by Fix 4 warning and Fix 5 debug; random is used by Fix 1 jitter in FEAT-002.",
+    "Fix 5: In deriv_to_client inside deriv_websocket_proxy (around line 1015, the tick routing block), after 'symbol = tick.get(\"underlying_symbol\") or tick.get(\"symbol\")', add: 'if tick.get(\"underlying_symbol\") is None: logging.debug(\"Tick missing underlying_symbol; using symbol field: %s\", symbol)'. Apply the identical pattern in upstream_to_client inside live_market_proxy (around line 1234).",
+    "Fix 2: In deriv_websocket_proxy, add 'strategy_poc_sub_id: str | None = None' alongside the pending_strategy_proposals declaration (around line 717). In deriv_to_client, inside the proposal_open_contract block (around line 970): when strategy_poc_sub_id is None, set it from provider_message.get('subscription', {}).get('id') or provider_message.get('id'). When settled==True and strategy_poc_sub_id is not None, send {'forget': strategy_poc_sub_id} upstream before calling on_settlement, then set strategy_poc_sub_id = None. Declare strategy_poc_sub_id as nonlocal inside deriv_to_client.",
+    "Fix 4: In deriv_to_client, after the existing on_settlement call (around line 980), add a guard: if next_proposal is None and strategy_execution.state is ExecutionState.WAITING_SETTLEMENT (meaning on_settlement returned None due to unparseable outcome and did not advance state), log a warning with logging.warning, generate a fresh request_id via next_strategy_request_id(), and call strategy_execution.on_settlement(str(contract_id), 'lost', -1.0, fresh_request_id) to force a synthetic loss. Assign the result to next_proposal and use it in the subsequent pending_strategy_proposals logic.",
+    "Fix 7: In deriv_to_client, add 'retriable_attempts: dict[int, int] = {}' alongside pending_strategy_proposals (around line 717). In the pending_strategy_proposals error branch (around line 935): extract error_code = provider_message.get('error', {}).get('code', ''). For error_code in ('RateLimit', 'TemporaryError') and retriable_attempts.get(request_id, 0) < 3: increment retriable_attempts[request_id], compute delay = 2 ** (retriable_attempts[request_id] - 1), await asyncio.sleep(delay), re-add request_id to pending_strategy_proposals, register_strategy_deadline(request_id, 'proposal'), and resend strategy_execution._proposal(request_id) upstream. For exhausted retries or non-retriable codes: call strategy_execution.block(f'Deriv rejected the strategy proposal: {error_code}.') and clean up retriable_attempts. Apply the same pattern in the pending_strategy_buys error branch (around line 958): for retriable buy errors, rather than retrying the buy directly (the quote may have expired), call strategy_execution.block() then immediately call strategy_execution.begin_signal(new_req_id) to restart the proposal cycle with backoff — but ONLY if consecutive_losses < 2 and buy_count < max_buys; otherwise just block."
+  ],
+  "acceptance_criteria": [
+    "Running .\\aienv\\Scripts\\python.exe -m pytest -q from d:\\ai-tradingbridge shows all 187 existing tests passing with no new failures.",
+    "strategy_poc_sub_id is captured and forget is sent upstream before on_settlement is called for a settled contract.",
+    "When on_settlement returns None with state still WAITING_SETTLEMENT, a synthetic loss is applied and the strategy advances rather than stalling.",
+    "When Deriv returns error code RateLimit or TemporaryError on a proposal, the message is retried up to 3 times with exponential backoff before blocking.",
+    "When Deriv returns any other error code, strategy_execution.block() is called with the specific error code in the reason string.",
+    "A DEBUG log is emitted when a tick message is missing the underlying_symbol field."
+  ],
+  "verification": [
+    "cd d:\\ai-tradingbridge && .\\aienv\\Scripts\\python.exe -m pytest -q — all 187 tests pass"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
