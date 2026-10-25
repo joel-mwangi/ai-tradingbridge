@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import math
 import os
 import re
+import random
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -703,394 +705,551 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
         await websocket.close(code=1011)
         return
 
-    try:
-        async with websockets.connect(
-            provider_url,
-            open_timeout=8,
-            close_timeout=3,
-            ping_interval=20,
-            max_size=1_048_576,
-        ) as upstream:
-            await websocket.accept(subprotocol="tradebridge")
+    _log = logging.getLogger(__name__)
+    _MAX_RECONNECT_ATTEMPTS = 5
+    reconnect_attempt = 0
 
-            pending_proposal_requests: set[int] = set()
-            pending_strategy_proposals: set[int] = set()
-            pending_strategy_buys: set[int] = set()
-            strategy_request_deadlines: dict[int, tuple[str, float]] = {}
-            valid_proposals: dict[str, float] = {}
-            strategy_feed = LiveStrategyFeed()
-            strategy_execution: StrategyExecution | None = None
-            strategy_frequency = DigitFrequencyWindow()
-            strategy_pip_size: int | None = None
-            strategy_subscribed_symbol: str | None = None
-            strategy_history_requests: dict[int, str] = {}
+    # State that persists across reconnects.
+    pending_proposal_requests: set[int] = set()
+    pending_strategy_proposals: set[int] = set()
+    pending_strategy_buys: set[int] = set()
+    strategy_request_deadlines: dict[int, tuple[str, float]] = {}
+    valid_proposals: dict[str, float] = {}
+    strategy_feed = LiveStrategyFeed()
+    strategy_execution: StrategyExecution | None = None
+    strategy_frequency = DigitFrequencyWindow()
+    strategy_pip_size: int | None = None
+    strategy_subscribed_symbol: str | None = None
+    strategy_history_requests: dict[int, str] = {}
+    # Subscription ID for the active proposal_open_contract stream (Fix 2).
+    active_poc_sub_id: str | None = None
+    strategy_window_size: int = 1000
 
-            def next_strategy_request_id() -> int:
-                request_id = secrets.randbelow(1_000_000) + 9_000_000
-                while request_id in pending_strategy_proposals or request_id in pending_strategy_buys or request_id in strategy_request_deadlines:
-                    request_id = secrets.randbelow(1_000_000) + 9_000_000
-                return request_id
+    def next_strategy_request_id() -> int:
+        request_id = secrets.randbelow(1_000_000) + 9_000_000
+        while request_id in pending_strategy_proposals or request_id in pending_strategy_buys or request_id in strategy_request_deadlines:
+            request_id = secrets.randbelow(1_000_000) + 9_000_000
+        return request_id
 
-            def register_strategy_deadline(request_id: int, phase: str) -> None:
-                timeout = float(os.getenv("TRADEBRIDGE_STRATEGY_RESPONSE_TIMEOUT_SECONDS", "15"))
-                if not math.isfinite(timeout) or timeout <= 0:
-                    timeout = 15.0
-                strategy_request_deadlines[request_id] = (phase, time.monotonic() + timeout)
+    def register_strategy_deadline(request_id: int, phase: str) -> None:
+        timeout = float(os.getenv("TRADEBRIDGE_STRATEGY_RESPONSE_TIMEOUT_SECONDS", "15"))
+        if not math.isfinite(timeout) or timeout <= 0:
+            timeout = 15.0
+        strategy_request_deadlines[request_id] = (phase, time.monotonic() + timeout)
 
-            async def strategy_response_timeout_monitor() -> None:
-                while True:
-                    await asyncio.sleep(0.25)
-                    if strategy_execution is None:
-                        continue
-                    now = time.monotonic()
-                    expired = [
-                        request_id for request_id, (_, deadline) in strategy_request_deadlines.items()
-                        if deadline <= now
-                    ]
-                    for request_id in expired:
-                        phase, _ = strategy_request_deadlines.pop(request_id)
-                        pending_strategy_proposals.discard(request_id)
-                        pending_strategy_buys.discard(request_id)
-                        strategy_execution.block(f"Timed out waiting for Deriv {phase} response.")
-                        await websocket.send_json(
-                            strategy_execution.status(f"Automatic execution blocked: Deriv {phase} response timed out.")
-                        )
-                        await websocket.send_json(strategy_feed.unlock_execution())
+    while True:
+        # Re-fetch OTP on every connect attempt (OTPs are single-use).
+        try:
+            credential = await _owned_credential(user_id)
+        except HTTPException as exc:
+            await websocket.close(code=4401 if exc.status_code in (401, 409) else 1011)
+            return
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                otp_response = await client.post(
+                    f"https://api.derivws.com/trading/v1/options/accounts/{account_id}/otp",
+                    headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
+                )
+                if not otp_response.is_success:
+                    await websocket.close(code=1011)
+                    return
+                otp_payload = otp_response.json()
+                otp_data = otp_payload.get("data") if isinstance(otp_payload, dict) else None
+                provider_url = otp_data.get("url") if isinstance(otp_data, dict) else None
+                if not isinstance(provider_url, str):
+                    await websocket.close(code=1011)
+                    return
+                from urllib.parse import urlparse
+                parsed = urlparse(provider_url)
+                if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
+                    await websocket.close(code=1011)
+                    return
+        except (httpx.HTTPError, ValueError):
+            await websocket.close(code=1011)
+            return
 
-            async def client_to_deriv() -> None:
-                while True:
-                    raw = await websocket.receive_text()
-                    if len(raw) > 256_000:
-                        await websocket.close(code=4400)
-                        return
+        try:
+            async with websockets.connect(
+                provider_url,
+                open_timeout=8,
+                close_timeout=3,
+                ping_interval=20,
+                max_size=1_048_576,
+            ) as upstream:
+                reconnect_attempt = 0  # reset on successful connection
+                from starlette.websockets import WebSocketState
+                if websocket.client_state == WebSocketState.CONNECTING:
+                    await websocket.accept(subprotocol="tradebridge")
+
+                # Resubscribe tick stream after a reconnect.
+                if strategy_subscribed_symbol:
+                    history_request_id = next_strategy_request_id()
+                    strategy_history_requests[history_request_id] = strategy_subscribed_symbol
                     try:
-                        message = json.loads(raw)
-                    except ValueError:
-                        await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send a valid JSON request."}})
-                        continue
-                    if not isinstance(message, dict):
-                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send a single Deriv request object."}})
-                        continue
-                    if isinstance(message.get("strategy"), dict):
-                        control = message["strategy"]
-                        action = control.get("action")
-                        if action == "start":
-                            symbol = control.get("symbol")
-                            window_size = control.get("window_size", 1000)
-                            barrier = control.get("barrier", 5)
-                            direction = control.get("direction")
-                            if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
-                                continue
-                            if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
-                                continue
-                            if type(barrier) is not int or barrier not in range(10):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
-                                continue
-                            if direction not in ("over", "under"):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
-                                continue
-                            try:
-                                stake = float(control.get("stake", os.getenv("TRADEBRIDGE_STRATEGY_STAKE", "1")))
-                                duration = control.get("duration", 1)
-                                currency = control.get("currency", os.getenv("TRADEBRIDGE_STRATEGY_CURRENCY", "USD"))
-                                group = Group(direction)
-                                candidate_execution = StrategyExecution(
-                                    symbol,
-                                    group,
-                                    barrier,
-                                    stake=stake,
-                                    currency=currency,
-                                    duration=duration,
-                                )
-                                if stake > float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000")):
-                                    raise ValueError("Strategy stake exceeds the configured demo limit.")
-                            except (TypeError, ValueError) as exc:
-                                await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
-                                continue
-                            try:
-                                strategy_status = strategy_feed.start(
-                                    symbol,
-                                    window_size=window_size,
-                                    barrier=barrier,
-                                    direction=direction,
-                                )
-                            except ValueError as exc:
-                                await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
-                                continue
-                            strategy_execution = candidate_execution
-                            strategy_frequency = DigitFrequencyWindow()
-                            strategy_pip_size = None
-                            strategy_subscribed_symbol = symbol
-                            history_request_id = next_strategy_request_id()
-                            strategy_history_requests[history_request_id] = symbol
-                            await upstream.send(json.dumps({
-                                "ticks_history": symbol,
-                                "count": window_size,
-                                "end": "latest",
-                                "style": "ticks",
-                                "req_id": history_request_id,
-                            }, separators=(",", ":")))
-                            await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
-                            await websocket.send_json(strategy_status)
-                            await websocket.send_json(strategy_execution.status("Strategy execution armed for the next confirmed signal."))
-                        elif action == "stop":
-                            strategy_status = strategy_feed.stop()
-                            if strategy_execution is not None:
-                                strategy_execution.stop()
-                                await websocket.send_json(strategy_execution.status("Strategy execution stopped by the user."))
-                            await websocket.send_json(strategy_status)
-                        elif action == "status":
-                            await websocket.send_json(strategy_feed._status("Current strategy observation status."))
-                            if strategy_execution is not None:
-                                await websocket.send_json(strategy_execution.status("Current strategy execution status."))
-                        else:
-                            await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
-                        continue
-                    request_keys = set(message).intersection(_ALLOWED_CLIENT_REQUESTS)
-                    if len(request_keys) != 1 or "authorize" in message:
-                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send exactly one supported Deriv request."}})
-                        continue
+                        await upstream.send(json.dumps({
+                            "ticks_history": strategy_subscribed_symbol,
+                            "count": strategy_window_size,
+                            "end": "latest",
+                            "style": "ticks",
+                            "req_id": history_request_id,
+                        }, separators=(",", ":")))
+                        await upstream.send(json.dumps({"ticks": strategy_subscribed_symbol, "subscribe": 1}, separators=(",", ":")))
+                    except Exception:
+                        pass
 
-                    # Enforce the supported manual digit-contract scope at the gateway,
-                    # not only in the UI. This endpoint is demo-only.
-                    if "proposal" in message:
-                        amount = message.get("amount")
-                        contract_type = message.get("contract_type")
-                        duration = message.get("duration")
-                        duration_unit = message.get("duration_unit")
-                        symbol = message.get("underlying_symbol", message.get("symbol"))
-                        allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
-                        try:
-                            stake = float(amount)
-                        except (TypeError, ValueError):
-                            stake = 0
-                        if not (1 <= stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
-                            await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
+                async def strategy_response_timeout_monitor() -> None:
+                    while True:
+                        await asyncio.sleep(0.25)
+                        if strategy_execution is None:
                             continue
-                        request_id = message.get("req_id")
-                        if type(request_id) is not int or request_id < 0:
-                            await websocket.send_json({"error": {"code": "INVALID_REQUEST_ID", "message": "A valid request ID is required for a proposal."}})
-                            continue
-                        if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
-                            await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only supported digit contracts and valid symbols are allowed."}})
-                            continue
-                        if duration_unit != "t" or type(duration) is not int or not 1 <= duration <= 10:
-                            await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use 1–10 ticks."}})
-                            continue
-                        if contract_type in {"DIGITOVER", "DIGITUNDER", "DIGITMATCH", "DIGITDIFF"}:
-                            barrier = message.get("barrier")
-                            if not isinstance(barrier, (str, int)) or not str(barrier).isdigit() or not 0 <= int(barrier) <= 9:
-                                await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "A valid digit barrier is required."}})
-                                continue
-                            if (contract_type == "DIGITOVER" and int(barrier) > 8) or (contract_type == "DIGITUNDER" and int(barrier) < 1):
-                                await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "The barrier is outside the contract's valid range."}})
-                                continue
-                        if contract_type in {"DIGITEVEN", "DIGITODD"} and "barrier" in message:
-                            await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
-                            continue
-                    if "buy" in message:
-                        try:
-                            buy_price = float(message.get("price"))
-                        except (TypeError, ValueError):
-                            buy_price = 0
-                        if not (0 < buy_price <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
-                            await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Purchase price is outside the server-configured limit."}})
-                            continue
-                        if not isinstance(message.get("buy"), (str, int)) or not str(message.get("buy")).strip():
-                            await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A valid proposal identifier is required."}})
-                            continue
-                        proposal_id = str(message.get("buy"))
-                        quoted_price = valid_proposals.get(proposal_id)
-                        if quoted_price is None:
-                            await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "Purchase must use a fresh proposal created on this session."}})
-                            continue
-                        if buy_price + 1e-9 < quoted_price:
-                            await websocket.send_json({"error": {"code": "INVALID_PURCHASE_PRICE", "message": "Purchase maximum price cannot be below the quoted ask price."}})
-                            continue
-                        # Consume before sending upstream. If the acknowledgement is
-                        # lost, this session will not submit the same proposal twice.
-                        valid_proposals.pop(proposal_id, None)
-                    if "sell" in message:
-                        if not str(message.get("sell", "")).isdigit() or message.get("price") != 0:
-                            await websocket.send_json({"error": {"code": "INVALID_SELL", "message": "Only a market sale of an open contract is supported."}})
-                            continue
-                    if "proposal" in message:
-                        pending_proposal_requests.add(message["req_id"])
-                    await upstream.send(json.dumps(message, separators=(",", ":")))
-
-            async def deriv_to_client() -> None:
-                async for raw in upstream:
-                    try:
-                        provider_message = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        provider_message = {}
-                    request_id = provider_message.get("req_id") if isinstance(provider_message, dict) else None
-                    if strategy_execution is not None and isinstance(request_id, int):
-                        if request_id in pending_strategy_proposals:
+                        now = time.monotonic()
+                        expired = [
+                            request_id for request_id, (_, deadline) in strategy_request_deadlines.items()
+                            if deadline <= now
+                        ]
+                        for request_id in expired:
+                            phase, _ = strategy_request_deadlines.pop(request_id)
                             pending_strategy_proposals.discard(request_id)
-                            strategy_request_deadlines.pop(request_id, None)
-                            if provider_message.get("error"):
-                                strategy_execution.block("Deriv rejected the strategy proposal.")
-                                await websocket.send_json(strategy_execution.status("Strategy execution blocked: proposal was rejected."))
-                                await websocket.send_json(strategy_feed.unlock_execution())
-                            elif provider_message.get("msg_type") == "proposal":
-                                proposal = provider_message.get("proposal")
-                                buy_request_id = next_strategy_request_id()
-                                buy_message = strategy_execution.on_proposal(
-                                    request_id,
-                                    proposal if isinstance(proposal, dict) else {},
-                                    buy_request_id,
-                                )
-                                if buy_message is None:
-                                    await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid proposal response."))
-                                    await websocket.send_json(strategy_feed.unlock_execution())
-                                else:
-                                    pending_strategy_buys.add(buy_request_id)
-                                    register_strategy_deadline(buy_request_id, "buy")
-                                    await upstream.send(json.dumps(buy_message, separators=(",", ":")))
-                                    await websocket.send_json(strategy_execution.status("Proposal received; submitting the next sequential buy."))
-                        elif request_id in pending_strategy_buys:
                             pending_strategy_buys.discard(request_id)
-                            strategy_request_deadlines.pop(request_id, None)
-                            if provider_message.get("error"):
-                                strategy_execution.block("Deriv rejected the strategy buy.")
-                                await websocket.send_json(strategy_execution.status("Strategy execution blocked: buy was rejected."))
-                                await websocket.send_json(strategy_feed.unlock_execution())
-                            elif provider_message.get("msg_type") == "buy":
-                                subscribe_message = strategy_execution.on_buy(request_id, provider_message)
-                                if subscribe_message is None:
-                                    await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid buy response."))
-                                    await websocket.send_json(strategy_feed.unlock_execution())
-                                else:
-                                    await upstream.send(json.dumps(subscribe_message, separators=(",", ":")))
-                                    await websocket.send_json(strategy_execution.status("Buy accepted; waiting for contract settlement before continuing."))
-
-                    if strategy_execution is not None and provider_message.get("msg_type") == "proposal_open_contract":
-                        contract = provider_message.get("proposal_open_contract")
-                        if isinstance(contract, dict):
-                            contract_id = contract.get("contract_id")
-                            contract_status = contract.get("status")
-                            settled = contract.get("is_sold") in (1, True, "1") or contract_status in {"won", "lost", "sold"}
-                            if settled and isinstance(contract_id, (str, int)):
-                                next_request_id = next_strategy_request_id()
-                                next_proposal = strategy_execution.on_settlement(
-                                    str(contract_id),
-                                    contract_status if isinstance(contract_status, str) else None,
-                                    contract.get("profit"),
-                                    next_request_id,
-                                )
-                                if next_proposal is not None:
-                                    pending_strategy_proposals.add(next_request_id)
-                                    register_strategy_deadline(next_request_id, "proposal")
-                                    await upstream.send(json.dumps(next_proposal, separators=(",", ":")))
-                                    await websocket.send_json(strategy_execution.status("Contract settled; requesting the next sequential buy."))
-                                elif strategy_execution.state is ExecutionState.STOPPED:
-                                    await websocket.send_json(strategy_execution.status("Two consecutive losses reached; no further buys will be submitted."))
-                                elif strategy_execution.state is ExecutionState.COMPLETED:
-                                    await websocket.send_json(strategy_execution.status("Three sequential buys completed; strategy execution stopped."))
-                                if strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
-                                    await websocket.send_json(strategy_feed.unlock_execution())
-                                    await websocket.send_json(strategy_feed.stop())
-
-                    if provider_message.get("msg_type") == "history":
-                        history_request_id = provider_message.get("req_id")
-                        history_symbol = strategy_history_requests.pop(history_request_id, None) if isinstance(history_request_id, int) else None
-                        history = provider_message.get("history")
-                        if history_symbol and isinstance(history, dict):
-                            pip_size = provider_message.get("pip_size")
-                            if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
-                                strategy_pip_size = pip_size
-                            strategy_frequency.seed_history(
-                                history.get("prices") or [],
-                                history.get("times") or [],
-                                strategy_pip_size,
+                            strategy_execution.block(f"Timed out waiting for Deriv {phase} response.")
+                            await websocket.send_json(
+                                strategy_execution.status(f"Automatic execution blocked: Deriv {phase} response timed out.")
                             )
-                            provider_message["digit_frequency"] = strategy_frequency.snapshot(history_symbol, time.time())
+                            await websocket.send_json(strategy_feed.unlock_execution())
 
-                    if strategy_execution is not None and provider_message.get("msg_type") == "tick":
-                        tick = provider_message.get("tick")
-                        if isinstance(tick, dict):
-                            symbol = tick.get("underlying_symbol") or tick.get("symbol")
-                            if symbol == strategy_subscribed_symbol:
-                                pip_size = tick.get("pip_size")
-                                if pip_size is None:
-                                    pip_size = provider_message.get("pip_size")
+                async def credential_expiry_monitor() -> None:
+                    """Fix 3 — warn client before OAuth credential expires."""
+                    while True:
+                        await asyncio.sleep(60)
+                        try:
+                            cred = await _load_credential(user_id)
+                        except Exception:
+                            continue
+                        if cred is None:
+                            continue
+                        remaining = cred.expires_at - time.time()
+                        if remaining <= 300:
+                            try:
+                                await websocket.send_json({
+                                    "type": "session_warning",
+                                    "message": "Deriv session expires in 5 minutes. Reconnect to continue trading.",
+                                })
+                            except Exception:
+                                return
+
+                async def client_to_deriv() -> None:
+                    nonlocal strategy_execution, strategy_frequency, strategy_pip_size
+                    nonlocal strategy_subscribed_symbol, strategy_window_size
+                    while True:
+                        raw = await websocket.receive_text()
+                        if len(raw) > 256_000:
+                            await websocket.close(code=4400)
+                            return
+                        try:
+                            message = json.loads(raw)
+                        except ValueError:
+                            await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send a valid JSON request."}})
+                            continue
+                        if not isinstance(message, dict):
+                            await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send a single Deriv request object."}})
+                            continue
+                        if isinstance(message.get("strategy"), dict):
+                            control = message["strategy"]
+                            action = control.get("action")
+                            if action == "start":
+                                symbol = control.get("symbol")
+                                window_size = control.get("window_size", 1000)
+                                barrier = control.get("barrier", 5)
+                                direction = control.get("direction")
+                                if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
+                                    continue
+                                if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
+                                    continue
+                                if type(barrier) is not int or barrier not in range(10):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
+                                    continue
+                                if direction not in ("over", "under"):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
+                                    continue
+                                try:
+                                    stake = float(control.get("stake", os.getenv("TRADEBRIDGE_STRATEGY_STAKE", "1")))
+                                    duration = control.get("duration", 1)
+                                    currency = control.get("currency", os.getenv("TRADEBRIDGE_STRATEGY_CURRENCY", "USD"))
+                                    group = Group(direction)
+                                    candidate_execution = StrategyExecution(
+                                        symbol,
+                                        group,
+                                        barrier,
+                                        stake=stake,
+                                        currency=currency,
+                                        duration=duration,
+                                    )
+                                    if stake > float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000")):
+                                        raise ValueError("Strategy stake exceeds the configured demo limit.")
+                                except (TypeError, ValueError) as exc:
+                                    await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
+                                    continue
+                                try:
+                                    strategy_status = strategy_feed.start(
+                                        symbol,
+                                        window_size=window_size,
+                                        barrier=barrier,
+                                        direction=direction,
+                                    )
+                                except ValueError as exc:
+                                    await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
+                                    continue
+                                strategy_execution = candidate_execution
+                                strategy_frequency = DigitFrequencyWindow()
+                                strategy_pip_size = None
+                                strategy_subscribed_symbol = symbol
+                                strategy_window_size = window_size
+                                history_request_id = next_strategy_request_id()
+                                strategy_history_requests[history_request_id] = symbol
+                                await upstream.send(json.dumps({
+                                    "ticks_history": symbol,
+                                    "count": window_size,
+                                    "end": "latest",
+                                    "style": "ticks",
+                                    "req_id": history_request_id,
+                                }, separators=(",", ":")))
+                                await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+                                await websocket.send_json(strategy_status)
+                                await websocket.send_json(strategy_execution.status("Strategy execution armed for the next confirmed signal."))
+                            elif action == "stop":
+                                strategy_status = strategy_feed.stop()
+                                if strategy_execution is not None:
+                                    strategy_execution.stop()
+                                    await websocket.send_json(strategy_execution.status("Strategy execution stopped by the user."))
+                                await websocket.send_json(strategy_status)
+                            elif action == "status":
+                                await websocket.send_json(strategy_feed._status("Current strategy observation status."))
+                                if strategy_execution is not None:
+                                    await websocket.send_json(strategy_execution.status("Current strategy execution status."))
+                            else:
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
+                            continue
+                        request_keys = set(message).intersection(_ALLOWED_CLIENT_REQUESTS)
+                        if len(request_keys) != 1 or "authorize" in message:
+                            await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send exactly one supported Deriv request."}})
+                            continue
+
+                        if "proposal" in message:
+                            amount = message.get("amount")
+                            contract_type = message.get("contract_type")
+                            duration = message.get("duration")
+                            duration_unit = message.get("duration_unit")
+                            symbol = message.get("underlying_symbol", message.get("symbol"))
+                            allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
+                            try:
+                                stake = float(amount)
+                            except (TypeError, ValueError):
+                                stake = 0
+                            if not (1 <= stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
+                                await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
+                                continue
+                            request_id = message.get("req_id")
+                            if type(request_id) is not int or request_id < 0:
+                                await websocket.send_json({"error": {"code": "INVALID_REQUEST_ID", "message": "A valid request ID is required for a proposal."}})
+                                continue
+                            if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                                await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only supported digit contracts and valid symbols are allowed."}})
+                                continue
+                            if duration_unit != "t" or type(duration) is not int or not 1 <= duration <= 10:
+                                await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use 1–10 ticks."}})
+                                continue
+                            if contract_type in {"DIGITOVER", "DIGITUNDER", "DIGITMATCH", "DIGITDIFF"}:
+                                barrier = message.get("barrier")
+                                if not isinstance(barrier, (str, int)) or not str(barrier).isdigit() or not 0 <= int(barrier) <= 9:
+                                    await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "A valid digit barrier is required."}})
+                                    continue
+                                if (contract_type == "DIGITOVER" and int(barrier) > 8) or (contract_type == "DIGITUNDER" and int(barrier) < 1):
+                                    await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "The barrier is outside the contract's valid range."}})
+                                    continue
+                            if contract_type in {"DIGITEVEN", "DIGITODD"} and "barrier" in message:
+                                await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
+                                continue
+                        if "buy" in message:
+                            try:
+                                buy_price = float(message.get("price"))
+                            except (TypeError, ValueError):
+                                buy_price = 0
+                            if not (0 < buy_price <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
+                                await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Purchase price is outside the server-configured limit."}})
+                                continue
+                            if not isinstance(message.get("buy"), (str, int)) or not str(message.get("buy")).strip():
+                                await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A valid proposal identifier is required."}})
+                                continue
+                            proposal_id = str(message.get("buy"))
+                            quoted_price = valid_proposals.get(proposal_id)
+                            if quoted_price is None:
+                                await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "Purchase must use a fresh proposal created on this session."}})
+                                continue
+                            if buy_price + 1e-9 < quoted_price:
+                                await websocket.send_json({"error": {"code": "INVALID_PURCHASE_PRICE", "message": "Purchase maximum price cannot be below the quoted ask price."}})
+                                continue
+                            valid_proposals.pop(proposal_id, None)
+                        if "sell" in message:
+                            if not str(message.get("sell", "")).isdigit() or message.get("price") != 0:
+                                await websocket.send_json({"error": {"code": "INVALID_SELL", "message": "Only a market sale of an open contract is supported."}})
+                                continue
+                        if "proposal" in message:
+                            pending_proposal_requests.add(message["req_id"])
+                        await upstream.send(json.dumps(message, separators=(",", ":")))
+
+                async def deriv_to_client() -> None:
+                    nonlocal active_poc_sub_id, strategy_pip_size
+                    _RETRIABLE_ERROR_CODES = {"RateLimit", "TemporaryError"}
+                    _retry_counts: dict[str, int] = {}
+
+                    async for raw in upstream:
+                        try:
+                            provider_message = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            provider_message = {}
+                        request_id = provider_message.get("req_id") if isinstance(provider_message, dict) else None
+                        if strategy_execution is not None and isinstance(request_id, int):
+                            if request_id in pending_strategy_proposals:
+                                pending_strategy_proposals.discard(request_id)
+                                strategy_request_deadlines.pop(request_id, None)
+                                if provider_message.get("error"):
+                                    err_code = provider_message.get("error", {}).get("code", "")
+                                    if err_code in _RETRIABLE_ERROR_CODES:
+                                        # Fix 7 — retry retriable errors with backoff.
+                                        retry_count = _retry_counts.get("proposal", 0)
+                                        if retry_count < 3:
+                                            _retry_counts["proposal"] = retry_count + 1
+                                            delay = 2 ** retry_count
+                                            await asyncio.sleep(delay)
+                                            new_req_id = next_strategy_request_id()
+                                            strategy_execution.pending_proposal_request = new_req_id
+                                            strategy_execution.state = ExecutionState.WAITING_PROPOSAL
+                                            pending_strategy_proposals.add(new_req_id)
+                                            register_strategy_deadline(new_req_id, "proposal")
+                                            proposal_msg = strategy_execution._proposal(new_req_id)
+                                            await upstream.send(json.dumps(proposal_msg, separators=(",", ":")))
+                                            continue
+                                    _retry_counts.pop("proposal", None)
+                                    strategy_execution.block(f"Deriv rejected the strategy proposal ({err_code}).")
+                                    await websocket.send_json(strategy_execution.status(f"Strategy execution blocked: proposal was rejected ({err_code})."))
+                                    await websocket.send_json(strategy_feed.unlock_execution())
+                                elif provider_message.get("msg_type") == "proposal":
+                                    _retry_counts.pop("proposal", None)
+                                    proposal = provider_message.get("proposal")
+                                    buy_request_id = next_strategy_request_id()
+                                    buy_message = strategy_execution.on_proposal(
+                                        request_id,
+                                        proposal if isinstance(proposal, dict) else {},
+                                        buy_request_id,
+                                    )
+                                    if buy_message is None:
+                                        await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid proposal response."))
+                                        await websocket.send_json(strategy_feed.unlock_execution())
+                                    else:
+                                        pending_strategy_buys.add(buy_request_id)
+                                        register_strategy_deadline(buy_request_id, "buy")
+                                        await upstream.send(json.dumps(buy_message, separators=(",", ":")))
+                                        await websocket.send_json(strategy_execution.status("Proposal received; submitting the next sequential buy."))
+                            elif request_id in pending_strategy_buys:
+                                pending_strategy_buys.discard(request_id)
+                                strategy_request_deadlines.pop(request_id, None)
+                                if provider_message.get("error"):
+                                    err_code = provider_message.get("error", {}).get("code", "")
+                                    if err_code in _RETRIABLE_ERROR_CODES:
+                                        retry_count = _retry_counts.get("buy", 0)
+                                        if retry_count < 3:
+                                            _retry_counts["buy"] = retry_count + 1
+                                            delay = 2 ** retry_count
+                                            await asyncio.sleep(delay)
+                                            # Re-issue a fresh proposal then buy.
+                                            new_req_id = next_strategy_request_id()
+                                            strategy_execution.pending_proposal_request = new_req_id
+                                            strategy_execution.pending_buy_request = None
+                                            strategy_execution.state = ExecutionState.WAITING_PROPOSAL
+                                            pending_strategy_proposals.add(new_req_id)
+                                            register_strategy_deadline(new_req_id, "proposal")
+                                            proposal_msg = strategy_execution._proposal(new_req_id)
+                                            await upstream.send(json.dumps(proposal_msg, separators=(",", ":")))
+                                            continue
+                                    _retry_counts.pop("buy", None)
+                                    strategy_execution.block(f"Deriv rejected the strategy buy ({err_code}).")
+                                    await websocket.send_json(strategy_execution.status(f"Strategy execution blocked: buy was rejected ({err_code})."))
+                                    await websocket.send_json(strategy_feed.unlock_execution())
+                                elif provider_message.get("msg_type") == "buy":
+                                    _retry_counts.pop("buy", None)
+                                    subscribe_message = strategy_execution.on_buy(request_id, provider_message)
+                                    if subscribe_message is None:
+                                        await websocket.send_json(strategy_execution.status("Strategy execution blocked: invalid buy response."))
+                                        await websocket.send_json(strategy_feed.unlock_execution())
+                                    else:
+                                        active_poc_sub_id = None  # will be captured from first poc message
+                                        await upstream.send(json.dumps(subscribe_message, separators=(",", ":")))
+                                        await websocket.send_json(strategy_execution.status("Buy accepted; waiting for contract settlement before continuing."))
+
+                        if strategy_execution is not None and provider_message.get("msg_type") == "proposal_open_contract":
+                            contract = provider_message.get("proposal_open_contract")
+                            if isinstance(contract, dict):
+                                # Fix 2 — capture subscription ID from first poc message.
+                                if active_poc_sub_id is None:
+                                    sub_info = provider_message.get("subscription") or contract.get("subscription")
+                                    if isinstance(sub_info, dict):
+                                        active_poc_sub_id = sub_info.get("id")
+                                    elif isinstance(contract.get("id"), str):
+                                        active_poc_sub_id = contract.get("id")
+
+                                contract_id = contract.get("contract_id")
+                                contract_status = contract.get("status")
+                                settled = contract.get("is_sold") in (1, True, "1") or contract_status in {"won", "lost", "sold"}
+                                if settled and isinstance(contract_id, (str, int)):
+                                    # Fix 2 — send forget before processing settlement.
+                                    if active_poc_sub_id:
+                                        try:
+                                            await upstream.send(json.dumps({"forget": active_poc_sub_id}, separators=(",", ":")))
+                                        except Exception:
+                                            pass
+                                        active_poc_sub_id = None
+
+                                    next_request_id = next_strategy_request_id()
+                                    next_proposal = strategy_execution.on_settlement(
+                                        str(contract_id),
+                                        contract_status if isinstance(contract_status, str) else None,
+                                        contract.get("profit"),
+                                        next_request_id,
+                                        confirmed_settled=True,
+                                    )
+                                    if next_proposal is not None:
+                                        pending_strategy_proposals.add(next_request_id)
+                                        register_strategy_deadline(next_request_id, "proposal")
+                                        await upstream.send(json.dumps(next_proposal, separators=(",", ":")))
+                                        await websocket.send_json(strategy_execution.status("Contract settled; requesting the next sequential buy."))
+                                    elif strategy_execution.state is ExecutionState.STOPPED:
+                                        await websocket.send_json(strategy_execution.status("Two consecutive losses reached; no further buys will be submitted."))
+                                    elif strategy_execution.state is ExecutionState.COMPLETED:
+                                        await websocket.send_json(strategy_execution.status("Three sequential buys completed; strategy execution stopped."))
+                                    if strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
+                                        await websocket.send_json(strategy_feed.unlock_execution())
+                                        await websocket.send_json(strategy_feed.stop())
+
+                        if provider_message.get("msg_type") == "history":
+                            history_request_id = provider_message.get("req_id")
+                            history_symbol = strategy_history_requests.pop(history_request_id, None) if isinstance(history_request_id, int) else None
+                            history = provider_message.get("history")
+                            if history_symbol and isinstance(history, dict):
+                                pip_size = provider_message.get("pip_size")
                                 if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
                                     strategy_pip_size = pip_size
-                                tick_result = strategy_frequency.add_tick(
-                                    tick.get("quote"),
-                                    tick.get("epoch"),
+                                strategy_frequency.seed_history(
+                                    history.get("prices") or [],
+                                    history.get("times") or [],
                                     strategy_pip_size,
-                                    None,
                                 )
-                                provider_message["digit_frequency"] = strategy_frequency.snapshot(symbol, time.time())
-                                active_strategy = strategy_feed.session is not None and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
-                                if active_strategy and tick_result not in {"accepted", "history_overlap"}:
-                                    tick_status = strategy_feed.reject_tick(
-                                        "Duplicate live tick detected."
-                                        if tick_result == "duplicate"
-                                        else "Invalid or out-of-order live tick detected."
+                                provider_message["digit_frequency"] = strategy_frequency.snapshot(history_symbol, time.time())
+
+                        if strategy_execution is not None and provider_message.get("msg_type") == "tick":
+                            tick = provider_message.get("tick")
+                            if isinstance(tick, dict):
+                                # Fix 5 — prefer 'symbol'; fall back to 'underlying_symbol'.
+                                symbol = tick.get("symbol") or tick.get("underlying_symbol")
+                                if not symbol:
+                                    _log.debug("deriv_websocket_proxy tick missing 'symbol' field: %r", tick)
+                                if symbol == strategy_subscribed_symbol:
+                                    pip_size = tick.get("pip_size")
+                                    if pip_size is None:
+                                        pip_size = provider_message.get("pip_size")
+                                    if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                        strategy_pip_size = pip_size
+                                    tick_result = strategy_frequency.add_tick(
+                                        tick.get("quote"),
+                                        tick.get("epoch"),
+                                        strategy_pip_size,
+                                        None,
                                     )
-                                    if tick_status:
-                                        await websocket.send_json(tick_status)
-                                else:
-                                    was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
-                                    strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
-                                    if strategy_status:
-                                        await websocket.send_json(strategy_status)
-                                    if was_selected:
-                                        tick_status = strategy_feed.on_tick(symbol, tick, strategy_pip_size)
+                                    provider_message["digit_frequency"] = strategy_frequency.snapshot(symbol, time.time())
+                                    active_strategy = strategy_feed.session is not None and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
+                                    if active_strategy and tick_result not in {"accepted", "history_overlap"}:
+                                        tick_status = strategy_feed.reject_tick(
+                                            "Duplicate live tick detected."
+                                            if tick_result == "duplicate"
+                                            else "Invalid or out-of-order live tick detected."
+                                        )
                                         if tick_status:
                                             await websocket.send_json(tick_status)
-                                            if tick_status.get("signal_generated") and strategy_execution.state is ExecutionState.IDLE:
-                                                proposal_request_id = next_strategy_request_id()
-                                                proposal_message = strategy_execution.begin_signal(proposal_request_id)
-                                                if proposal_message is not None:
-                                                    pending_strategy_proposals.add(proposal_request_id)
-                                                    register_strategy_deadline(proposal_request_id, "proposal")
-                                                    strategy_feed.lock_execution()
-                                                    await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
-                                                    await websocket.send_json(strategy_execution.status("Confirmed signal received; requesting the first automatic buy."))
+                                    else:
+                                        was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
+                                        strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
+                                        if strategy_status:
+                                            await websocket.send_json(strategy_status)
+                                        if was_selected:
+                                            tick_status = strategy_feed.on_tick(symbol, tick, strategy_pip_size)
+                                            if tick_status:
+                                                await websocket.send_json(tick_status)
+                                                if tick_status.get("signal_generated") and strategy_execution.state is ExecutionState.IDLE:
+                                                    proposal_request_id = next_strategy_request_id()
+                                                    proposal_message = strategy_execution.begin_signal(proposal_request_id)
+                                                    if proposal_message is not None:
+                                                        pending_strategy_proposals.add(proposal_request_id)
+                                                        register_strategy_deadline(proposal_request_id, "proposal")
+                                                        strategy_feed.lock_execution()
+                                                        await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
+                                                        await websocket.send_json(strategy_execution.status("Confirmed signal received; requesting the first automatic buy."))
 
-                    if isinstance(request_id, int) and request_id in pending_proposal_requests:
-                        if provider_message.get("msg_type") == "proposal":
-                            proposal = provider_message.get("proposal")
-                            if isinstance(proposal, dict):
-                                proposal_id = proposal.get("id")
-                                try:
-                                    ask_price = float(proposal.get("ask_price"))
-                                except (TypeError, ValueError):
-                                    ask_price = 0
-                                if isinstance(proposal_id, (str, int)) and str(proposal_id) and ask_price > 0 and math.isfinite(ask_price):
-                                    valid_proposals[str(proposal_id)] = ask_price
-                                    while len(valid_proposals) > 128:
-                                        valid_proposals.pop(next(iter(valid_proposals)))
-                        if provider_message.get("error") or provider_message.get("msg_type") == "proposal":
-                            pending_proposal_requests.discard(request_id)
-                    await websocket.send_text(raw)
+                        if isinstance(request_id, int) and request_id in pending_proposal_requests:
+                            if provider_message.get("msg_type") == "proposal":
+                                proposal = provider_message.get("proposal")
+                                if isinstance(proposal, dict):
+                                    proposal_id = proposal.get("id")
+                                    try:
+                                        ask_price = float(proposal.get("ask_price"))
+                                    except (TypeError, ValueError):
+                                        ask_price = 0
+                                    if isinstance(proposal_id, (str, int)) and str(proposal_id) and ask_price > 0 and math.isfinite(ask_price):
+                                        valid_proposals[str(proposal_id)] = ask_price
+                                        while len(valid_proposals) > 128:
+                                            valid_proposals.pop(next(iter(valid_proposals)))
+                            if provider_message.get("error") or provider_message.get("msg_type") == "proposal":
+                                pending_proposal_requests.discard(request_id)
+                        await websocket.send_text(raw)
 
-            tasks = {
-                asyncio.create_task(client_to_deriv()),
-                asyncio.create_task(deriv_to_client()),
-                asyncio.create_task(strategy_response_timeout_monitor()),
-            }
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            for task in done:
-                if not task.cancelled():
-                    error = task.exception()
-                    if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
-                        raise error
-    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
-        pass
-    except Exception:
-        try:
-            await websocket.close(code=1011)
+                tasks = {
+                    asyncio.create_task(client_to_deriv()),
+                    asyncio.create_task(deriv_to_client()),
+                    asyncio.create_task(strategy_response_timeout_monitor()),
+                    asyncio.create_task(credential_expiry_monitor()),
+                }
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    if not task.cancelled():
+                        error = task.exception()
+                        if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
+                            raise error
+                # Client disconnected cleanly — stop.
+                return
+
+        except WebSocketDisconnect:
+            return
+        except websockets.exceptions.ConnectionClosed:
+            reconnect_attempt += 1
+            if reconnect_attempt > _MAX_RECONNECT_ATTEMPTS:
+                _log.warning("deriv_websocket_proxy: upstream closed after %d reconnect attempts; giving up.", _MAX_RECONNECT_ATTEMPTS)
+                try:
+                    await websocket.send_json({"error": {"code": "SESSION_DISCONNECTED", "message": "Deriv connection lost. Please reconnect."}})
+                    await websocket.close(code=1011)
+                except Exception:
+                    pass
+                return
+            delay = min(2 ** (reconnect_attempt - 1), 30) + random.uniform(0, 1)
+            _log.info("deriv_websocket_proxy: upstream closed, reconnecting in %.1fs (attempt %d/%d).", delay, reconnect_attempt, _MAX_RECONNECT_ATTEMPTS)
+            await asyncio.sleep(delay)
         except Exception:
-            pass
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+            return
 
 
 @router.websocket("/live/market")
@@ -1106,189 +1265,217 @@ async def live_market_proxy(websocket: WebSocket) -> None:
     pip_size_by_symbol: dict[str, int] = {}
     strategy_feed = LiveStrategyFeed()
     allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
-    try:
-        async with websockets.connect(
-            "wss://api.derivws.com/trading/v1/options/ws/public",
-            open_timeout=8,
-            close_timeout=3,
-            ping_interval=20,
-            max_size=1_048_576,
-        ) as upstream:
-            async def client_to_upstream() -> None:
-                while True:
-                    raw = await websocket.receive_text()
-                    if len(raw.encode("utf-8")) > 64_000:
-                        await websocket.close(code=4400, reason="Request too large")
-                        return
+    _log = logging.getLogger(__name__)
+    reconnect_attempt = 0
+    _MAX_RECONNECT_ATTEMPTS = 5
+
+    while True:
+        try:
+            async with websockets.connect(
+                "wss://api.derivws.com/trading/v1/options/ws/public",
+                open_timeout=8,
+                close_timeout=3,
+                ping_interval=20,
+                max_size=1_048_576,
+            ) as upstream:
+                reconnect_attempt = 0  # reset on successful connection
+
+                # Resubscribe to any symbols that were active before a reconnect.
+                for sym in list(subscribed_symbols):
                     try:
-                        message = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send valid JSON."}})
-                        continue
-                    if isinstance(message, dict) and isinstance(message.get("strategy"), dict):
-                        control = message["strategy"]
-                        action = control.get("action")
-                        if action == "start":
-                            symbol = control.get("symbol")
-                            if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
-                                continue
-                            window_size = control.get("window_size", 1000)
-                            if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
-                                continue
-                            barrier = control.get("barrier", 5)
-                            if type(barrier) is not int or barrier not in range(10):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
-                                continue
-                            direction = control.get("direction")
-                            if direction not in ("over", "under"):
-                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
-                                continue
-                            already_subscribed = symbol in subscribed_symbols
-                            tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                            initial_frequency = tracker.snapshot(symbol, time.time())
-                            try:
-                                status = strategy_feed.start(
-                                    symbol,
-                                    window_size=window_size,
-                                    barrier=barrier,
-                                    direction=direction,
-                                    initial_frequency=initial_frequency,
-                                )
-                            except ValueError as exc:
-                                await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
-                                continue
-                            subscribed_symbols.add(symbol)
-                            history_req_id = secrets.randbelow(1_000_000) + 8_000_000
-                            while history_req_id in history_requests:
-                                history_req_id = secrets.randbelow(1_000_000) + 8_000_000
-                            history_requests[history_req_id] = symbol
-                            await upstream.send(json.dumps({"ticks_history": symbol, "count": window_size, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
-                            # Do not create a second upstream tick stream when the UI
-                            # already subscribed to this symbol or Start is pressed again.
-                            if not already_subscribed:
-                                await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
-                            await websocket.send_json(status)
-                        elif action == "stop":
-                            await websocket.send_json(strategy_feed.stop())
-                        elif action == "status":
-                            await websocket.send_json(strategy_feed._status("Current strategy observation status."))
-                        else:
-                            await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
-                        continue
-                    if not isinstance(message, dict) or not set(message).intersection(allowed):
-                        await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported market-data request."}})
-                        continue
-                    if "ticks" in message or "ticks_history" in message:
-                        symbol = message.get("ticks") if isinstance(message.get("ticks"), str) else message.get("ticks_history")
-                        if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
-                            await websocket.send_json({"error": {"code": "INVALID_SYMBOL", "message": "Invalid market symbol."}})
+                        await upstream.send(json.dumps({"ticks": sym, "subscribe": 1}, separators=(",", ":")))
+                    except Exception:
+                        pass
+
+                async def client_to_upstream() -> None:
+                    while True:
+                        raw = await websocket.receive_text()
+                        if len(raw.encode("utf-8")) > 64_000:
+                            await websocket.close(code=4400, reason="Request too large")
+                            return
+                        try:
+                            message = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            await websocket.send_json({"error": {"code": "INVALID_JSON", "message": "Send valid JSON."}})
                             continue
-                        if message.get("subscribe") == 1:
-                            subscribed_symbols.add(symbol)
-                            if len(subscribed_symbols) > 256:
-                                subscribed_symbols.discard(symbol)
-                                await websocket.send_json({"error": {"code": "SUBSCRIPTION_LIMIT", "message": "Too many active subscriptions."}})
-                                continue
-                    if isinstance(message.get("ticks_history"), str) and isinstance(message.get("req_id"), int):
-                        history_requests[message["req_id"]] = message["ticks_history"]
-                    await upstream.send(json.dumps(message, separators=(",", ":")))
-
-            async def upstream_to_client() -> None:
-                async for raw in upstream:
-                    try:
-                        provider_message = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        provider_message = None
-
-                    if isinstance(provider_message, dict):
-                        msg_type = provider_message.get("msg_type")
-                        if msg_type == "history":
-                            req_id = provider_message.get("req_id")
-                            symbol = history_requests.pop(req_id, None) if isinstance(req_id, int) else None
-                            history = provider_message.get("history")
-                            if symbol and isinstance(history, dict):
-                                pip_size = provider_message.get("pip_size")
-                                if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
-                                    pip_size_by_symbol[symbol] = pip_size
+                        if isinstance(message, dict) and isinstance(message.get("strategy"), dict):
+                            control = message["strategy"]
+                            action = control.get("action")
+                            if action == "start":
+                                symbol = control.get("symbol")
+                                if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
+                                    continue
+                                window_size = control.get("window_size", 1000)
+                                if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
+                                    continue
+                                barrier = control.get("barrier", 5)
+                                if type(barrier) is not int or barrier not in range(10):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
+                                    continue
+                                direction = control.get("direction")
+                                if direction not in ("over", "under"):
+                                    await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
+                                    continue
+                                already_subscribed = symbol in subscribed_symbols
                                 tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                                tracker.seed_history(
-                                    history.get("prices") or [],
-                                    history.get("times") or [],
-                                    pip_size_by_symbol.get(symbol),
-                                )
-                                provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
-                                # History seeds the rolling frequency calculator only.
-                                # It is not a post-Start percentage observation.
-                        elif msg_type == "candles":
-                            # Candle-history requests share the request map used by
-                            # tick history for symbol validation/analytics. Candle
-                            # responses do not need that entry, so release it here.
-                            req_id = provider_message.get("req_id")
-                            if isinstance(req_id, int):
-                                history_requests.pop(req_id, None)
-                        elif msg_type == "tick":
-                            tick = provider_message.get("tick")
-                            if isinstance(tick, dict):
-                                symbol = tick.get("underlying_symbol") or tick.get("symbol")
-                                if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
-                                    tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
-                                    pip_size = tick.get("pip_size")
-                                    if pip_size is None:
-                                        pip_size = provider_message.get("pip_size")
+                                initial_frequency = tracker.snapshot(symbol, time.time())
+                                try:
+                                    status = strategy_feed.start(
+                                        symbol,
+                                        window_size=window_size,
+                                        barrier=barrier,
+                                        direction=direction,
+                                        initial_frequency=initial_frequency,
+                                    )
+                                except ValueError as exc:
+                                    await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
+                                    continue
+                                subscribed_symbols.add(symbol)
+                                history_req_id = secrets.randbelow(1_000_000) + 8_000_000
+                                while history_req_id in history_requests:
+                                    history_req_id = secrets.randbelow(1_000_000) + 8_000_000
+                                history_requests[history_req_id] = symbol
+                                await upstream.send(json.dumps({"ticks_history": symbol, "count": window_size, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
+                                # Do not create a second upstream tick stream when the UI
+                                # already subscribed to this symbol or Start is pressed again.
+                                if not already_subscribed:
+                                    await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+                                await websocket.send_json(status)
+                            elif action == "stop":
+                                await websocket.send_json(strategy_feed.stop())
+                            elif action == "status":
+                                await websocket.send_json(strategy_feed._status("Current strategy observation status."))
+                            else:
+                                await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
+                            continue
+                        if not isinstance(message, dict) or not set(message).intersection(allowed):
+                            await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported market-data request."}})
+                            continue
+                        if "ticks" in message or "ticks_history" in message:
+                            symbol = message.get("ticks") if isinstance(message.get("ticks"), str) else message.get("ticks_history")
+                            if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+                                await websocket.send_json({"error": {"code": "INVALID_SYMBOL", "message": "Invalid market symbol."}})
+                                continue
+                            if message.get("subscribe") == 1:
+                                subscribed_symbols.add(symbol)
+                                if len(subscribed_symbols) > 256:
+                                    subscribed_symbols.discard(symbol)
+                                    await websocket.send_json({"error": {"code": "SUBSCRIPTION_LIMIT", "message": "Too many active subscriptions."}})
+                                    continue
+                        if isinstance(message.get("ticks_history"), str) and isinstance(message.get("req_id"), int):
+                            history_requests[message["req_id"]] = message["ticks_history"]
+                        await upstream.send(json.dumps(message, separators=(",", ":")))
+
+                async def upstream_to_client() -> None:
+                    async for raw in upstream:
+                        try:
+                            provider_message = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            provider_message = None
+
+                        if isinstance(provider_message, dict):
+                            msg_type = provider_message.get("msg_type")
+                            if msg_type == "history":
+                                req_id = provider_message.get("req_id")
+                                symbol = history_requests.pop(req_id, None) if isinstance(req_id, int) else None
+                                history = provider_message.get("history")
+                                if symbol and isinstance(history, dict):
+                                    pip_size = provider_message.get("pip_size")
                                     if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
                                         pip_size_by_symbol[symbol] = pip_size
-                                    tick_result = tracker.add_tick(
-                                        tick.get("quote"),
-                                        tick.get("epoch"),
+                                    tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                    tracker.seed_history(
+                                        history.get("prices") or [],
+                                        history.get("times") or [],
                                         pip_size_by_symbol.get(symbol),
-                                        # Deriv's tick.id mirrors the subscription ID across
-                                        # the stream; it is not a unique tick event ID. Let
-                                        # DigitFrequencyWindow use epoch + quote identity.
-                                        None,
                                     )
                                     provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
-                                    active_strategy = (
-                                        strategy_feed.symbol == symbol
-                                        and strategy_feed.session is not None
-                                        and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
-                                    )
-                                    if active_strategy and tick_result not in {"accepted", "history_overlap"}:
-                                        reason = (
-                                            "Duplicate live tick detected."
-                                            if tick_result == "duplicate"
-                                            else "Invalid or out-of-order live tick detected."
+                            elif msg_type == "candles":
+                                req_id = provider_message.get("req_id")
+                                if isinstance(req_id, int):
+                                    history_requests.pop(req_id, None)
+                            elif msg_type == "tick":
+                                tick = provider_message.get("tick")
+                                if isinstance(tick, dict):
+                                    symbol = tick.get("symbol") or tick.get("underlying_symbol")
+                                    if not symbol:
+                                        _log.debug("live_market_proxy tick missing 'symbol' field: %r", tick)
+                                    if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
+                                        tracker = frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                        pip_size = tick.get("pip_size")
+                                        if pip_size is None:
+                                            pip_size = provider_message.get("pip_size")
+                                        if isinstance(pip_size, int) and not isinstance(pip_size, bool) and 0 <= pip_size <= 12:
+                                            pip_size_by_symbol[symbol] = pip_size
+                                        tick_result = tracker.add_tick(
+                                            tick.get("quote"),
+                                            tick.get("epoch"),
+                                            pip_size_by_symbol.get(symbol),
+                                            None,
                                         )
-                                        tick_status = strategy_feed.reject_tick(reason)
-                                        if tick_status:
-                                            await websocket.send_json(tick_status)
-                                    else:
-                                        was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
-                                        strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
-                                        if strategy_status:
-                                            await websocket.send_json(strategy_status)
-                                        if was_selected:
-                                            tick_status = strategy_feed.on_tick(symbol, tick, pip_size_by_symbol.get(symbol))
+                                        provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                                        active_strategy = (
+                                            strategy_feed.symbol == symbol
+                                            and strategy_feed.session is not None
+                                            and strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
+                                        )
+                                        if active_strategy and tick_result not in {"accepted", "history_overlap"}:
+                                            reason = (
+                                                "Duplicate live tick detected."
+                                                if tick_result == "duplicate"
+                                                else "Invalid or out-of-order live tick detected."
+                                            )
+                                            tick_status = strategy_feed.reject_tick(reason)
                                             if tick_status:
                                                 await websocket.send_json(tick_status)
-                        raw = json.dumps(provider_message, separators=(",", ":"))
-                    await websocket.send_text(raw)
+                                        else:
+                                            was_selected = bool(strategy_feed.session and strategy_feed.session.state.value == "selected")
+                                            strategy_status = strategy_feed.on_frequency(provider_message["digit_frequency"])
+                                            if strategy_status:
+                                                await websocket.send_json(strategy_status)
+                                            if was_selected:
+                                                tick_status = strategy_feed.on_tick(symbol, tick, pip_size_by_symbol.get(symbol))
+                                                if tick_status:
+                                                    await websocket.send_json(tick_status)
+                            raw = json.dumps(provider_message, separators=(",", ":"))
+                        await websocket.send_text(raw)
 
-            tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            for task in done:
-                if not task.cancelled():
-                    error = task.exception()
-                    if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
-                        raise error
-    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
-        strategy_feed.disconnected()
-    except Exception:
-        strategy_feed.disconnected("Market feed failed unexpectedly.")
-        try:
-            await websocket.close(code=1011, reason="Market feed unavailable")
+                tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    if not task.cancelled():
+                        exc = task.exception()
+                        if exc and not isinstance(exc, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
+                            raise exc
+
+                # If client_to_upstream finished first, the client disconnected — stop.
+                return
+
+        except WebSocketDisconnect:
+            strategy_feed.disconnected()
+            return
+        except websockets.exceptions.ConnectionClosed:
+            strategy_feed.disconnected()
+            reconnect_attempt += 1
+            if reconnect_attempt > _MAX_RECONNECT_ATTEMPTS:
+                _log.warning("live_market_proxy: upstream closed after %d reconnect attempts; giving up.", _MAX_RECONNECT_ATTEMPTS)
+                try:
+                    await websocket.send_json({"error": {"code": "FEED_UNAVAILABLE", "message": "Market feed connection lost. Please reconnect."}})
+                    await websocket.close(code=1011, reason="Market feed unavailable")
+                except Exception:
+                    pass
+                return
+            delay = min(2 ** (reconnect_attempt - 1), 30) + random.uniform(0, 1)
+            _log.info("live_market_proxy: upstream closed, reconnecting in %.1fs (attempt %d/%d).", delay, reconnect_attempt, _MAX_RECONNECT_ATTEMPTS)
+            await asyncio.sleep(delay)
         except Exception:
-            pass
+            strategy_feed.disconnected("Market feed failed unexpectedly.")
+            try:
+                await websocket.close(code=1011, reason="Market feed unavailable")
+            except Exception:
+                pass
+            return

@@ -36,6 +36,7 @@ class StrategyExecution:
     pending_proposal_request: int | None = None
     pending_buy_request: int | None = None
     active_contract_id: str | None = None
+    active_contract_sub_id: str | None = None
     signal_accepted: bool = False
 
     def __post_init__(self) -> None:
@@ -83,6 +84,7 @@ class StrategyExecution:
         self.pending_proposal_request = None
         self.pending_buy_request = None
         self.active_contract_id = None
+        self.active_contract_sub_id = None
 
     def on_proposal(
         self,
@@ -120,6 +122,7 @@ class StrategyExecution:
             return self._block("Deriv buy acknowledgement did not include a contract ID.")
         self.pending_buy_request = None
         self.active_contract_id = str(contract_id)
+        self.active_contract_sub_id = None
         self.buy_count += 1
         self.state = ExecutionState.WAITING_SETTLEMENT
         return {
@@ -134,12 +137,22 @@ class StrategyExecution:
         status: str | None,
         profit: Any,
         next_request_id: int,
+        confirmed_settled: bool = False,
     ) -> dict[str, Any] | None:
         if self.state is not ExecutionState.WAITING_SETTLEMENT or contract_id != self.active_contract_id:
             return None
         outcome = self._outcome(status, profit)
         if outcome is None:
-            return None
+            if not confirmed_settled:
+                return None
+            # Contract is confirmed settled by is_sold/status flags but profit is
+            # unparseable — treat as a loss to avoid an indefinite stall.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Settlement profit unparseable for contract %s (status=%s, profit=%r); treating as loss.",
+                contract_id, status, profit,
+            )
+            outcome = "loss"
         self.active_contract_id = None
         if outcome == "loss":
             self.consecutive_losses += 1
@@ -179,6 +192,7 @@ class StrategyExecution:
         self.pending_proposal_request = None
         self.pending_buy_request = None
         self.active_contract_id = None
+        self.active_contract_sub_id = None
 
     @staticmethod
     def _outcome(status: str | None, profit: Any) -> str | None:
