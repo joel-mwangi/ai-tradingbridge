@@ -123,7 +123,12 @@ async def handle_provider_messages(
 
                 contract_id = contract.get("contract_id")
                 contract_status = contract.get("status")
-                settled = contract.get("is_sold") in (1, True, "1") or contract_status in {"won", "lost", "sold"}
+                # Settle only on definitive terminal states with is_sold confirmed.
+                # "sold" status can appear as an intermediate message before profit
+                # is populated — wait for "won"/"lost" or explicit is_sold=1.
+                is_sold_flag = contract.get("is_sold") in (1, True, "1")
+                terminal_status = contract_status in {"won", "lost"}
+                settled = is_sold_flag and (terminal_status or contract.get("profit") is not None)
                 if settled and isinstance(contract_id, (str, int)):
                     if session.active_poc_sub_id:
                         try:

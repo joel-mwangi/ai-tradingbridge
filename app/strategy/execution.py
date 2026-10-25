@@ -203,7 +203,7 @@ class StrategyExecution:
         normalized = status.lower() if isinstance(status, str) else ""
         if normalized in {"lost", "loss"}:
             return "loss"
-        if normalized in {"won", "win", "sold"}:
+        if normalized in {"won", "win"}:
             try:
                 numeric_profit = float(profit)
             except (TypeError, ValueError):
