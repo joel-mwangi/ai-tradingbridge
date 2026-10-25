@@ -108,6 +108,33 @@ remains observation-only.
 Live market ticks and history are forwarded in memory only. Real-account execution remains
 explicitly blocked at the gateway validation layer.
 
+## WebSocket reliability
+
+Both WebSocket proxies implement automatic reconnection with exponential backoff
+(1s, 2s, 4s, 8s, capped at 30s with jitter) for up to 5 attempts:
+
+- `deriv_websocket_proxy` re-fetches a fresh OTP on each reconnect (OTPs are single-use),
+  then resubscribes the active tick stream and replays tick history.
+- `live_market_proxy` resubscribes all previously active market symbols.
+
+When the OAuth credential approaches expiry, a `session_warning` message is sent to the
+client 5 minutes before the token expires so the frontend can prompt a reconnect.
+
+`proposal_open_contract` subscriptions are cleaned up with a `forget` call on
+settlement to avoid leaking subscription slots across trade cycles.
+
+Rate-limit (`RateLimit`) and temporary (`TemporaryError`) errors from Deriv trigger up
+to 3 retries with exponential backoff instead of permanently blocking the strategy.
+Non-retriable errors block execution and surface the specific Deriv error code to the
+client.
+
+## Deployment constraints
+
+`_ws_tickets` is a process-local dict. In multi-worker deployments (e.g. `gunicorn -w N`
+or multiple replicas), a ticket issued by one worker cannot be consumed by another.
+Either run a single worker per instance with sticky WebSocket routing, or migrate
+`_ws_tickets` to a shared store (Redis or another external KV).
+
 ## Interpretation
 
 Frequency summaries and chi-square statistics are descriptive diagnostics, not trading
