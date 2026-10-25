@@ -57,6 +57,7 @@ async def handle_provider_messages(
                     session.strategy_execution.block(f"Deriv rejected the strategy proposal ({err_code}).")
                     await websocket.send_json(session.strategy_execution.status(f"Strategy execution blocked: proposal was rejected ({err_code})."))
                     await websocket.send_json(session.strategy_feed.unlock_execution())
+                    session.strategy_execution.reset_for_next_signal()
                 elif provider_message.get("msg_type") == "proposal":
                     _retry_counts.pop("proposal", None)
                     proposal = provider_message.get("proposal")
@@ -97,6 +98,7 @@ async def handle_provider_messages(
                     session.strategy_execution.block(f"Deriv rejected the strategy buy ({err_code}).")
                     await websocket.send_json(session.strategy_execution.status(f"Strategy execution blocked: buy was rejected ({err_code})."))
                     await websocket.send_json(session.strategy_feed.unlock_execution())
+                    session.strategy_execution.reset_for_next_signal()
                 elif provider_message.get("msg_type") == "buy":
                     _retry_counts.pop("buy", None)
                     subscribe_message = session.strategy_execution.on_buy(request_id, provider_message)
@@ -150,6 +152,7 @@ async def handle_provider_messages(
                     if session.strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
                         await websocket.send_json(session.strategy_feed.unlock_execution())
                         await websocket.send_json(session.strategy_feed.stop())
+                        session.strategy_execution.reset_for_next_signal()
 
         # --- History seeding ---
         if provider_message.get("msg_type") == "history":

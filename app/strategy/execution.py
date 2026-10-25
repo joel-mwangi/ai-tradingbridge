@@ -71,6 +71,11 @@ class StrategyExecution:
             "active_contract_id": self.active_contract_id,
         }
 
+    def reset_for_next_signal(self) -> None:
+        """Allow a new signal to be accepted after a completed trade sequence."""
+        if self.state in (ExecutionState.IDLE, ExecutionState.COMPLETED, ExecutionState.STOPPED):
+            self.signal_accepted = False
+
     def begin_signal(self, request_id: int) -> dict[str, Any] | None:
         if self.signal_accepted or self.state not in (ExecutionState.IDLE, ExecutionState.COMPLETED):
             return None
@@ -78,7 +83,6 @@ class StrategyExecution:
         self.state = ExecutionState.WAITING_PROPOSAL
         self.pending_proposal_request = request_id
         return self._proposal(request_id)
-
     def stop(self) -> None:
         self.state = ExecutionState.STOPPED
         self.pending_proposal_request = None

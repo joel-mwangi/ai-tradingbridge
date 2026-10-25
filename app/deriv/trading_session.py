@@ -116,6 +116,7 @@ class TradingProxySession:
                     )
                 )
                 await websocket.send_json(self.strategy_feed.unlock_execution())
+                self.strategy_execution.reset_for_next_signal()
 
     async def credential_expiry_monitor(self, websocket: WebSocket, user_id: str) -> None:
         while True:
