@@ -10,7 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
-from app.deriv_gateway import router as deriv_router
+from app.deriv import router as deriv_router
 
 
 

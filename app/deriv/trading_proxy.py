@@ -13,9 +13,9 @@ import websockets
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-import app.deriv_gateway as _gw
 from app.deriv import router
 from app.deriv.client_handler import handle_client_messages
+import app.deriv.credentials as _creds
 from app.deriv.credentials import _linked_account_ids, _owned_credential
 from app.deriv.models import ACCOUNT_ID_RE
 from app.deriv.provider_handler import handle_provider_messages
@@ -64,7 +64,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
             )
             if accounts_response.status_code == 401:
-                await _gw._delete_credential(user_id)
+                await _creds._delete_credential(user_id)
                 await websocket.close(code=4401)
                 return
             if not accounts_response.is_success:

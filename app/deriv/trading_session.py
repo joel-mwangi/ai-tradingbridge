@@ -20,8 +20,7 @@ from fastapi import WebSocket
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.execution import StrategyExecution
 from app.strategy.live_feed import LiveStrategyFeed
-
-import app.deriv_gateway as _gw
+import app.deriv.credentials as _creds
 
 _log = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ class TradingProxySession:
         while True:
             await asyncio.sleep(60)
             try:
-                cred = await _gw._load_credential(user_id)
+                cred = await _creds._load_credential(user_id)
             except Exception:
                 continue
             if cred is None:

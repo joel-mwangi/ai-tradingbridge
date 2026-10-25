@@ -10,8 +10,8 @@ from typing import Annotated, Any
 import httpx
 from fastapi import Depends, Header, HTTPException
 
-import app.deriv_gateway as _gw
 from app.deriv import router
+import app.deriv.credentials as _creds
 from app.deriv.credentials import _linked_account_ids, _owned_credential
 from app.deriv.models import (
     ACCOUNT_ID_RE,
@@ -104,10 +104,10 @@ async def exchange_oauth_code(
     if not accounts:
         raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
 
-    await _gw._store_credential(body.user_id, access_token, expires_in)
+    await _creds._store_credential(body.user_id, access_token, expires_in)
     # Write account ownership links so _linked_account_ids() can verify them.
     account_ids = [a["account_id"] for a in accounts]
-    await _gw._store_account_links(body.user_id, account_ids)
+    await _creds._store_account_links(body.user_id, account_ids)
     return {"accounts": accounts, "expires_in": expires_in}
 
 
@@ -123,7 +123,7 @@ async def transfer_credentials(
     written by POST /internal/oauth/exchange which has the full account payload.
     """
     _require_bridge_secret(x_tradebridge_bridge_token)
-    await _gw._store_credential(body.user_id, body.access_token.get_secret_value(), body.expires_in)
+    await _creds._store_credential(body.user_id, body.access_token.get_secret_value(), body.expires_in)
 
 
 @router.delete("/internal/credentials/{user_id}", include_in_schema=False, status_code=204)
@@ -132,17 +132,17 @@ async def revoke_transferred_credentials(
     x_tradebridge_bridge_token: Annotated[str | None, Header()] = None,
 ) -> None:
     _require_bridge_secret(x_tradebridge_bridge_token)
-    await _gw._delete_credential(user_id)
-    await _gw._delete_account_links(user_id)
+    await _creds._delete_credential(user_id)
+    await _creds._delete_account_links(user_id)
 
 
 @router.get("/session")
 async def session_status(user_id: Annotated[str, Depends(current_user)]) -> dict[str, Any]:
     """Return safe connection metadata, never credentials or provider WebSocket URLs."""
-    credential = await _gw._load_credential(user_id)
+    credential = await _creds._load_credential(user_id)
     if not credential or credential.expires_at <= time.time():
         if credential:
-            await _gw._delete_credential(user_id)
+            await _creds._delete_credential(user_id)
         return {"connected": False}
     return {
         "connected": True,
@@ -177,7 +177,7 @@ async def list_accounts(
                 },
             )
         if response.status_code == 401:
-            await _gw._delete_credential(user_id)
+            await _creds._delete_credential(user_id)
             raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect.")
         if not response.is_success:
             raise HTTPException(status_code=502, detail="Deriv account lookup failed.")
@@ -242,7 +242,7 @@ async def activate_account_session(
                 headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
             )
             if accounts_response.status_code == 401:
-                await _gw._delete_credential(user_id)
+                await _creds._delete_credential(user_id)
                 raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect.")
             if not accounts_response.is_success:
                 raise HTTPException(status_code=502, detail="Deriv account verification failed.")
@@ -300,5 +300,5 @@ async def activate_account_session(
 
 @router.delete("/session", status_code=204)
 async def disconnect_deriv(user_id: Annotated[str, Depends(current_user)]) -> None:
-    await _gw._delete_credential(user_id)
-    await _gw._delete_account_links(user_id)
+    await _creds._delete_credential(user_id)
+    await _creds._delete_account_links(user_id)
