@@ -158,6 +158,12 @@ class DigitStrategySession:
 
     def add_snapshot(self, snapshot: PercentageSnapshot, now: datetime) -> SessionUpdate:
         if self.execution_locked:
+            health = self.feed_health.accept(snapshot, now)
+            if not health.accepted or health.snapshot is None:
+                self.state = SessionState.BLOCKED
+                self._clear_candidate()
+                return SessionUpdate(self.state, f"Feed rejected snapshot: {health.reason}")
+            self._last_received_at = health.snapshot.received_at.astimezone(timezone.utc)
             return SessionUpdate(
                 self.state,
                 "Execution in progress; market qualification is locked until the trade sequence completes.",

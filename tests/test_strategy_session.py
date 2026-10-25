@@ -273,6 +273,29 @@ class DigitStrategySessionTests(unittest.TestCase):
         update = self.session.on_tick(0, now=snapshot_received_at + timedelta(seconds=21))
         self.assertEqual(update.state, SessionState.BLOCKED)
         self.assertIn("stale or timestamp-inconsistent", update.reason)
+
+    def test_execution_lock_keeps_frequency_receipt_fresh(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1
+        self.add(17, increased, "execution-trigger")
+        self.session.lock_execution()
+
+        for seconds in range(18, 31):
+            snapshot_time = self.start + timedelta(seconds=seconds, milliseconds=100)
+            snapshot = PercentageSnapshot(
+                "verified-feed-v1",
+                "1HZ100V",
+                snapshot_time - timedelta(milliseconds=100),
+                snapshot_time,
+                over3_percentages(),
+                f"execution-event-{seconds}",
+            )
+            update = self.session.add_snapshot(snapshot, snapshot_time)
+            self.assertEqual(update.state, SessionState.SELECTED)
+
+            tick_update = self.session.on_tick(0, now=snapshot_time)
+            self.assertNotEqual(tick_update.state, SessionState.BLOCKED)
     def test_selected_setup_is_not_reset_by_red_green_change_after_stability_passed(self):
         self.start_stable_over3()
         passed_at = self.session.stable_since
