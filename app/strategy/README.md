@@ -1,7 +1,7 @@
 # TradeBridge Digit Strategy
 
-This package contains a rules engine and an observation-only live-feed bridge.
-It does not submit trades.
+This package contains a rules engine, an observation-only live-feed bridge, and
+a sequential execution coordinator for Demo trading.
 
 ## Files
 - `digit_strategy.py`: thresholds, stability spread, group selection, trigger digit, and pattern recognition.
@@ -9,6 +9,7 @@ It does not submit trades.
 - `market_frequency_adapter.py`: normalizes backend `digit_frequency` payloads.
 - `session.py`: fresh-session lifecycle, initial 15-second Red/Green stability window, rolling reassessment, group selection, and pattern tracking.
 - `live_feed.py`: binds actual live percentage snapshots and ticks to one isolated strategy session; reports state only.
+- `execution.py`: coordinates up to three sequential Demo buys for one confirmed signal; tracks proposal/buy/settlement state and consecutive losses.
 
 ## Percentage source
 
@@ -65,8 +66,8 @@ python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/te
 
 - Frontend controls and display for `strategy_status`.
 - Live safety-breach predicate.
-- Trade submission/settlement and purchase-acknowledgement reconciliation.
 - Tie-break for equal lowest percentages.
 - Real-money execution, purchase acknowledgements, and settlement reconciliation.
 
-No trade execution is implemented here. Real-account execution remains disabled.
+Demo execution is coordinated by `execution.py` and driven through the authenticated
+`/deriv/ws` WebSocket proxy. Real-account execution remains disabled at the gateway.
