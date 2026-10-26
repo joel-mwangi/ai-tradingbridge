@@ -147,16 +147,20 @@ class StrategyExecution:
             return None
         outcome = self._outcome(status, profit)
         if outcome is None:
-            # A terminal status can establish the result even if the provider
-            # omits profit. Otherwise, never invent a loss from missing data.
             if not confirmed_settled:
                 return None
-            return None
+            # Contract is confirmed settled by is_sold/status flags but profit is
+            # unparseable — treat as a loss to avoid an indefinite stall.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Settlement profit unparseable for contract %s (status=%s, profit=%r); treating as loss.",
+                contract_id, status, profit,
+            )
+            outcome = "loss"
         self.active_contract_id = None
         if outcome == "loss":
             self.consecutive_losses += 1
         else:
-            # A confirmed non-loss breaks a consecutive-loss streak.
             self.consecutive_losses = 0
 
         if self.consecutive_losses >= 2:
@@ -196,23 +200,23 @@ class StrategyExecution:
 
     @staticmethod
     def _outcome(status: str | None, profit: Any) -> str | None:
-        normalized = status.strip().lower() if isinstance(status, str) else ""
-
-        # Deriv's definitive terminal status is authoritative. In particular,
-        # do not require a profit field (or is_sold flag) to recognize won/lost.
+        normalized = status.lower() if isinstance(status, str) else ""
         if normalized in {"lost", "loss"}:
             return "loss"
         if normalized in {"won", "win"}:
-            return "win"
-        if normalized in {"open", "pending", "proposal", ""}:
-            return None
-
-        # For a sold/other terminal status, only classify when net profit is
-        # actually present and finite. sell_price is not net profit.
+            try:
+                numeric_profit = float(profit)
+            except (TypeError, ValueError):
+                numeric_profit = 0.0
+            return "loss" if numeric_profit < 0 else "win"
         try:
             numeric_profit = float(profit)
         except (TypeError, ValueError):
             return None
         if not math.isfinite(numeric_profit):
             return None
-        return "loss" if numeric_profit < 0 else "win"
+        if numeric_profit < 0:
+            return "loss"
+        if normalized in {"open", "pending", ""}:
+            return None
+        return "win"
