@@ -113,3 +113,15 @@ def test_identical_live_tick_after_history_overlap_is_consumed_only_once():
     # suppressed by the already-consumed overlap marker.
     assert window.add_tick("1.2", 123, 1, "provider-124") == "accepted"
     assert window.snapshot("R_100")["windows"]["50"]["sample_size"] == 2
+
+
+def test_history_overlap_without_provider_id_is_not_rejected_as_duplicate():
+    window = DigitFrequencyWindow()
+    window.seed_history(["1.2", "1.3"], [123, 124], 1)
+    # Production Deriv live ticks do not have provider event IDs (source_event_id=None).
+    # The first live tick overlapping the historical end row must be recognized as history_overlap.
+    assert window.add_tick("1.2", 123, 1, None) == "history_overlap"
+    # A true repeated live tick (after overlap marker is consumed) must be rejected as duplicate.
+    assert window.add_tick("1.2", 123, 1, None) == "duplicate"
+    # Subsequent new tick is accepted.
+    assert window.add_tick("1.4", 125, 1, None) == "accepted"

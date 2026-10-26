@@ -125,15 +125,6 @@ class DigitFrequencyWindow:
             event_id = self._fallback_event_id(timestamp, numeric_price)
 
         fingerprint = (timestamp, numeric_price, digit)
-        if any(point.get("event_id") == event_id for point in self.points):
-            # If this exact history-overlap event was already represented by a
-            # live point, consume its pending history marker as well.
-            if self._history_overlap_pending[fingerprint] > 0:
-                self._history_overlap_pending[fingerprint] -= 1
-                if self._history_overlap_pending[fingerprint] <= 0:
-                    del self._history_overlap_pending[fingerprint]
-            return "duplicate"
-
         # A history row can legitimately overlap the first live subscription
         # events. Suppress that one-shot overlap without classifying it as a
         # repeated live event; the strategy gateway must not block on this case.
@@ -142,6 +133,9 @@ class DigitFrequencyWindow:
             if self._history_overlap_pending[fingerprint] <= 0:
                 del self._history_overlap_pending[fingerprint]
             return "history_overlap"
+
+        if any(point.get("event_id") == event_id for point in self.points):
+            return "duplicate"
 
         if self.points and timestamp < self.points[-1]["time"]:
             return "out_of_order"

@@ -265,3 +265,63 @@ def test_account_links_removed_on_disconnect(monkeypatch, credential_store):
     assert response.status_code == 204
     assert "user-1" in deleted_creds
     assert "user-1" in deleted_links
+
+
+@pytest.mark.anyio
+async def test_strategy_second_cycle_does_not_duplicate_tick_subscription():
+    import json
+    from app.deriv.client_handler import _handle_strategy_start
+    from app.deriv.trading_session import TradingProxySession
+
+    session = TradingProxySession(allowed_client_requests={"ticks", "ticks_history"})
+    upstream_messages = []
+    ws_messages = []
+
+    class FakeUpstream:
+        async def send(self, msg: str):
+            upstream_messages.append(json.loads(msg))
+
+    class FakeWebSocket:
+        async def send_json(self, msg: dict):
+            ws_messages.append(msg)
+
+    control = {
+        "action": "start",
+        "symbol": "1HZ100V",
+        "window_size": 1000,
+        "barrier": 5,
+        "direction": "over",
+        "stake": 1,
+        "duration": 1,
+        "currency": "USD",
+    }
+
+    # Cycle 1 start
+    await _handle_strategy_start(session, FakeUpstream(), FakeWebSocket(), control)
+    assert any(m.get("ticks") == "1HZ100V" and m.get("subscribe") == 1 for m in upstream_messages)
+    assert any("ticks_history" in m for m in upstream_messages)
+
+    # Populate warm ticks in frequency window
+    for i in range(10):
+        session.strategy_frequency.add_tick(100.0 + i, 1000 + i, 2)
+    assert len(session.strategy_frequency.points) == 10
+
+    # Clear upstream messages recorded
+    upstream_messages.clear()
+    ws_messages.clear()
+
+    # Cycle 2 start on the same symbol immediately
+    await _handle_strategy_start(session, FakeUpstream(), FakeWebSocket(), control)
+
+    # Must NOT re-send {"ticks": "1HZ100V", "subscribe": 1}
+    assert not any(m.get("ticks") == "1HZ100V" and m.get("subscribe") == 1 for m in upstream_messages)
+    # Warm frequency window must NOT have been wiped
+    assert len(session.strategy_frequency.points) == 10
+
+    # Switching to a different symbol forgets previous ticks and subscribes to new symbol
+    upstream_messages.clear()
+    control_symbol2 = dict(control, symbol="R_50")
+    await _handle_strategy_start(session, FakeUpstream(), FakeWebSocket(), control_symbol2)
+    assert any(m.get("forget_all") == "ticks" for m in upstream_messages)
+    assert any(m.get("ticks") == "R_50" and m.get("subscribe") == 1 for m in upstream_messages)
+    assert session.strategy_subscribed_symbol == "R_50"

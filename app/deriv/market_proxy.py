@@ -102,11 +102,12 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                     await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
                                     continue
                                 subscribed_symbols.add(symbol)
-                                history_req_id = secrets.randbelow(1_000_000) + 8_000_000
-                                while history_req_id in history_requests:
+                                if not already_subscribed or len(tracker.points) < window_size:
                                     history_req_id = secrets.randbelow(1_000_000) + 8_000_000
-                                history_requests[history_req_id] = symbol
-                                await upstream.send(json.dumps({"ticks_history": symbol, "count": window_size, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
+                                    while history_req_id in history_requests:
+                                        history_req_id = secrets.randbelow(1_000_000) + 8_000_000
+                                    history_requests[history_req_id] = symbol
+                                    await upstream.send(json.dumps({"ticks_history": symbol, "count": window_size, "end": "latest", "style": "ticks", "req_id": history_req_id}, separators=(",", ":")))
                                 # Do not create a second upstream tick stream when the UI
                                 # already subscribed to this symbol or Start is pressed again.
                                 if not already_subscribed:

@@ -1,6 +1,8 @@
 """Client-to-Deriv message handler for the trading WebSocket proxy."""
 from __future__ import annotations
 
+import time
+
 import json
 import os
 from typing import Any
@@ -124,29 +126,61 @@ async def _handle_strategy_start(
         await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
         return
 
+    already_subscribed = (session.strategy_subscribed_symbol == symbol)
+    initial_frequency = (
+        session.strategy_frequency.snapshot(symbol, time.time())
+        if already_subscribed and session.strategy_frequency.points
+        else None
+    )
+
     try:
         strategy_status = session.strategy_feed.start(
-            symbol, window_size=window_size, barrier=barrier, direction=direction,
+            symbol,
+            window_size=window_size,
+            barrier=barrier,
+            direction=direction,
+            initial_frequency=initial_frequency,
         )
     except ValueError as exc:
         await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
         return
 
     session.strategy_execution = candidate_execution
-    session.strategy_frequency = DigitFrequencyWindow()
-    session.strategy_pip_size = None
-    session.strategy_subscribed_symbol = symbol
     session.strategy_window_size = window_size
-    history_request_id = session.next_strategy_request_id()
-    session.strategy_history_requests[history_request_id] = symbol
-    await upstream.send(json.dumps({
-        "ticks_history": symbol,
-        "count": window_size,
-        "end": "latest",
-        "style": "ticks",
-        "req_id": history_request_id,
-    }, separators=(",", ":")))
-    await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+
+    if not already_subscribed:
+        if session.strategy_subscribed_symbol is not None:
+            try:
+                await upstream.send(json.dumps({"forget_all": "ticks"}, separators=(",", ":")))
+            except Exception:
+                pass
+        session.strategy_frequency = DigitFrequencyWindow()
+        session.strategy_pip_size = None
+        session.strategy_subscribed_symbol = symbol
+        history_request_id = session.next_strategy_request_id()
+        session.strategy_history_requests[history_request_id] = symbol
+        await upstream.send(json.dumps({
+            "ticks_history": symbol,
+            "count": window_size,
+            "end": "latest",
+            "style": "ticks",
+            "req_id": history_request_id,
+        }, separators=(",", ":")))
+        await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+    else:
+        # Keep warm frequency tracker and avoid creating duplicate upstream
+        # tick subscriptions when Start is run again on the same symbol.
+        if len(session.strategy_frequency.points) < window_size:
+            history_request_id = session.next_strategy_request_id()
+            session.strategy_history_requests[history_request_id] = symbol
+            await upstream.send(json.dumps({
+                "ticks_history": symbol,
+                "count": window_size,
+                "end": "latest",
+                "style": "ticks",
+                "req_id": history_request_id,
+            }, separators=(",", ":")))
+
     await websocket.send_json(strategy_status)
     await websocket.send_json(session.strategy_execution.status("Strategy execution armed for the next confirmed signal."))
 
