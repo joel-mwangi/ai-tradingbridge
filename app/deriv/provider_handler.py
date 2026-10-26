@@ -128,23 +128,12 @@ async def handle_provider_messages(
 
                 contract_id = contract.get("contract_id")
                 contract_status = contract.get("status")
-                # "won"/"lost" are definitive terminal outcomes even when
-                # is_sold is absent or delayed. For "sold", require explicit
-                # closure plus a finite net-profit value before classifying it.
+                # Settle only on definitive terminal states with is_sold confirmed.
+                # "sold" status can appear as an intermediate message before profit
+                # is populated — wait for "won"/"lost" or explicit is_sold=1.
                 is_sold_flag = contract.get("is_sold") in (1, True, "1")
-                terminal_status = (
-                    isinstance(contract_status, str)
-                    and contract_status.strip().lower() in {"won", "lost"}
-                )
-                profit_raw = contract.get("profit")
-                try:
-                    numeric_profit = float(profit_raw)
-                    valid_profit = math.isfinite(numeric_profit)
-                except (TypeError, ValueError):
-                    valid_profit = False
-                settled = terminal_status or (
-                    is_sold_flag and valid_profit
-                )
+                terminal_status = contract_status in {"won", "lost"}
+                settled = is_sold_flag and (terminal_status or contract.get("profit") is not None)
                 if settled and isinstance(contract_id, (str, int)):
                     # Settlement arrived via stream — cancel the fallback.
                     session.settlement_fallback_deadline = None
@@ -189,27 +178,16 @@ async def handle_provider_messages(
                         None,
                     )
                     if matched is not None:
-                        # Only profit is net P/L. sell_price is sale proceeds,
-                        # and missing/invalid profit must never become a fake loss.
-                        profit_raw = matched.get("profit")
+                        profit_raw = matched.get("profit", matched.get("sell_price"))
                         try:
                             profit = float(profit_raw)
                         except (TypeError, ValueError):
-                            profit = math.nan
-                        if not math.isfinite(profit):
-                            _log.warning(
-                                "Settlement fallback found contract %s but net profit is unavailable; retrying reconciliation.",
-                                contract_id_wanted,
-                            )
-                            session.settlement_fallback_deadline = time.monotonic() + 3.0
-                            continue
-                        outcome = "won" if profit >= 0 else "lost"
+                            profit = 0.0
+                        outcome = "won" if profit > 0 else "lost"
                         _log.info(
                             "Settlement fallback resolved contract %s via profit_table: %s profit=%s",
                             contract_id_wanted, outcome, profit,
                         )
-                        # This reconciliation completed; cancel any further fallback.
-                        session.settlement_fallback_deadline = None
                         # Clean up the poc subscription if still active.
                         if session.active_poc_sub_id:
                             try:
