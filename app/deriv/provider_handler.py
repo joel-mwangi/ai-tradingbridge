@@ -208,6 +208,8 @@ async def handle_provider_messages(
                             "Settlement fallback resolved contract %s via profit_table: %s profit=%s",
                             contract_id_wanted, outcome, profit,
                         )
+                        # This reconciliation completed; cancel any further fallback.
+                        session.settlement_fallback_deadline = None
                         # Clean up the poc subscription if still active.
                         if session.active_poc_sub_id:
                             try:
