@@ -33,7 +33,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
     frequency_by_symbol: dict[str, DigitFrequencyWindow] = {}
     pip_size_by_symbol: dict[str, int] = {}
     strategy_feed = LiveStrategyFeed()
-    allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
+    allowed = {"active_symbols", "contracts_for", "ticks", "ticks_history", "forget", "forget_all", "ping"}
     _log = logging.getLogger(__name__)
     reconnect_attempt = 0
     _MAX_RECONNECT_ATTEMPTS = 5
