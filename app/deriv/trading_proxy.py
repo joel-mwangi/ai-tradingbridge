@@ -25,7 +25,7 @@ from app.deriv.trading_session import TradingProxySession
 _log = logging.getLogger(__name__)
 
 _ALLOWED_CLIENT_REQUESTS = {
-    "active_symbols", "ticks", "ticks_history", "proposal", "buy", "sell",
+    "active_symbols", "contracts_for", "ticks", "ticks_history", "proposal", "buy", "sell",
     "balance", "portfolio", "statement", "profit_table", "proposal_open_contract",
     "transaction", "ping", "forget", "forget_all",
 }

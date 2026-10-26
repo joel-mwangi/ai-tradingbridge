@@ -116,6 +116,8 @@ async def _handle_strategy_start(
         candidate_execution = StrategyExecution(
             symbol, group, barrier, stake=stake, currency=currency, duration=duration,
         )
+        if stake <= 0:
+            raise ValueError("Strategy stake must be a positive amount.")
         if stake > float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000")):
             raise ValueError("Strategy stake exceeds the configured demo limit.")
     except (TypeError, ValueError) as exc:
@@ -164,7 +166,7 @@ async def _validate_proposal(
         stake = float(amount)
     except (TypeError, ValueError):
         stake = 0
-    if not (1 <= stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
+    if not (0 < stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
         await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
         return False
     request_id = message.get("req_id")
