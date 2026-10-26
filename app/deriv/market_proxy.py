@@ -211,7 +211,18 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             raw = json.dumps(provider_message, separators=(",", ":"))
                         await websocket.send_text(raw)
 
-                tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
+                async def upstream_ping_loop() -> None:
+                    while True:
+                        await asyncio.sleep(30)
+                        try:
+                            await upstream.send(json.dumps({"ping": 1}, separators=(",", ":")))
+                        except Exception:
+                            return
+
+                client_task = asyncio.create_task(client_to_upstream())
+                upstream_task = asyncio.create_task(upstream_to_client())
+                ping_task = asyncio.create_task(upstream_ping_loop())
+                tasks = {client_task, upstream_task, ping_task}
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
@@ -222,7 +233,11 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                             raise exc
 
                 # If client_to_upstream finished first, the client disconnected — stop.
-                return
+                if client_task in done:
+                    return
+
+                # Otherwise upstream closed; trigger reconnect loop.
+                raise websockets.exceptions.ConnectionClosed(None, None)
 
         except WebSocketDisconnect:
             strategy_feed.disconnected()

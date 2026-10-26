@@ -161,8 +161,9 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 # Resubscribe tick stream after a reconnect.
                 await session.resubscribe_ticks(upstream)
 
+                client_task = asyncio.create_task(handle_client_messages(session, upstream, websocket))
                 tasks = {
-                    asyncio.create_task(handle_client_messages(session, upstream, websocket)),
+                    client_task,
                     asyncio.create_task(handle_provider_messages(session, upstream, websocket)),
                     asyncio.create_task(session.strategy_response_timeout_monitor(websocket, upstream)),
                     asyncio.create_task(session.credential_expiry_monitor(websocket, user_id)),
@@ -176,7 +177,11 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                         if error and not isinstance(error, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
                             raise error
                 # Client disconnected cleanly — stop.
-                return
+                if client_task in done:
+                    return
+
+                # Otherwise upstream closed; trigger reconnect loop.
+                raise websockets.exceptions.ConnectionClosed(None, None)
 
         except WebSocketDisconnect:
             return
