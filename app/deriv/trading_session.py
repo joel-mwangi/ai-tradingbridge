@@ -48,7 +48,7 @@ class TradingProxySession:
         self.pending_settlement_checks: dict[int, str] = {}
         # Deadline (monotonic) after which we fall back to profit_table if not settled.
         self.settlement_fallback_deadline: float | None = None
-        self.settlement_fallback_seconds: float = 12.0
+        self.settlement_fallback_seconds: float = 3.0
 
     def next_strategy_request_id(self) -> int:
         request_id = secrets.randbelow(1_000_000) + 9_000_000
