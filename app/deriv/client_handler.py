@@ -116,6 +116,8 @@ async def _handle_strategy_start(
         candidate_execution = StrategyExecution(
             symbol, group, barrier, stake=stake, currency=currency, duration=duration,
         )
+        if stake < 1:
+            raise ValueError("Strategy stake must be at least 1 in the selected account currency.")
         if stake > float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000")):
             raise ValueError("Strategy stake exceeds the configured demo limit.")
     except (TypeError, ValueError) as exc:
