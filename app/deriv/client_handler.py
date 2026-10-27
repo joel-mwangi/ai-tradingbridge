@@ -171,6 +171,10 @@ async def _handle_strategy_start(
     websocket: WebSocket,
     control: dict,
 ) -> None:
+    if session.product_api != "options":
+        await websocket.send_json({"error": {"code": "UNSUPPORTED_PRODUCT_STRATEGY", "message": "The digit strategy is not supported on this product connection."}})
+        return
+
     real_trading_error = _real_trading_gate_error(session)
     if real_trading_error:
         await websocket.send_json({"error": real_trading_error})
@@ -287,10 +291,14 @@ async def _validate_proposal(
     contract_type = message.get("contract_type")
     duration = message.get("duration")
     duration_unit = message.get("duration_unit")
-    symbol = message.get("underlying_symbol", message.get("symbol"))
+    symbol = (
+        message.get("symbol")
+        if session.product_api == "multipliers"
+        else message.get("underlying_symbol", message.get("symbol"))
+    )
     allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
     try:
-        stake = float(amount)
+        stake = 0 if isinstance(amount, bool) else float(amount)
     except (TypeError, ValueError):
         stake = 0
     max_stake = _configured_stake_limit(session)
@@ -305,8 +313,13 @@ async def _validate_proposal(
     if type(request_id) is not int or request_id < 0:
         await websocket.send_json({"error": {"code": "INVALID_REQUEST_ID", "message": "A valid request ID is required for a proposal."}})
         return False
+    if session.product_api == "multipliers":
+        if contract_type not in {"MULTUP", "MULTDOWN"} or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+            await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "The Multipliers connection supports only MULTUP or MULTDOWN for a valid symbol."}})
+            return False
+        return await _validate_multiplier_proposal(session, websocket, message, stake, max_stake)
     if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
-        await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only supported digit contracts and valid symbols are allowed."}})
+        await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only contracts supported by the selected product connection and valid symbols are allowed."}})
         return False
     if duration_unit != "t" or type(duration) is not int or not 1 <= duration <= 10:
         await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use 1–10 ticks."}})
@@ -321,6 +334,73 @@ async def _validate_proposal(
             return False
     if contract_type in {"DIGITEVEN", "DIGITODD"} and "barrier" in message:
         await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
+        return False
+    return True
+
+
+async def _validate_multiplier_proposal(
+    session: TradingProxySession,
+    websocket: WebSocket,
+    message: dict,
+    stake: float,
+    max_stake: float,
+) -> bool:
+    allowed_fields = {
+        "proposal", "amount", "basis", "contract_type", "currency", "symbol",
+        "multiplier", "limit_order", "cancellation", "req_id",
+    }
+    if set(message) - allowed_fields:
+        await websocket.send_json({"error": {"code": "INVALID_MULTIPLIER_FIELDS", "message": "The Multipliers proposal contains unsupported fields."}})
+        return False
+    if type(message.get("proposal")) is not int or message["proposal"] != 1:
+        await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A proposal request must set proposal to 1."}})
+        return False
+    if message.get("basis") != "stake":
+        await websocket.send_json({"error": {"code": "INVALID_BASIS", "message": "Multipliers proposals must use basis 'stake'."}})
+        return False
+    if not isinstance(message.get("currency"), str) or not message["currency"].strip():
+        await websocket.send_json({"error": {"code": "INVALID_CURRENCY", "message": "A currency is required for a Multipliers proposal."}})
+        return False
+    multiplier = message.get("multiplier")
+    if type(multiplier) is not int or not 1 <= multiplier <= 2000:
+        await websocket.send_json({"error": {"code": "INVALID_MULTIPLIER", "message": "Multiplier must be an integer from 1 to 2000."}})
+        return False
+    if "duration" in message or "duration_unit" in message or "barrier" in message:
+        await websocket.send_json({"error": {"code": "INVALID_MULTIPLIER_FIELDS", "message": "Multipliers proposals must not include duration or barrier fields."}})
+        return False
+
+    limit_order = message.get("limit_order", {})
+    if not isinstance(limit_order, dict) or set(limit_order) - {"take_profit", "stop_loss"}:
+        await websocket.send_json({"error": {"code": "INVALID_LIMIT_ORDER", "message": "Multipliers limit_order may contain only take_profit and stop_loss."}})
+        return False
+    for field in ("take_profit", "stop_loss"):
+        if field in limit_order:
+            try:
+                value = float(limit_order[field])
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            if isinstance(limit_order[field], bool) or not math.isfinite(value) or value <= 0:
+                await websocket.send_json({"error": {"code": "INVALID_LIMIT_ORDER", "message": f"{field} must be a positive finite amount."}})
+                return False
+
+    cancellation = message.get("cancellation")
+    if cancellation is not None and (
+        not isinstance(cancellation, str)
+        or cancellation not in {"5m", "10m", "15m", "30m", "60m"}
+    ):
+        await websocket.send_json({"error": {"code": "INVALID_CANCELLATION", "message": "Cancellation must be one of 5m, 10m, 15m, 30m, or 60m."}})
+        return False
+    if cancellation is not None and limit_order:
+        await websocket.send_json({"error": {"code": "INCOMPATIBLE_RISK_OPTIONS", "message": "Deal cancellation cannot be combined with take profit or stop loss."}})
+        return False
+
+    request_id = message.get("req_id")
+    if type(request_id) is not int or request_id < 0:
+        await websocket.send_json({"error": {"code": "INVALID_REQUEST_ID", "message": "A valid request ID is required for a proposal."}})
+        return False
+    if not (0 < stake <= max_stake):
+        limit_name = "Real" if session.account_type == "real" else "Demo"
+        await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": f"{limit_name} stake is outside the server-configured limit."}})
         return False
     return True
 

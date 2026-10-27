@@ -78,6 +78,6 @@ Automated Real runs should remain disabled in production until account-specific 
 operational monitoring, and Real execution tests are independently reviewed.
 
 Real accounts are a required supported mode for API-supported products, not a promise that every
-Deriv product is available through this gateway. Multipliers support is not implemented and must
-be verified against the intended WebSocket session before integration. Deriv's published MT5 API
-does not support MT5 trading; CFD orders through MT5 are outside this package's supported scope.
+Deriv product is available through this gateway. Multipliers use a separate `/deriv/multipliers/ws`
+connection and do not use this digit strategy executor. Deriv's published MT5 API does not support
+MT5 trading; CFD orders through MT5 are outside this package's supported scope.

@@ -544,3 +544,209 @@ async def test_real_strategy_start_requires_confirmation(monkeypatch):
     assert session.strategy_execution is None
     assert upstream_messages == []
 
+
+@pytest.mark.anyio
+async def test_multipliers_proposal_validates_product_fields():
+    from app.deriv.client_handler import _validate_proposal
+    from app.deriv.trading_session import TradingProxySession
+
+    session = TradingProxySession(
+        allowed_client_requests={"proposal"}, account_type="demo", product_api="multipliers"
+    )
+    sent = []
+
+    class FakeWebSocket:
+        async def send_json(self, msg: dict):
+            sent.append(msg)
+
+    valid = {
+        "proposal": 1,
+        "amount": 10,
+        "basis": "stake",
+        "contract_type": "MULTUP",
+        "currency": "USD",
+        "symbol": "R_75",
+        "multiplier": 20,
+        "limit_order": {"take_profit": 10, "stop_loss": 5},
+        "req_id": 11,
+    }
+    assert await _validate_proposal(session, FakeWebSocket(), valid) is True
+
+    invalid = dict(valid, multiplier=20.5)
+    assert await _validate_proposal(session, FakeWebSocket(), invalid) is False
+    assert sent[-1]["error"]["code"] == "INVALID_MULTIPLIER"
+
+    invalid = dict(valid, cancellation="30m")
+    assert await _validate_proposal(session, FakeWebSocket(), invalid) is False
+    assert sent[-1]["error"]["code"] == "INCOMPATIBLE_RISK_OPTIONS"
+
+
+@pytest.mark.anyio
+async def test_multipliers_real_proposal_requires_real_gate(monkeypatch):
+    from app.deriv.client_handler import _validate_proposal
+    from app.deriv.trading_session import TradingProxySession
+
+    monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
+    monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
+    session = TradingProxySession(
+        allowed_client_requests={"proposal"}, account_type="real", product_api="multipliers"
+    )
+    session.real_trading_confirmed = True
+
+    class FakeWebSocket:
+        async def send_json(self, msg: dict):
+            raise AssertionError(f"Unexpected validation error: {msg}")
+
+    assert await _validate_proposal(session, FakeWebSocket(), {
+        "proposal": 1,
+        "amount": 10,
+        "basis": "stake",
+        "contract_type": "MULTDOWN",
+        "currency": "USD",
+        "symbol": "R_75",
+        "multiplier": 50,
+        "cancellation": "30m",
+        "req_id": 12,
+    }) is True
+
+
+def test_multipliers_authorization_must_match_selected_account():
+    from app.deriv.multipliers_proxy import _authorized_login_matches
+
+    assert _authorized_login_matches({"loginid": "CR123456"}, "CR123456") is True
+    assert _authorized_login_matches({"loginid": "CR654321"}, "CR123456") is False
+    assert _authorized_login_matches(None, "CR123456") is False
+
+
+@pytest.mark.anyio
+async def test_multipliers_websocket_authorizes_the_selected_account(monkeypatch):
+    import json
+    from app.deriv import multipliers_proxy
+
+    account_id = "VRTC123"
+    ticket = "multipliers-ticket"
+    multipliers_proxy._ws_tickets[ticket] = ("user-1", time.time() + 30)
+    monkeypatch.setenv("DERIV_APP_ID", "123456")
+
+    class FakeCredential:
+        access_token = "oauth-access-token"
+
+    async def owned_credential(user_id):
+        return FakeCredential()
+
+    async def selected_account_type(user_id, selected_id, access_token):
+        assert selected_id == account_id
+        return "demo"
+
+    monkeypatch.setattr(multipliers_proxy, "_owned_credential", owned_credential)
+    monkeypatch.setattr(multipliers_proxy, "_selected_account_type", selected_account_type)
+
+    async def consume_one_client_message(session, upstream, websocket):
+        await websocket.send_text(json.dumps({"msg_type": "test"}))
+
+    async def drain_provider_messages(session, upstream, websocket):
+        return None
+
+    monkeypatch.setattr(multipliers_proxy, "handle_client_messages", consume_one_client_message)
+    monkeypatch.setattr(multipliers_proxy, "handle_provider_messages", drain_provider_messages)
+
+    class FakeUpstream:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, message):
+            self.sent.append(json.loads(message))
+
+        async def recv(self):
+            return json.dumps({"msg_type": "authorize", "authorize": {"loginid": account_id}})
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    upstream = FakeUpstream()
+
+    class FakeConnector:
+        async def __aenter__(self):
+            return upstream
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(multipliers_proxy.websockets, "connect", lambda *args, **kwargs: FakeConnector())
+
+    class FakeWebSocket:
+        headers = {"origin": "https://frontend.example", "sec-websocket-protocol": f"tradebridge, {ticket}"}
+        query_params = {"account_id": account_id}
+
+        def __init__(self):
+            self.accepted = False
+            self.messages = []
+            self.closed_code = None
+
+        async def accept(self, subprotocol=None):
+            self.accepted = subprotocol == "tradebridge"
+
+        async def send_json(self, message):
+            self.messages.append(message)
+
+        async def close(self, code=1000, reason=None):
+            self.closed_code = code
+
+        async def send_text(self, message):
+            self.messages.append(json.loads(message))
+
+        async def receive_text(self):
+            raise WebSocketDisconnect(code=1000)
+
+    websocket = FakeWebSocket()
+    await multipliers_proxy.deriv_multipliers_websocket_proxy(websocket)
+
+    assert websocket.accepted is True
+    assert websocket.closed_code is None, websocket.messages
+    assert upstream.sent == [{"authorize": "oauth-access-token", "req_id": 1}]
+    assert websocket.messages[0]["type"] == "multipliers_connection_status"
+    assert websocket.messages[0]["account_id"] == account_id
+
+
+@pytest.mark.anyio
+async def test_multipliers_selected_account_must_be_owned_and_supported(monkeypatch):
+    from fastapi import HTTPException
+    from app.deriv import multipliers_proxy
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {"data": {"accounts": [
+                {"account_id": "VRTC123", "account_type": "demo"},
+                {"account_id": "CR123456", "account_type": "real"},
+            ]}}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def linked_accounts(user_id, account_ids):
+        return {"CR123456"}
+
+    monkeypatch.setattr(multipliers_proxy.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(multipliers_proxy, "_linked_account_ids", linked_accounts)
+
+    assert await multipliers_proxy._selected_account_type("user-1", "CR123456", "token") == "real"
+    with pytest.raises(HTTPException) as exc:
+        await multipliers_proxy._selected_account_type("user-1", "VRTC123", "token")
+    assert exc.value.status_code == 403
+

@@ -27,6 +27,7 @@ SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SERVICE_ROLE_KEY
 DERIV_OAUTH_CLIENT_ID=YOUR_DERIV_OAUTH_CLIENT_ID
+DERIV_APP_ID=YOUR_REGISTERED_DERIV_APPLICATION_ID
 DERIV_OAUTH_REDIRECT_URI=https://YOUR_FRONTEND_HOST/api/auth/deriv/callback
 TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
 TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
@@ -91,6 +92,7 @@ dialog to call analysis endpoints.
 - `POST /deriv/accounts` — ownership-filtered account list.
 - `POST /deriv/ws-ticket` — issue a 30-second single-use WebSocket ticket.
 - `WS /deriv/ws?account_id=...` — authenticated Demo and Real trading proxy.
+- `WS /deriv/multipliers/ws?account_id=...` — separate authenticated legacy-WebSocket proxy for Multipliers contracts.
 - `WS /deriv/live/market` — public market-data proxy; no persistence.
 
 ## Architecture
@@ -101,6 +103,7 @@ Browser / Next.js
   │    └─ FastAPI exchanges PKCE code, encrypts token, stores credential/account links
   ├─ POST /deriv/ws-ticket → short-lived, single-use WebSocket ticket
   ├─ WS /deriv/ws?account_id=... → authenticated Demo/Real trading and order execution
+  ├─ WS /deriv/multipliers/ws?account_id=... → authenticated Multipliers trading connection
   └─ WS /deriv/live/market → public market-data proxy
 
 FastAPI also exposes authenticated descriptive digit-analysis endpoints. Orders are executed
@@ -134,10 +137,26 @@ market risk; automated Real execution should remain disabled in production until
 risk limits, operational monitoring, and Real execution tests have been reviewed.
 
 **Multipliers and CFDs:** Deriv documents Multipliers (`MULTUP`/`MULTDOWN`) through its WebSocket
-proposal/buy/contract lifecycle, but this repo's gateway and validators currently implement
-Options digit contracts only. Verify Multipliers against a Demo account and the intended Deriv
-session API before adding the product. Deriv's published MT5 API documentation says MT5 trading
-is not supported through its APIs; this repo therefore does not promise MT5 CFD order execution.
+proposal/buy/contract lifecycle. The backend Multipliers route is `WS /deriv/multipliers/ws` and
+uses the registered `DERIV_APP_ID`, server-held OAuth token, Deriv legacy WebSocket authorization,
+and the selected linked Demo/Real Options account. Real proposals additionally require the Real
+trading gate above. Client requests are restricted to `MULTUP`/`MULTDOWN` proposals, buys, sells,
+market data, and account reads; digit strategy automation is not available on this route. Demo
+test the complete contract lifecycle before enabling the Real gate. Deriv's published MT5 API
+documentation says MT5 trading is not supported through its APIs; this repo therefore does not
+promise MT5 CFD order execution.
+
+The frontend obtains a ticket from `POST /deriv/ws-ticket`, then connects to
+`WS /deriv/multipliers/ws?account_id=...` using the existing `tradebridge` WebSocket subprotocol
+and ticket. For Real accounts, it must send the confirmation message shown above on this socket.
+Example proposal request:
+
+```json
+{"proposal":1,"amount":10,"basis":"stake","contract_type":"MULTUP","currency":"USD","symbol":"R_75","multiplier":20,"limit_order":{"take_profit":10,"stop_loss":5},"req_id":1}
+```
+
+Deal cancellation uses `cancellation` values `5m`, `10m`, `15m`, `30m`, or `60m` and cannot be
+combined with `limit_order`. Manual close uses the standard `sell` request for an open contract.
 
 ## WebSocket reliability
 

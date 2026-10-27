@@ -28,9 +28,16 @@ _log = logging.getLogger(__name__)
 class TradingProxySession:
     """Holds the per-connection strategy/contract state for the trading proxy."""
 
-    def __init__(self, *, allowed_client_requests: set[str], account_type: str = "demo") -> None:
+    def __init__(
+        self,
+        *,
+        allowed_client_requests: set[str],
+        account_type: str = "demo",
+        product_api: str = "options",
+    ) -> None:
         self.allowed_client_requests = allowed_client_requests
         self.account_type = account_type.lower()
+        self.product_api = product_api
         self.real_trading_confirmed = False
         # State that persists across reconnects.
         self.pending_proposal_requests: set[int] = set()
