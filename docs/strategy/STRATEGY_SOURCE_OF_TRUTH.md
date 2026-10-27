@@ -15,7 +15,7 @@ This document is authoritative for the digit strategy. Implementations must not 
 9. Stop the sequence immediately after two consecutive settled losses. A win or breakeven resets the consecutive-loss count. Never submit buy 3 after two consecutive losses. Never submit more than three buys from one signal.
 10. When the sequence completes or is stopped by two consecutive losses, stop the strategy session. Do not restart automatically. The user must click Run to create a fresh session and signal.
 11. Unknown, rejected, duplicate, or unreconciled contract outcomes must halt execution and require reconciliation; never automatically retry an order with an unknown outcome.
-12. Real-account strategy auto-execution remains disabled unless separately reviewed and explicitly enabled. Demo execution must be clearly identified as demo.
+12. Authenticated Real accounts are a required mode for supported trading products, alongside Demo. Real proposals, buys, and strategy starts require `TRADEBRIDGE_REAL_TRADING_ENABLED=true`, a positive finite `TRADEBRIDGE_REAL_MAX_STAKE`, and explicit user confirmation on the current authenticated WebSocket connection. Confirmation expires on disconnect. The server stake cap is always enforced. Automated Real runs should remain disabled in production until account-specific risk limits, operational monitoring, and Real execution tests are independently reviewed. Product support must be verified per Deriv API; this Options digit strategy does not imply Multipliers or MT5 CFD support.
 
 ## Generalized barrier formulas
 
@@ -55,7 +55,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 - **Automatic buys:** one confirmed signal starts up to three sequential buys. Await settlement and reconcile each result before the next buy.
 - **Loss protection:** stop immediately after two consecutive settled losses; never submit buy 3 after two losses. A win or breakeven resets the consecutive-loss count.
 - **Session lifecycle:** stop after completion or the two-loss limit. Do not restart automatically; the user must click Run again.
-- **Safety:** unknown, rejected, duplicate, or unreconciled contract outcomes halt execution for reconciliation. Real-account strategy auto-execution remains disabled unless separately reviewed and explicitly enabled; Demo execution must be clearly identified.
+- **Safety:** unknown, rejected, duplicate, or unreconciled contract outcomes halt execution for reconciliation. Demo and Real are distinct account modes; Real proposals, buys, and strategy starts require the server flag, a configured stake cap, and connection-scoped user confirmation. Automated Real use also requires reviewed account-specific risk controls and reconciliation. Clearly label the selected account mode.
 - **Unsupported edges:** valid contract barriers can still have empty generalized confirmation sets. Such combinations must remain observation-only rather than generating impossible signals.
 
 ## Verification requirements

@@ -31,6 +31,7 @@ class TradingProxySession:
     def __init__(self, *, allowed_client_requests: set[str], account_type: str = "demo") -> None:
         self.allowed_client_requests = allowed_client_requests
         self.account_type = account_type.lower()
+        self.real_trading_confirmed = False
         # State that persists across reconnects.
         self.pending_proposal_requests: set[int] = set()
         self.pending_strategy_proposals: set[int] = set()

@@ -32,6 +32,9 @@ TRADEBRIDGE_SESSION_BRIDGE_TOKEN=LONG_RANDOM_SHARED_SECRET
 TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY=FERNET_KEY_GENERATED_LOCALLY
 TRADEBRIDGE_ALLOWED_ORIGINS=https://YOUR_FRONTEND_HOST,http://localhost:3000
 TRADEBRIDGE_DEMO_MAX_STAKE=1000
+# Real trading defaults to disabled; configure a cap before enabling it.
+# TRADEBRIDGE_REAL_TRADING_ENABLED=true
+# TRADEBRIDGE_REAL_MAX_STAKE=YOUR_CONSERVATIVE_MAX_STAKE
 DERIV_SYMBOL=1HZ100V
 ```
 
@@ -108,6 +111,33 @@ the public market WebSocket remains observation-only.
 Live market ticks and history are forwarded in memory only. Both Demo (`/trading/v1/options/ws/demo`)
 and Real (`/trading/v1/options/ws/real`) accounts are authenticated via Deriv's single-use OTP
 service and protected by server-side risk and stake validations.
+
+## Account modes and product scope
+
+Authenticated Real Options accounts are a supported gateway mode, alongside Demo accounts.
+Products supported by a Deriv API integration must support both account modes; Real access must
+be selected explicitly and remain subject to separate server-side limits and user confirmation.
+`TRADEBRIDGE_REAL_MAX_STAKE` limits stake size but is not an enable/disable switch for Real trading.
+
+**Real Options execution gate:** Real proposals, buys, and automated strategy starts are disabled
+unless `TRADEBRIDGE_REAL_TRADING_ENABLED=true`, a positive finite `TRADEBRIDGE_REAL_MAX_STAKE` is
+configured, and the user confirms Real trading on the current authenticated WebSocket connection.
+The confirmation message is:
+
+```json
+{"real_trading":{"action":"confirm","confirmation":"ENABLE REAL TRADING"}}
+```
+
+Confirmation is connection-scoped and must be repeated after reconnect. The server-enforced stake
+cap still applies. These controls do not establish that a strategy is profitable or eliminate
+market risk; automated Real execution should remain disabled in production until account-specific
+risk limits, operational monitoring, and Real execution tests have been reviewed.
+
+**Multipliers and CFDs:** Deriv documents Multipliers (`MULTUP`/`MULTDOWN`) through its WebSocket
+proposal/buy/contract lifecycle, but this repo's gateway and validators currently implement
+Options digit contracts only. Verify Multipliers against a Demo account and the intended Deriv
+session API before adding the product. Deriv's published MT5 API documentation says MT5 trading
+is not supported through its APIs; this repo therefore does not promise MT5 CFD order execution.
 
 ## WebSocket reliability
 

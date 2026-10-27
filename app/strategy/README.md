@@ -1,7 +1,7 @@
 # TradeBridge Digit Strategy
 
 This package contains a rules engine, an observation-only live-feed bridge, and
-a sequential execution coordinator for Demo trading.
+a sequential Options execution coordinator for authenticated trading sessions.
 
 ## Files
 - `digit_strategy.py`: thresholds, stability spread, group selection, trigger digit, and pattern recognition.
@@ -9,7 +9,7 @@ a sequential execution coordinator for Demo trading.
 - `market_frequency_adapter.py`: normalizes backend `digit_frequency` payloads.
 - `session.py`: fresh-session lifecycle, initial 15-second Red/Green stability window, rolling reassessment, group selection, and pattern tracking.
 - `live_feed.py`: binds actual live percentage snapshots and ticks to one isolated strategy session; reports state only.
-- `execution.py`: coordinates up to three sequential Demo buys for one confirmed signal; tracks proposal/buy/settlement state and consecutive losses.
+- `execution.py`: coordinates up to three sequential Options buys for one confirmed signal; tracks proposal/buy/settlement state and consecutive losses.
 
 ## Percentage source
 
@@ -69,5 +69,15 @@ python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/te
 - Tie-break for equal lowest percentages.
 - Real-money execution, purchase acknowledgements, and settlement reconciliation.
 
-Demo execution is coordinated by `execution.py` and driven through the authenticated
-`/deriv/ws` WebSocket proxy. Real-account execution remains disabled at the gateway.
+Execution is coordinated by `execution.py` and driven through the authenticated `/deriv/ws`
+WebSocket proxy. The proxy accepts both Demo and Real Options accounts. Real proposals, buys, and
+strategy starts require the server setting `TRADEBRIDGE_REAL_TRADING_ENABLED=true`, a positive
+finite `TRADEBRIDGE_REAL_MAX_STAKE`, and the per-connection confirmation message documented in
+the root README. The confirmation resets on disconnect; the stake cap is always enforced.
+Automated Real runs should remain disabled in production until account-specific risk limits,
+operational monitoring, and Real execution tests are independently reviewed.
+
+Real accounts are a required supported mode for API-supported products, not a promise that every
+Deriv product is available through this gateway. Multipliers support is not implemented and must
+be verified against the intended WebSocket session before integration. Deriv's published MT5 API
+does not support MT5 trading; CFD orders through MT5 are outside this package's supported scope.

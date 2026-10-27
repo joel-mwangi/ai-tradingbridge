@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 import json
+import math
 import os
 from typing import Any
 
@@ -14,6 +15,50 @@ from app.strategy.digit_strategy import Group
 from app.strategy.execution import StrategyExecution
 from app.deriv.security import SYMBOL_PATTERN
 from app.deriv.trading_session import TradingProxySession
+
+REAL_TRADING_CONFIRMATION = "ENABLE REAL TRADING"
+
+
+def _configured_stake_limit(session: TradingProxySession) -> float | None:
+    variable = "TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE"
+    raw_limit = os.getenv(variable)
+    if raw_limit is None:
+        if session.account_type == "real":
+            return None
+        raw_limit = "1000"
+    try:
+        limit = float(raw_limit)
+    except (TypeError, ValueError):
+        return None
+    return limit if math.isfinite(limit) and limit > 0 else None
+
+
+def _real_trading_gate_error(session: TradingProxySession) -> dict[str, str] | None:
+    if session.account_type != "real":
+        return None
+    if os.getenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "false").strip().lower() != "true":
+        return {
+            "code": "REAL_TRADING_DISABLED",
+            "message": "Real trading is disabled by server configuration.",
+        }
+    if _configured_stake_limit(session) is None:
+        return {
+            "code": "REAL_STAKE_LIMIT_NOT_CONFIGURED",
+            "message": "Set a positive finite TRADEBRIDGE_REAL_MAX_STAKE before enabling Real trading.",
+        }
+    if not session.real_trading_confirmed:
+        return {
+            "code": "REAL_TRADING_CONFIRMATION_REQUIRED",
+            "message": "Confirm Real trading on this authenticated WebSocket connection before trading.",
+        }
+    return None
+
+
+def _stake_limit_error(session: TradingProxySession) -> str | None:
+    if _configured_stake_limit(session) is None:
+        variable = "TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE"
+        return f"A positive finite {variable} must be configured."
+    return None
 
 
 async def handle_client_messages(
@@ -34,6 +79,10 @@ async def handle_client_messages(
             continue
         if not isinstance(message, dict):
             await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Send a single Deriv request object."}})
+            continue
+
+        if isinstance(message.get("real_trading"), dict):
+            await _handle_real_trading_control(session, websocket, message["real_trading"])
             continue
 
         if isinstance(message.get("strategy"), dict):
@@ -61,6 +110,36 @@ async def handle_client_messages(
         if "proposal" in message:
             session.pending_proposal_requests.add(message["req_id"])
         await upstream.send(json.dumps(message, separators=(",", ":")))
+
+
+async def _handle_real_trading_control(
+    session: TradingProxySession,
+    websocket: WebSocket,
+    control: dict,
+) -> None:
+    if control.get("action") != "confirm":
+        await websocket.send_json({"error": {"code": "INVALID_REAL_TRADING_ACTION", "message": "Supported Real trading action is confirm."}})
+        return
+    if session.account_type != "real":
+        await websocket.send_json({"error": {"code": "REAL_ACCOUNT_REQUIRED", "message": "Real trading confirmation is only available on a Real account connection."}})
+        return
+    if control.get("confirmation") != REAL_TRADING_CONFIRMATION:
+        await websocket.send_json({"error": {"code": "REAL_TRADING_CONFIRMATION_REQUIRED", "message": f"Send the exact confirmation phrase: {REAL_TRADING_CONFIRMATION}."}})
+        return
+    if os.getenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "false").strip().lower() != "true":
+        await websocket.send_json({"error": _real_trading_gate_error(session)})
+        return
+    if _configured_stake_limit(session) is None:
+        await websocket.send_json({"error": _real_trading_gate_error(session)})
+        return
+
+    session.real_trading_confirmed = True
+    await websocket.send_json({
+        "type": "real_trading_status",
+        "enabled": True,
+        "account_type": "real",
+        "message": "Real trading confirmed for this WebSocket connection; confirmation expires when it disconnects.",
+    })
 
 
 async def _handle_strategy_control(
@@ -92,6 +171,11 @@ async def _handle_strategy_start(
     websocket: WebSocket,
     control: dict,
 ) -> None:
+    real_trading_error = _real_trading_gate_error(session)
+    if real_trading_error:
+        await websocket.send_json({"error": real_trading_error})
+        return
+
     symbol = control.get("symbol")
     window_size = control.get("window_size", 1000)
     barrier = control.get("barrier", 5)
@@ -120,7 +204,9 @@ async def _handle_strategy_start(
         )
         if stake <= 0:
             raise ValueError("Strategy stake must be a positive amount.")
-        max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+        max_stake = _configured_stake_limit(session)
+        if max_stake is None:
+            raise ValueError(_stake_limit_error(session))
         if stake > max_stake:
             limit_name = "real" if session.account_type == "real" else "demo"
             raise ValueError(f"Strategy stake exceeds the configured {limit_name} limit.")
@@ -192,6 +278,11 @@ async def _validate_proposal(
     websocket: WebSocket,
     message: dict,
 ) -> bool:
+    real_trading_error = _real_trading_gate_error(session)
+    if real_trading_error:
+        await websocket.send_json({"error": real_trading_error})
+        return False
+
     amount = message.get("amount")
     contract_type = message.get("contract_type")
     duration = message.get("duration")
@@ -202,7 +293,10 @@ async def _validate_proposal(
         stake = float(amount)
     except (TypeError, ValueError):
         stake = 0
-    max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+    max_stake = _configured_stake_limit(session)
+    if max_stake is None:
+        await websocket.send_json({"error": {"code": "STAKE_LIMIT_NOT_CONFIGURED", "message": _stake_limit_error(session)}})
+        return False
     if not (0 < stake <= max_stake):
         limit_name = "Real" if session.account_type == "real" else "Demo"
         await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": f"{limit_name} stake is outside the server-configured limit."}})
@@ -236,11 +330,19 @@ async def _validate_buy(
     websocket: WebSocket,
     message: dict,
 ) -> bool:
+    real_trading_error = _real_trading_gate_error(session)
+    if real_trading_error:
+        await websocket.send_json({"error": real_trading_error})
+        return False
+
     try:
         buy_price = float(message.get("price"))
     except (TypeError, ValueError):
         buy_price = 0
-    max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+    max_stake = _configured_stake_limit(session)
+    if max_stake is None:
+        await websocket.send_json({"error": {"code": "STAKE_LIMIT_NOT_CONFIGURED", "message": _stake_limit_error(session)}})
+        return False
     if not (0 < buy_price <= max_stake):
         limit_name = "Real" if session.account_type == "real" else "Demo"
         await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": f"{limit_name} purchase price is outside the server-configured limit."}})
