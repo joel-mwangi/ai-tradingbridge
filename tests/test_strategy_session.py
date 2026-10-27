@@ -120,6 +120,19 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertEqual(self.session.selected_group, Group.UNDER)
         self.assertEqual(self.session.trigger_digit, 6)
 
+    def test_requested_under6_initial_trigger_uses_yellow_boundary_priority(self):
+        p = {0: 14.9, 1: 13.0, 2: 12.0, 3: 10.0, 4: 9.0, 5: 7.8,
+             6: 8.2, 7: 8.0, 8: 8.5, 9: 8.6}
+        self.session = DigitStrategySession(
+            self.monitor, barrier=6, requested_group=Group.UNDER
+        )
+        self.session.start(self.start)
+        self.add(1, p, "under-yellow-1")
+        self.add(8, p, "under-yellow-2")
+        update = self.add(16, p, "under-yellow-3")
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.trigger_digit, 7)
+
     def test_under6_second_lowest_candidate_can_trigger(self):
         self.session = DigitStrategySession(self.monitor, barrier=6)
         self.session.start(self.start)
@@ -218,6 +231,15 @@ class DigitStrategySessionTests(unittest.TestCase):
         update = self.add(17, increased, "same-size-triggers")
         self.assertTrue(update.percentage_triggered)
         self.assertEqual(self.session.trigger_digit, 0)
+
+    def test_red_trigger_priority_overrides_lower_yellow_digit(self):
+        p = {0: 8.5, 1: 8.0, 2: 7.8, 3: 8.6, 4: 8.7,
+             5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9}
+        self.add(1, p, "red-yellow-1")
+        self.add(8, p, "red-yellow-2")
+        update = self.add(16, p, "red-yellow-3")
+        self.assertEqual(update.state, SessionState.SELECTED)
+        self.assertEqual(self.session.trigger_digit, 2)
 
     def test_over3_second_lowest_digit_percentage_can_trigger(self):
         self.start_stable_over3()

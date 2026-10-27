@@ -27,6 +27,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 - **Colour positions:** Red and Yellow must be within digits `0..B+1` and each strictly below 9%; Green and Blue must be within digits `B+2..9`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
 - **Trigger:** monitor digits in `0..B` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.
+- **Trigger priority:** when Red and Yellow are both eligible Over-B trigger candidates, prefer Red. Prefer Yellow only when Yellow is in `0..B` and Red is exactly `B+1`.
 - **Activity sequence:** after the percentage trigger, require one or more ticks in `0..B`, followed by a confirmation tick in `B+3..9`.
 - **Valid signal range:** the selected barrier must be valid for Over and the confirmation set `B+3..9` must be non-empty. If the formula cannot produce a confirmation digit, keep the session observation-only.
 
@@ -36,6 +37,7 @@ Let `B` be the barrier digit selected in the UI. The same `B` must be passed unc
 - **Colour positions:** Red and Yellow must be within digits `B-1..9` and each strictly below 9%; Green and Blue must be within digits `0..B-2`.
 - **Red count:** exactly one Red digit. Two or more tied Red digits block qualification.
 - **Trigger:** monitor digits in `B..9` at either of the two lowest distinct frequency-percentage levels. A candidate triggers only when its percentage rises by exactly 0.1 percentage point.
+- **Trigger priority:** when Red and Yellow are both eligible Under-B trigger candidates, prefer Red. Prefer Yellow only when Yellow is in `B..9` and Red is exactly `B-1`.
 - **Activity sequence:** after the percentage trigger, require one or more ticks in `B..9`, followed by a confirmation tick in `0..B-3`.
 - **Valid signal range:** the selected barrier must be valid for Under and the confirmation set `0..B-3` must be non-empty. If the formula cannot produce a confirmation digit, keep the session observation-only.
 

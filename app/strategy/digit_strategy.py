@@ -297,7 +297,39 @@ def _trigger_digit(
     # session tracks every candidate at those levels.
     candidate_levels = set(ordered_levels[:2])
     candidates = [digit for digit, value in values.items() if value in candidate_levels]
+    preferred = prioritize_trigger_candidate(percentages, group, barrier, candidates)
+    if preferred is not None:
+        return preferred
     return min(candidates) if candidates else None
+
+
+def prioritize_trigger_candidate(
+    percentages: Mapping[int, float],
+    group: Group,
+    barrier: int,
+    candidates: Sequence[int],
+) -> int | None:
+    """Apply direction-specific Red/Yellow trigger priority when eligible."""
+    if not candidates:
+        return None
+
+    ranks = rank_bar_colors(percentages)
+    if len(ranks.red) != 1:
+        return None
+    red = next(iter(ranks.red))
+
+    if group is Group.OVER:
+        yellow_boundary = barrier + 1
+    else:
+        yellow_boundary = barrier - 1
+
+    if red == yellow_boundary and len(ranks.yellow) == 1:
+        yellow = next(iter(ranks.yellow))
+        if yellow in digits_for(group, barrier) and yellow in candidates:
+            return yellow
+    if red in candidates:
+        return red
+    return None
 
 
 def evaluate_group(

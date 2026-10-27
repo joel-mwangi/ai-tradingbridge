@@ -17,6 +17,7 @@ from app.strategy.digit_strategy import (
     TimestampedPercentageObservation,
     choose_group,
     digits_for,
+    prioritize_trigger_candidate,
     rank_bar_colors,
 )
 from app.strategy.feed_health import FeedHealthResult, PercentageFeedHealth, PercentageSnapshot
@@ -316,9 +317,13 @@ class DigitStrategySession:
             requested_evaluation = current_result.under if self.requested_group is Group.UNDER else current_result.over
             if requested_evaluation.qualifies:
                 requested_decision = Decision.SELECT_UNDER if self.requested_group is Group.UNDER else Decision.SELECT_OVER
+                trigger_candidates = self._requested_trigger_digits(percentages, self.requested_group)
+                preferred_trigger = prioritize_trigger_candidate(
+                    percentages, self.requested_group, self.barrier, trigger_candidates
+                )
                 current_result = QualificationResult(
                     requested_decision, current_result.under, current_result.over,
-                    trigger_digit=(self._requested_trigger_digits(percentages, self.requested_group) or (None,))[0],
+                    trigger_digit=preferred_trigger if preferred_trigger is not None else (trigger_candidates or (None,))[0],
                     reason=f"User-selected {self.requested_group.value.title()} {self.barrier} qualifies.",
                 )
             else:
@@ -346,9 +351,10 @@ class DigitStrategySession:
                         if abs(float(percentages[digit]) - baseline - PERCENTAGE_TRIGGER_RISE) <= 1e-9
                     ]
                     if risen_digits:
-                        # If multiple candidates rise by exactly 0.1, use the
-                        # candidate with the lowest baseline percentage.
-                        self.trigger_digit = min(
+                        preferred = prioritize_trigger_candidate(
+                            percentages, self.selected_group, self.barrier, risen_digits
+                        )
+                        self.trigger_digit = preferred if preferred is not None else min(
                             risen_digits,
                             key=lambda digit: (self.trigger_baselines[digit], digit),
                         )

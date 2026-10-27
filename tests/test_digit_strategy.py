@@ -131,6 +131,34 @@ class AutomaticSelectionTests(unittest.TestCase):
         self.assertTrue(result.under.stability_passes)
         self.assertTrue(result.under.color_positions_pass)
 
+    def test_over3_red_has_priority_when_red_and_yellow_are_in_trigger_range(self):
+        p = {0: 8.5, 1: 8.0, 2: 7.8, 3: 8.6, 4: 8.7,
+             5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9}
+        result = choose_group(p, [p, p], barrier=3)
+        self.assertEqual(result.decision, Decision.SELECT_OVER)
+        self.assertEqual(result.trigger_digit, 2)
+
+    def test_over3_yellow_has_priority_when_red_is_at_barrier_plus_one(self):
+        p = {0: 8.4, 1: 8.5, 2: 8.0, 3: 8.6, 4: 7.8,
+             5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9}
+        result = choose_group(p, [p, p], barrier=3)
+        self.assertEqual(result.decision, Decision.SELECT_OVER)
+        self.assertEqual(result.trigger_digit, 2)
+
+    def test_under6_red_has_priority_when_red_and_yellow_are_in_trigger_range(self):
+        p = {0: 12.0, 1: 11.0, 2: 16.0, 3: 9.0, 4: 8.8, 5: 8.7,
+             6: 8.2, 7: 8.0, 8: 7.8, 9: 8.5}
+        result = choose_group(p, [p, p], barrier=6)
+        self.assertEqual(result.decision, Decision.SELECT_UNDER)
+        self.assertEqual(result.trigger_digit, 8)
+
+    def test_under6_yellow_has_priority_when_red_is_at_barrier_minus_one(self):
+        p = {0: 14.9, 1: 13.0, 2: 12.0, 3: 10.0, 4: 9.0, 5: 7.8,
+             6: 8.2, 7: 8.0, 8: 8.5, 9: 8.6}
+        result = choose_group(p, [p, p], barrier=6)
+        self.assertEqual(result.decision, Decision.SELECT_UNDER)
+        self.assertEqual(result.trigger_digit, 7)
+
     def test_yellow_at_8_point_9_in_over_zone_passes(self):
         p = {0: 8.0, 1: 8.9, 2: 9.5, 3: 9.6, 4: 9.7, 5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9}
         ok, _ = evaluate_color_positions(p, Group.OVER, barrier=3)
