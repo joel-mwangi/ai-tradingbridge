@@ -34,6 +34,11 @@ async def handle_provider_messages(
 
         request_id = provider_message.get("req_id") if isinstance(provider_message, dict) else None
 
+        if provider_message.get("msg_type") == "profit_table":
+            session.record_daily_profit_table(request_id, provider_message)
+        elif provider_message.get("error") and request_id == session.daily_profit_request_id:
+            session.reject_daily_profit_request(request_id)
+
         # --- Strategy proposal/buy responses ---
         if session.strategy_execution is not None and isinstance(request_id, int):
             if request_id in session.pending_strategy_proposals:

@@ -141,6 +141,8 @@ async def deriv_multipliers_websocket_proxy(websocket: WebSocket) -> None:
                 allowed_client_requests=_ALLOWED_MULTIPLIER_REQUESTS,
                 account_type=account_type,
                 product_api="multipliers",
+                user_id=user_id,
+                account_id=account_id,
             )
             await websocket.send_json({
                 "type": "multipliers_connection_status",
@@ -153,8 +155,11 @@ async def deriv_multipliers_websocket_proxy(websocket: WebSocket) -> None:
             client_task = asyncio.create_task(handle_client_messages(session, upstream, websocket))
             provider_task = asyncio.create_task(handle_provider_messages(session, upstream, websocket))
             keepalive_task = asyncio.create_task(_keepalive(upstream))
+            tasks = {client_task, provider_task, keepalive_task}
+            if account_type == "real":
+                tasks.add(asyncio.create_task(session.real_risk_monitor(upstream)))
             done, pending = await asyncio.wait(
-                {client_task, provider_task, keepalive_task},
+                tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:

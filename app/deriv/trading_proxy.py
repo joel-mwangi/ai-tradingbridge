@@ -116,7 +116,12 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
 
     _MAX_RECONNECT_ATTEMPTS = 5
     reconnect_attempt = 0
-    session = TradingProxySession(allowed_client_requests=_ALLOWED_CLIENT_REQUESTS, account_type=account_type)
+    session = TradingProxySession(
+        allowed_client_requests=_ALLOWED_CLIENT_REQUESTS,
+        account_type=account_type,
+        user_id=user_id,
+        account_id=account_id,
+    )
 
     while True:
         # Re-fetch OTP on every connect attempt (OTPs are single-use).
@@ -170,6 +175,8 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                     asyncio.create_task(session.strategy_response_timeout_monitor(websocket, upstream)),
                     asyncio.create_task(session.credential_expiry_monitor(websocket, user_id)),
                 }
+                if account_type == "real":
+                    tasks.add(asyncio.create_task(session.real_risk_monitor(upstream)))
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()

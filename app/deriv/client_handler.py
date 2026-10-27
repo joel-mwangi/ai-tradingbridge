@@ -8,15 +8,17 @@ import math
 import os
 from typing import Any
 
-from fastapi import WebSocket
+from fastapi import HTTPException, WebSocket
 
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.digit_strategy import Group
 from app.strategy.execution import StrategyExecution
 from app.deriv.security import SYMBOL_PATTERN
+from app.deriv.credentials import _load_live_trading_consent
 from app.deriv.trading_session import TradingProxySession
 
 REAL_TRADING_CONFIRMATION = "ENABLE REAL TRADING"
+REAL_CONSENT_ACKNOWLEDGEMENT = "REAL_MONEY_RISK_ACKNOWLEDGEMENT_V1"
 
 
 def _configured_stake_limit(session: TradingProxySession) -> float | None:
@@ -30,10 +32,19 @@ def _configured_stake_limit(session: TradingProxySession) -> float | None:
         limit = float(raw_limit)
     except (TypeError, ValueError):
         return None
-    return limit if math.isfinite(limit) and limit > 0 else None
+    if not math.isfinite(limit) or limit <= 0:
+        return None
+    if session.account_type == "real" and session.real_consent_max_stake is not None:
+        return min(limit, session.real_consent_max_stake)
+    return limit
 
 
-def _real_trading_gate_error(session: TradingProxySession) -> dict[str, str] | None:
+async def _real_trading_gate_error(
+    session: TradingProxySession,
+    *,
+    require_confirmation: bool = True,
+    require_daily_pnl: bool = True,
+) -> dict[str, str] | None:
     if session.account_type != "real":
         return None
     if os.getenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "false").strip().lower() != "true":
@@ -46,7 +57,63 @@ def _real_trading_gate_error(session: TradingProxySession) -> dict[str, str] | N
             "code": "REAL_STAKE_LIMIT_NOT_CONFIGURED",
             "message": "Set a positive finite TRADEBRIDGE_REAL_MAX_STAKE before enabling Real trading.",
         }
-    if not session.real_trading_confirmed:
+
+    if not session.user_id or not session.account_id:
+        return {
+            "code": "REAL_ACCOUNT_CONTEXT_MISSING",
+            "message": "The authenticated user and selected Real account are required for trading.",
+        }
+    try:
+        consent = await _load_live_trading_consent(session.user_id, session.account_id)
+    except HTTPException:
+        return {
+            "code": "REAL_CONSENT_UNAVAILABLE",
+            "message": "Could not verify this account's Real trading consent. Try again later.",
+        }
+    if (
+        not consent
+        or consent.get("enabled") is not True
+        or consent.get("acknowledgement_version") != REAL_CONSENT_ACKNOWLEDGEMENT
+    ):
+        return {
+            "code": "REAL_ACCOUNT_CONSENT_REQUIRED",
+            "message": "Enable Real trading and acknowledge risk for this account in TradeBridge Settings.",
+        }
+    try:
+        consent_max_stake = float(consent.get("max_stake"))
+        consent_max_daily_loss = float(consent.get("max_daily_loss"))
+    except (TypeError, ValueError, OverflowError):
+        consent_max_stake = consent_max_daily_loss = 0
+    if (
+        not math.isfinite(consent_max_stake)
+        or not math.isfinite(consent_max_daily_loss)
+        or consent_max_stake <= 0
+        or consent_max_daily_loss <= 0
+    ):
+        return {
+            "code": "REAL_ACCOUNT_CONSENT_INVALID",
+            "message": "Real-account risk limits are invalid. Re-save the limits in TradeBridge Settings.",
+        }
+    session.real_consent_max_stake = consent_max_stake
+    session.real_consent_max_daily_loss = consent_max_daily_loss
+
+    if require_daily_pnl:
+        if (
+            session.daily_realized_profit is None
+            or session.daily_profit_checked_at is None
+            or time.time() - session.daily_profit_checked_at > 30
+        ):
+            return {
+                "code": "REAL_DAILY_PNL_UNAVAILABLE",
+                "message": "Today's server-verified Real account P/L is unavailable or stale; trading is paused.",
+            }
+        if session.daily_realized_profit <= -consent_max_daily_loss:
+            return {
+                "code": "REAL_DAILY_LOSS_LIMIT_REACHED",
+                "message": "The consented daily loss limit has been reached for this Real account.",
+            }
+
+    if require_confirmation and not session.real_trading_confirmed:
         return {
             "code": "REAL_TRADING_CONFIRMATION_REQUIRED",
             "message": "Confirm Real trading on this authenticated WebSocket connection before trading.",
@@ -126,11 +193,11 @@ async def _handle_real_trading_control(
     if control.get("confirmation") != REAL_TRADING_CONFIRMATION:
         await websocket.send_json({"error": {"code": "REAL_TRADING_CONFIRMATION_REQUIRED", "message": f"Send the exact confirmation phrase: {REAL_TRADING_CONFIRMATION}."}})
         return
-    if os.getenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "false").strip().lower() != "true":
-        await websocket.send_json({"error": _real_trading_gate_error(session)})
-        return
-    if _configured_stake_limit(session) is None:
-        await websocket.send_json({"error": _real_trading_gate_error(session)})
+    gate_error = await _real_trading_gate_error(
+        session, require_confirmation=False, require_daily_pnl=False
+    )
+    if gate_error:
+        await websocket.send_json({"error": gate_error})
         return
 
     session.real_trading_confirmed = True
@@ -175,7 +242,7 @@ async def _handle_strategy_start(
         await websocket.send_json({"error": {"code": "UNSUPPORTED_PRODUCT_STRATEGY", "message": "The digit strategy is not supported on this product connection."}})
         return
 
-    real_trading_error = _real_trading_gate_error(session)
+    real_trading_error = await _real_trading_gate_error(session)
     if real_trading_error:
         await websocket.send_json({"error": real_trading_error})
         return
@@ -282,7 +349,7 @@ async def _validate_proposal(
     websocket: WebSocket,
     message: dict,
 ) -> bool:
-    real_trading_error = _real_trading_gate_error(session)
+    real_trading_error = await _real_trading_gate_error(session)
     if real_trading_error:
         await websocket.send_json({"error": real_trading_error})
         return False
@@ -410,7 +477,7 @@ async def _validate_buy(
     websocket: WebSocket,
     message: dict,
 ) -> bool:
-    real_trading_error = _real_trading_gate_error(session)
+    real_trading_error = await _real_trading_gate_error(session)
     if real_trading_error:
         await websocket.send_json({"error": real_trading_error})
         return False

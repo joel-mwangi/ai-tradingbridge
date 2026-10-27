@@ -171,6 +171,34 @@ async def _delete_account_links(user_id: str) -> None:
         raise HTTPException(status_code=503, detail="Could not remove Deriv account links.")
 
 
+async def _load_live_trading_consent(user_id: str, account_id: str) -> dict | None:
+    """Load one account's Real-trading consent using the server-only role."""
+    url, service_key = _credential_store_config()
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.get(
+                f"{url}/rest/v1/deriv_live_trading_consents",
+                params={
+                    "select": "enabled,acknowledgement_version,max_stake,max_daily_loss",
+                    "user_id": f"eq.{user_id}",
+                    "deriv_account_id": f"eq.{account_id}",
+                    "limit": "1",
+                },
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not verify Real trading consent.")
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=503, detail="Real trading consent returned invalid data.")
+        row = rows[0] if rows else None
+        return row if isinstance(row, dict) else None
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise HTTPException(status_code=503, detail="Could not verify Real trading consent.")
+
+
 async def _owned_credential(user_id: str) -> Credential:
     credential = await _load_credential(user_id)
     if credential is None:

@@ -16,6 +16,20 @@ from app import main
 client = TestClient(main.app)
 
 
+async def verified_real_consent(user_id: str, account_id: str) -> dict:
+    return {
+        "enabled": True,
+        "acknowledgement_version": "REAL_MONEY_RISK_ACKNOWLEDGEMENT_V1",
+        "max_stake": 25,
+        "max_daily_loss": 25,
+    }
+
+
+def set_fresh_real_profit(session, profit: float = 0.0) -> None:
+    session.daily_realized_profit = profit
+    session.daily_profit_checked_at = time.time()
+
+
 @pytest.fixture
 def credential_store(monkeypatch):
     store = {}
@@ -381,10 +395,14 @@ def test_activate_account_session_supports_real_account(monkeypatch, credential_
 @pytest.mark.anyio
 async def test_validate_proposal_real_stake_limit(monkeypatch):
     """Confirmed Real proposal validation respects TRADEBRIDGE_REAL_MAX_STAKE."""
+    import app.deriv.client_handler as _client_handler
     from app.deriv.client_handler import _validate_proposal
     from app.deriv.trading_session import TradingProxySession
 
-    session = TradingProxySession(allowed_client_requests={"proposal"}, account_type="real")
+    session = TradingProxySession(
+        allowed_client_requests={"proposal"}, account_type="real",
+        user_id="user-1", account_id="CR123456",
+    )
     sent = []
 
     class FakeWebSocket:
@@ -393,7 +411,9 @@ async def test_validate_proposal_real_stake_limit(monkeypatch):
 
     monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
     monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
     session.real_trading_confirmed = True
+    set_fresh_real_profit(session)
 
     # Exceeds real limit
     res_exceeded = await _validate_proposal(session, FakeWebSocket(), {
@@ -453,12 +473,18 @@ async def test_real_proposal_is_blocked_by_default(monkeypatch):
 
 @pytest.mark.anyio
 async def test_real_buy_is_blocked_without_connection_confirmation(monkeypatch):
+    import app.deriv.client_handler as _client_handler
     from app.deriv.client_handler import _validate_buy
     from app.deriv.trading_session import TradingProxySession
 
     monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
     monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
-    session = TradingProxySession(allowed_client_requests={"buy"}, account_type="real")
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
+    session = TradingProxySession(
+        allowed_client_requests={"buy"}, account_type="real",
+        user_id="user-1", account_id="CR123456",
+    )
+    set_fresh_real_profit(session)
     session.valid_proposals["fresh-proposal"] = 5.0
     sent = []
 
@@ -479,10 +505,15 @@ async def test_real_buy_is_blocked_without_connection_confirmation(monkeypatch):
 
 @pytest.mark.anyio
 async def test_real_confirmation_requires_server_enablement_and_stake_limit(monkeypatch):
+    import app.deriv.client_handler as _client_handler
     from app.deriv.client_handler import REAL_TRADING_CONFIRMATION, _handle_real_trading_control
     from app.deriv.trading_session import TradingProxySession
 
-    session = TradingProxySession(allowed_client_requests=set(), account_type="real")
+    session = TradingProxySession(
+        allowed_client_requests=set(), account_type="real",
+        user_id="user-1", account_id="CR123456",
+    )
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
     sent = []
 
     class FakeWebSocket:
@@ -512,12 +543,18 @@ async def test_real_confirmation_requires_server_enablement_and_stake_limit(monk
 @pytest.mark.anyio
 async def test_real_strategy_start_requires_confirmation(monkeypatch):
     import json
+    import app.deriv.client_handler as _client_handler
     from app.deriv.client_handler import _handle_strategy_start
     from app.deriv.trading_session import TradingProxySession
 
     monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
     monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "10")
-    session = TradingProxySession(allowed_client_requests={"ticks", "ticks_history"}, account_type="real")
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
+    session = TradingProxySession(
+        allowed_client_requests={"ticks", "ticks_history"}, account_type="real",
+        user_id="user-1", account_id="CR123456",
+    )
+    set_fresh_real_profit(session)
     upstream_messages = []
     ws_messages = []
 
@@ -583,15 +620,19 @@ async def test_multipliers_proposal_validates_product_fields():
 
 @pytest.mark.anyio
 async def test_multipliers_real_proposal_requires_real_gate(monkeypatch):
+    import app.deriv.client_handler as _client_handler
     from app.deriv.client_handler import _validate_proposal
     from app.deriv.trading_session import TradingProxySession
 
     monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
     monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
     session = TradingProxySession(
-        allowed_client_requests={"proposal"}, account_type="real", product_api="multipliers"
+        allowed_client_requests={"proposal"}, account_type="real", product_api="multipliers",
+        user_id="user-1", account_id="CR123456",
     )
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
     session.real_trading_confirmed = True
+    set_fresh_real_profit(session)
 
     class FakeWebSocket:
         async def send_json(self, msg: dict):
@@ -608,6 +649,63 @@ async def test_multipliers_real_proposal_requires_real_gate(monkeypatch):
         "cancellation": "30m",
         "req_id": 12,
     }) is True
+
+
+@pytest.mark.anyio
+async def test_real_daily_loss_limit_blocks_proposals(monkeypatch):
+    import app.deriv.client_handler as _client_handler
+    from app.deriv.client_handler import _validate_proposal
+    from app.deriv.trading_session import TradingProxySession
+
+    monkeypatch.setenv("TRADEBRIDGE_REAL_TRADING_ENABLED", "true")
+    monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
+    monkeypatch.setattr(_client_handler, "_load_live_trading_consent", verified_real_consent)
+    session = TradingProxySession(
+        allowed_client_requests={"proposal"}, account_type="real",
+        user_id="user-1", account_id="CR123456",
+    )
+    session.real_trading_confirmed = True
+    set_fresh_real_profit(session, -25)
+    sent = []
+
+    class FakeWebSocket:
+        async def send_json(self, msg: dict):
+            sent.append(msg)
+
+    accepted = await _validate_proposal(session, FakeWebSocket(), {
+        "proposal": 1,
+        "amount": 5,
+        "basis": "stake",
+        "contract_type": "MULTUP",
+        "currency": "USD",
+        "symbol": "R_75",
+        "multiplier": 20,
+        "req_id": 13,
+    })
+    assert accepted is False
+    assert sent[0]["error"]["code"] == "REAL_DAILY_LOSS_LIMIT_REACHED"
+
+
+def test_daily_profit_table_requires_correlated_complete_finite_values():
+    from app.deriv.trading_session import TradingProxySession
+
+    session = TradingProxySession(allowed_client_requests=set(), account_type="real")
+    session.daily_profit_request_id = 45
+    assert session.record_daily_profit_table(44, {"profit_table": {"transactions": []}}) is False
+    assert session.daily_realized_profit is None
+
+    assert session.record_daily_profit_table(45, {
+        "profit_table": {"transactions": [{"profit": "4.5"}, {"profit": -2}]}
+    }) is True
+    assert session.daily_realized_profit == 2.5
+    assert session.daily_profit_checked_at is not None
+
+    session.daily_profit_request_id = 46
+    assert session.record_daily_profit_table(46, {
+        "profit_table": {"transactions": [{"profit": "NaN"}]}
+    }) is True
+    assert session.daily_realized_profit is None
+    assert session.daily_profit_checked_at is None
 
 
 def test_multipliers_authorization_must_match_selected_account():

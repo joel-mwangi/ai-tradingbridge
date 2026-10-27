@@ -34,11 +34,20 @@ class TradingProxySession:
         allowed_client_requests: set[str],
         account_type: str = "demo",
         product_api: str = "options",
+        user_id: str | None = None,
+        account_id: str | None = None,
     ) -> None:
         self.allowed_client_requests = allowed_client_requests
         self.account_type = account_type.lower()
         self.product_api = product_api
+        self.user_id = user_id
+        self.account_id = account_id
         self.real_trading_confirmed = False
+        self.real_consent_max_stake: float | None = None
+        self.real_consent_max_daily_loss: float | None = None
+        self.daily_realized_profit: float | None = None
+        self.daily_profit_checked_at: float | None = None
+        self.daily_profit_request_id: int | None = None
         # State that persists across reconnects.
         self.pending_proposal_requests: set[int] = set()
         self.pending_strategy_proposals: set[int] = set()
@@ -66,9 +75,67 @@ class TradingProxySession:
             or request_id in self.pending_strategy_buys
             or request_id in self.strategy_request_deadlines
             or request_id in self.pending_settlement_checks
+            or request_id == self.daily_profit_request_id
         ):
             request_id = secrets.randbelow(1_000_000) + 9_000_000
         return request_id
+
+    def record_daily_profit_table(self, request_id: object, payload: object) -> bool:
+        if type(request_id) is not int or request_id != self.daily_profit_request_id:
+            return False
+        table = payload.get("profit_table") if isinstance(payload, dict) else None
+        transactions = table.get("transactions") if isinstance(table, dict) else None
+        if not isinstance(transactions, list) or len(transactions) >= 5000:
+            self.reject_daily_profit_request(request_id)
+            return True
+
+        profits: list[float] = []
+        for transaction in transactions:
+            raw_profit = transaction.get("profit") if isinstance(transaction, dict) else None
+            if isinstance(raw_profit, bool):
+                self.reject_daily_profit_request(request_id)
+                return True
+            try:
+                profit = float(raw_profit)
+            except (TypeError, ValueError, OverflowError):
+                self.reject_daily_profit_request(request_id)
+                return True
+            if not math.isfinite(profit):
+                self.reject_daily_profit_request(request_id)
+                return True
+            profits.append(profit)
+
+        self.daily_realized_profit = sum(profits)
+        self.daily_profit_checked_at = time.time()
+        self.daily_profit_request_id = None
+        return True
+
+    def reject_daily_profit_request(self, request_id: object) -> None:
+        if request_id == self.daily_profit_request_id:
+            self.daily_realized_profit = None
+            self.daily_profit_checked_at = None
+            self.daily_profit_request_id = None
+
+    async def real_risk_monitor(self, upstream: Any) -> None:
+        """Refresh server-trusted daily P/L; Real orders fail closed if it goes stale."""
+        while True:
+            request_id = self.next_strategy_request_id()
+            self.daily_profit_request_id = request_id
+            now = datetime.now(timezone.utc)
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            try:
+                await upstream.send(json.dumps({
+                    "profit_table": 1,
+                    "description": 1,
+                    "limit": 5000,
+                    "date_from": int(day_start.timestamp()),
+                    "date_to": int(now.timestamp()),
+                    "req_id": request_id,
+                }, separators=(",", ":")))
+            except Exception:
+                self.daily_realized_profit = None
+                self.daily_profit_checked_at = None
+            await asyncio.sleep(15)
 
     def register_strategy_deadline(self, request_id: int, phase: str) -> None:
         timeout = float(os.getenv("TRADEBRIDGE_STRATEGY_RESPONSE_TIMEOUT_SECONDS", "15"))
