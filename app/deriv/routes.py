@@ -295,7 +295,7 @@ async def activate_account_session(
         "account_id": body.account_id,
         "account_type": account_type,
         "status": "provider_session_verified",
-        "next_step": "server_websocket_proxy_not_yet_enabled",
+        "next_step": "connect_authenticated_websocket",
     }
 
 
