@@ -375,6 +375,7 @@ def test_activate_account_session_supports_real_account(monkeypatch, credential_
     assert data["account_id"] == "CR123456"
     assert data["account_type"] == "real"
     assert data["status"] == "provider_session_verified"
+    assert data["next_step"] == "connect_authenticated_websocket"
 
 
 @pytest.mark.anyio
