@@ -1,4 +1,4 @@
-"""Authenticated demo-trading WebSocket proxy (reconnect loop + OTP orchestration)."""
+"""Authenticated Demo/Real Deriv Options WebSocket proxy with reconnect and OTP orchestration."""
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +33,7 @@ _ALLOWED_CLIENT_REQUESTS = {
 
 @router.websocket("/ws")
 async def deriv_websocket_proxy(websocket: WebSocket) -> None:
-    """Proxy an authenticated demo-account session using a one-use short-lived ticket."""
+    """Proxy an owned Demo or Real account using a one-use short-lived ticket."""
     if not _origin_allowed(websocket.headers.get("origin")):
         await websocket.close(code=4403)
         return
@@ -55,8 +55,8 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
         await websocket.close(code=4401 if exc.status_code in (401, 409) else 1011)
         return
 
-    # Validate the account against the OAuth credential, and intentionally keep
-    # real-account execution disabled at the backend boundary.
+    # Validate account ownership and type against the OAuth credential before
+    # opening the matching Demo/Real provider session.
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             accounts_response = await client.get(
