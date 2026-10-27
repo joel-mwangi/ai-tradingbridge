@@ -1,7 +1,7 @@
 # TradeBridge AI
 
-A Python research API and authenticated Deriv session gateway for Demo trading.
-Strategy execution is Demo-only and real-account trading is not supported.
+A Python research API and authenticated Deriv session gateway for Demo and Real Options trading.
+Supports authenticated Deriv WebSocket sessions, OTP verification, and server-side risk limits for both demo and real accounts.
 
 ## Requirements
 
@@ -87,7 +87,7 @@ dialog to call analysis endpoints.
 - `DELETE /deriv/session` — disconnect; removes credential and account links.
 - `POST /deriv/accounts` — ownership-filtered account list.
 - `POST /deriv/ws-ticket` — issue a 30-second single-use WebSocket ticket.
-- `WS /deriv/ws?account_id=...` — authenticated Demo-only trading proxy and strategy executor.
+- `WS /deriv/ws?account_id=...` — authenticated Demo and Real trading proxy.
 - `WS /deriv/live/market` — public market-data proxy; no persistence.
 
 ## Architecture
@@ -97,16 +97,17 @@ Browser / Next.js
   ├─ OAuth callback → POST /deriv/internal/oauth/exchange
   │    └─ FastAPI exchanges PKCE code, encrypts token, stores credential/account links
   ├─ POST /deriv/ws-ticket → short-lived, single-use WebSocket ticket
-  ├─ WS /deriv/ws?account_id=... → authenticated Demo-only trading and strategy execution
+  ├─ WS /deriv/ws?account_id=... → authenticated Demo/Real trading and order execution
   └─ WS /deriv/live/market → public market-data proxy
 
-FastAPI also exposes authenticated descriptive digit-analysis endpoints. Strategy execution
-is only available through the authenticated Demo WebSocket; the public market WebSocket
-remains observation-only.
+FastAPI also exposes authenticated descriptive digit-analysis endpoints. Orders are executed
+through the authenticated WebSocket gateway according to Deriv Options API specifications;
+the public market WebSocket remains observation-only.
 ```
 
-Live market ticks and history are forwarded in memory only. Real-account execution remains
-explicitly blocked at the gateway validation layer.
+Live market ticks and history are forwarded in memory only. Both Demo (`/trading/v1/options/ws/demo`)
+and Real (`/trading/v1/options/ws/real`) accounts are authenticated via Deriv's single-use OTP
+service and protected by server-side risk and stake validations.
 
 ## WebSocket reliability
 

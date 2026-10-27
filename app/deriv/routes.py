@@ -263,17 +263,17 @@ async def activate_account_session(
             if body.account_id not in linked_ids:
                 raise HTTPException(status_code=403, detail="Account is not linked to this TradeBridge user.")
             account_type = str(account.get("account_type", "")).lower()
-            if account_type != "demo":
+            if account_type not in ("demo", "real"):
                 raise HTTPException(
                     status_code=403,
-                    detail="Real-account execution remains disabled until server-side risk limits and order reconciliation are enforced.",
+                    detail="Unsupported account type.",
                 )
             otp_response = await client.post(
                 f"https://api.derivws.com/trading/v1/options/accounts/{body.account_id}/otp",
                 headers={"Authorization": f"Bearer {credential.access_token}", "Accept": "application/json"},
             )
             if not otp_response.is_success:
-                raise HTTPException(status_code=502, detail="Could not activate the demo trading session.")
+                raise HTTPException(status_code=502, detail=f"Could not activate the {account_type} trading session.")
             otp_payload = otp_response.json()
     except HTTPException:
         raise
@@ -287,12 +287,13 @@ async def activate_account_session(
         raise HTTPException(status_code=502, detail="Unexpected Deriv session response.")
     data = otp_payload.get("data")
     provider_url = data.get("url") if isinstance(data, dict) else None
-    if not isinstance(provider_url, str) or not provider_url.startswith("wss://api.derivws.com/trading/v1/options/ws/demo?"):
-        raise HTTPException(status_code=502, detail="Deriv returned an invalid demo session.")
+    expected_prefix = f"wss://api.derivws.com/trading/v1/options/ws/{account_type}?"
+    if not isinstance(provider_url, str) or not provider_url.startswith(expected_prefix):
+        raise HTTPException(status_code=502, detail=f"Deriv returned an invalid {account_type} session.")
     return {
         "active": False,
         "account_id": body.account_id,
-        "account_type": "demo",
+        "account_type": account_type,
         "status": "provider_session_verified",
         "next_step": "server_websocket_proxy_not_yet_enabled",
     }

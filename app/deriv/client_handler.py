@@ -120,8 +120,10 @@ async def _handle_strategy_start(
         )
         if stake <= 0:
             raise ValueError("Strategy stake must be a positive amount.")
-        if stake > float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000")):
-            raise ValueError("Strategy stake exceeds the configured demo limit.")
+        max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+        if stake > max_stake:
+            limit_name = "real" if session.account_type == "real" else "demo"
+            raise ValueError(f"Strategy stake exceeds the configured {limit_name} limit.")
     except (TypeError, ValueError) as exc:
         await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
         return
@@ -200,8 +202,10 @@ async def _validate_proposal(
         stake = float(amount)
     except (TypeError, ValueError):
         stake = 0
-    if not (0 < stake <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
-        await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Demo stake is outside the server-configured limit."}})
+    max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+    if not (0 < stake <= max_stake):
+        limit_name = "Real" if session.account_type == "real" else "Demo"
+        await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": f"{limit_name} stake is outside the server-configured limit."}})
         return False
     request_id = message.get("req_id")
     if type(request_id) is not int or request_id < 0:
@@ -236,8 +240,10 @@ async def _validate_buy(
         buy_price = float(message.get("price"))
     except (TypeError, ValueError):
         buy_price = 0
-    if not (0 < buy_price <= float(os.getenv("TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))):
-        await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": "Purchase price is outside the server-configured limit."}})
+    max_stake = float(os.getenv("TRADEBRIDGE_REAL_MAX_STAKE" if session.account_type == "real" else "TRADEBRIDGE_DEMO_MAX_STAKE", "1000"))
+    if not (0 < buy_price <= max_stake):
+        limit_name = "Real" if session.account_type == "real" else "Demo"
+        await websocket.send_json({"error": {"code": "STAKE_LIMIT", "message": f"{limit_name} purchase price is outside the server-configured limit."}})
         return False
     if not isinstance(message.get("buy"), (str, int)) or not str(message.get("buy")).strip():
         await websocket.send_json({"error": {"code": "INVALID_PROPOSAL", "message": "A valid proposal identifier is required."}})

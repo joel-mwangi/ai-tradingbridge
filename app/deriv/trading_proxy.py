@@ -81,7 +81,8 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 else []
             )
             account = next((item for item in accounts if isinstance(item, dict) and item.get("account_id") == account_id), None)
-            if not account or str(account.get("account_type", "")).lower() != "demo":
+            account_type = str(account.get("account_type", "")).lower() if account else ""
+            if not account or account_type not in ("demo", "real"):
                 await websocket.close(code=4403)
                 return
             linked_ids = await _linked_account_ids(user_id, [account_id])
@@ -102,7 +103,8 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                 await websocket.close(code=1011)
                 return
             parsed = urlparse(provider_url)
-            if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
+            expected_path = f"/trading/v1/options/ws/{account_type}"
+            if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != expected_path:
                 await websocket.close(code=1011)
                 return
     except HTTPException as exc:
@@ -114,7 +116,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
 
     _MAX_RECONNECT_ATTEMPTS = 5
     reconnect_attempt = 0
-    session = TradingProxySession(allowed_client_requests=_ALLOWED_CLIENT_REQUESTS)
+    session = TradingProxySession(allowed_client_requests=_ALLOWED_CLIENT_REQUESTS, account_type=account_type)
 
     while True:
         # Re-fetch OTP on every connect attempt (OTPs are single-use).
@@ -139,7 +141,7 @@ async def deriv_websocket_proxy(websocket: WebSocket) -> None:
                     await websocket.close(code=1011)
                     return
                 parsed = urlparse(provider_url)
-                if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != "/trading/v1/options/ws/demo":
+                if parsed.scheme != "wss" or parsed.hostname != "api.derivws.com" or parsed.path != expected_path:
                     await websocket.close(code=1011)
                     return
         except (httpx.HTTPError, ValueError):

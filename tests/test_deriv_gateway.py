@@ -325,3 +325,97 @@ async def test_strategy_second_cycle_does_not_duplicate_tick_subscription():
     assert any(m.get("forget_all") == "ticks" for m in upstream_messages)
     assert any(m.get("ticks") == "R_50" and m.get("subscribe") == 1 for m in upstream_messages)
     assert session.strategy_subscribed_symbol == "R_50"
+
+
+def test_activate_account_session_supports_real_account(monkeypatch, credential_store):
+    """activate_account_session must support real accounts with Deriv's ws/real endpoint."""
+    credential_store["user-1"] = Credential(
+        access_token="real-token",
+        expires_at=time.time() + 3600,
+        updated_at=time.time(),
+    )
+    main.app.dependency_overrides[current_user] = lambda: "user-1"
+
+    async def fake_linked(user_id, account_ids):
+        return set(account_ids)
+
+    from app.deriv import routes as _routes
+    monkeypatch.setattr(_routes, "_linked_account_ids", fake_linked)
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def __init__(self, data):
+            self._data = data
+
+        def json(self):
+            return self._data
+
+    import httpx as _httpx
+
+    async def fake_get(self_client, url, **kwargs):
+        return FakeResponse({"accounts": [{"account_id": "CR123456", "account_type": "real"}]})
+
+    async def fake_post(self_client, url, **kwargs):
+        if "otp" in url:
+            return FakeResponse({"data": {"url": "wss://api.derivws.com/trading/v1/options/ws/real?otp=test-otp"}})
+        return FakeResponse({})
+
+    monkeypatch.setattr(_httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(_httpx.AsyncClient, "post", fake_post)
+
+    try:
+        response = client.post("/deriv/session/activate", json={"account_id": "CR123456"})
+    finally:
+        main.app.dependency_overrides.pop(current_user, None)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["account_id"] == "CR123456"
+    assert data["account_type"] == "real"
+    assert data["status"] == "provider_session_verified"
+
+
+@pytest.mark.anyio
+async def test_validate_proposal_real_stake_limit(monkeypatch):
+    """Proposal validation on a real account respects TRADEBRIDGE_REAL_MAX_STAKE."""
+    from app.deriv.client_handler import _validate_proposal
+    from app.deriv.trading_session import TradingProxySession
+
+    session = TradingProxySession(allowed_client_requests={"proposal"}, account_type="real")
+    sent = []
+
+    class FakeWebSocket:
+        async def send_json(self, msg: dict):
+            sent.append(msg)
+
+    monkeypatch.setenv("TRADEBRIDGE_REAL_MAX_STAKE", "25")
+
+    # Exceeds real limit
+    res_exceeded = await _validate_proposal(session, FakeWebSocket(), {
+        "amount": "50",
+        "contract_type": "DIGITOVER",
+        "duration": 5,
+        "duration_unit": "t",
+        "barrier": "5",
+        "symbol": "1HZ100V",
+        "req_id": 1,
+    })
+    assert res_exceeded is False
+    assert any("Real stake is outside" in str(m) for m in sent)
+
+    # Within real limit
+    sent.clear()
+    res_ok = await _validate_proposal(session, FakeWebSocket(), {
+        "amount": "20",
+        "contract_type": "DIGITOVER",
+        "duration": 5,
+        "duration_unit": "t",
+        "barrier": "5",
+        "symbol": "1HZ100V",
+        "req_id": 2,
+    })
+    assert res_ok is True
+    assert len(sent) == 0
+
