@@ -522,14 +522,14 @@ class DigitStrategySession:
             rose_by_required_amount = (
                 baseline is not None
                 and current is not None
-                and abs(float(current) - baseline - PERCENTAGE_TRIGGER_RISE) <= 1e-9
+                and float(current) - baseline >= PERCENTAGE_TRIGGER_RISE - 1e-9
             )
             if not rose_by_required_amount:
                 self.pattern_tracker.reset()
                 self.pattern_rejected = True
                 return SessionUpdate(
                     self.state,
-                    f"Pattern rejected: first activity digit {digit} did not rise by exactly 0.1 percentage points from its own baseline. No entry can be generated in this run; click Run to retry.",
+                    f"Pattern rejected: first activity digit {digit} did not rise by at least 0.1 percentage points from its own baseline. No entry can be generated in this run; click Run to retry.",
                     self.qualification,
                     percentage_triggered=True,
                 )
