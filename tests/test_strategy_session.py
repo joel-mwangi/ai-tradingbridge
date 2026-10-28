@@ -239,6 +239,21 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertFalse(self.session.on_tick(0).pattern_completed)
         self.assertFalse(self.session.on_tick(7).pattern_completed)
 
+    def test_first_activity_digit_rise_exactly_one_tenth_is_accepted(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1  # Trigger digit rises exactly 0.1 percentage points.
+        increased[1] = 8.3  # First activity digit also rises exactly 0.1.
+        update = self.add(17, increased, "second-rise-exactly-one-tenth")
+        self.assertTrue(update.percentage_triggered)
+
+        self.session.on_tick(2)  # Tick that produced the trigger snapshot is skipped.
+        accepted = self.session.on_tick(1)
+        self.assertFalse(accepted.pattern_completed)
+        self.assertNotIn("Pattern rejected", accepted.reason)
+        self.assertFalse(self.session.pattern_rejected)
+        self.assertEqual(self.session.pattern_tracker.progress, 1)
+
     def test_first_activity_digit_rise_greater_than_one_tenth_is_rejected(self):
         self.start_stable_over3()
         increased = over3_percentages()
