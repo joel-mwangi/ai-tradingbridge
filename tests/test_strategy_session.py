@@ -223,6 +223,22 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.assertFalse(update.percentage_triggered)
         self.assertFalse(self.session.percentage_triggered)
 
+    def test_first_activity_digit_must_also_rise_by_one_tenth_percentage_point(self):
+        self.start_stable_over3()
+        increased = over3_percentages()
+        increased[0] = 8.1
+        update = self.add(17, increased, "first-rise-trigger")
+        self.assertTrue(update.percentage_triggered)
+
+        self.session.on_tick(2)  # Tick that produced the trigger snapshot is skipped.
+        rejected = self.session.on_tick(1)  # Digit 1 has not risen from its own baseline.
+        self.assertFalse(rejected.pattern_completed)
+        self.assertIn("Pattern rejected", rejected.reason)
+        self.assertTrue(self.session.pattern_rejected)
+
+        self.assertFalse(self.session.on_tick(0).pattern_completed)
+        self.assertFalse(self.session.on_tick(7).pattern_completed)
+
     def test_simultaneous_exact_triggers_choose_lowest_percentage(self):
         self.start_stable_over3()
         increased = over3_percentages()
