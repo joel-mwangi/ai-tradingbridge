@@ -16,6 +16,7 @@ from app.strategy.digit_strategy import (
     QualificationResult,
     TimestampedPercentageObservation,
     choose_group,
+    activity_digits_for,
     digits_for,
     prioritize_trigger_candidate,
     rank_bar_colors,
@@ -67,8 +68,11 @@ class DigitStrategySession:
     bar_colors: BarColorRanks | None = None
     percentage_baseline: float | None = None
     trigger_baselines: dict[int, float] = field(default_factory=dict)
+    digit_baselines: dict[int, float] = field(default_factory=dict)
     percentage_triggered: bool = False
     skip_current_tick: bool = False
+    activity_frequency_check_pending: bool = False
+    pattern_rejected: bool = False
     signal_generated: bool = False
     execution_locked: bool = False
     _rank_signature: tuple[frozenset[int], frozenset[int]] | None = None
@@ -91,8 +95,11 @@ class DigitStrategySession:
         self.pattern_tracker = None
         self.percentage_baseline = None
         self.trigger_baselines.clear()
+        self.digit_baselines.clear()
         self.percentage_triggered = False
         self.skip_current_tick = False
+        self.activity_frequency_check_pending = False
+        self.pattern_rejected = False
         self.signal_generated = False
         self.execution_locked = False
 
@@ -360,6 +367,8 @@ class DigitStrategySession:
                         )
                         self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
                         self.percentage_triggered = True
+                        self.activity_frequency_check_pending = True
+                        self.pattern_rejected = False
                         if self.pattern_tracker is not None:
                             self.pattern_tracker.trigger_digit = self.trigger_digit
                             self.pattern_tracker.arm()
@@ -432,9 +441,12 @@ class DigitStrategySession:
             self.state = SessionState.WAITING_FOR_MORE_DATA
             return
         self.trigger_baselines = {digit: float(percentages[digit]) for digit in trigger_digits}  # type: ignore[index]
+        self.digit_baselines = {digit: float(percentages[digit]) for digit in range(10)}  # type: ignore[index]
         self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
         self.percentage_triggered = False
         self.skip_current_tick = False
+        self.activity_frequency_check_pending = False
+        self.pattern_rejected = False
         self.signal_generated = False
         self.pattern_tracker = PatternTracker(group, self.trigger_digit, barrier=self.barrier)
         self.state = SessionState.SELECTED
@@ -485,12 +497,42 @@ class DigitStrategySession:
                 self.qualification,
                 percentage_triggered=self.percentage_triggered,
             )
+        if self.pattern_rejected:
+            return SessionUpdate(
+                self.state,
+                "The first activity digit failed the required 0.1 percentage-point rise; this run cannot generate an entry. Click Run to start a fresh run.",
+                self.qualification,
+                percentage_triggered=self.percentage_triggered,
+            )
         if not self.percentage_triggered:
             return SessionUpdate(
                 self.state,
                 "Waiting for the selected trigger digit's percentage to rise by exactly 0.1 percentage points.",
                 self.qualification,
             )
+        if (
+            self.activity_frequency_check_pending
+            and self.selected_group is not None
+            and digit in activity_digits_for(self.selected_group, self.barrier)
+        ):
+            self.activity_frequency_check_pending = False
+            baseline = self.digit_baselines.get(digit)
+            current_percentages = self.observations[-1].percentages if self.observations else {}
+            current = current_percentages.get(digit)
+            rose_by_required_amount = (
+                baseline is not None
+                and current is not None
+                and abs(float(current) - baseline - PERCENTAGE_TRIGGER_RISE) <= 1e-9
+            )
+            if not rose_by_required_amount:
+                self.pattern_tracker.reset()
+                self.pattern_rejected = True
+                return SessionUpdate(
+                    self.state,
+                    f"Pattern rejected: first activity digit {digit} did not rise by exactly 0.1 percentage points from its own baseline. No entry can be generated in this run; click Run to retry.",
+                    self.qualification,
+                    percentage_triggered=True,
+                )
         try:
             completed = self.pattern_tracker.on_tick(digit)
         except ValueError as exc:
