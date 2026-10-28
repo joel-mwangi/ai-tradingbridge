@@ -11,8 +11,7 @@ from pydantic import BaseModel, Field, StrictInt
 
 from app.analysis import analyze_digits
 from app.deriv import router as deriv_router
-
-
+from app.mt5_bridge import router as mt5_router
 
 
 app = FastAPI(
@@ -22,6 +21,7 @@ app = FastAPI(
 )
 
 app.include_router(deriv_router)
+app.include_router(mt5_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
@@ -68,11 +68,10 @@ def require_api_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+
 @app.get("/")
 def home():
     return {"status": "ok"}
-
-
 
 
 @app.get("/health")
