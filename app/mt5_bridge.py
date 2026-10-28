@@ -39,6 +39,7 @@ class CreateCommandRequest(BaseModel):
 
 
 class AckRequest(BaseModel):
+    lease_token: UUID
     outcome: StrictStr
     result_code: StrictStr | None = Field(default=None, max_length=80)
     result_message: StrictStr | None = Field(default=None, max_length=500)
@@ -239,6 +240,7 @@ async def lease_next_command(
     return {"command": {
         "id": command["id"], "type": command["command_type"],
         "provider_symbol": command["provider_symbol"], "expires_at": command["expires_at"],
+        "lease_token": command["lease_token"],
     }}
 
 
@@ -253,7 +255,8 @@ async def acknowledge_command(
         raise HTTPException(status_code=422, detail="Outcome must be acknowledged or rejected.")
     result = await _rpc("mt5_ack_command", {
         "p_device_id": device["id"], "p_command_id": str(command_id),
-        "p_outcome": body.outcome, "p_result_code": body.result_code,
+        "p_lease_token": str(body.lease_token), "p_outcome": body.outcome,
+        "p_result_code": body.result_code,
         "p_result_message": body.result_message,
     })
     record = result if isinstance(result, dict) else (
