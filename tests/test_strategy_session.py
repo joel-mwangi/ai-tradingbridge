@@ -233,11 +233,23 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.session.on_tick(2)  # Tick that produced the trigger snapshot is skipped.
         rejected = self.session.on_tick(1)  # Digit 1 has not risen from its own baseline.
         self.assertFalse(rejected.pattern_completed)
-        self.assertIn("Pattern rejected", rejected.reason)
-        self.assertTrue(self.session.pattern_rejected)
+        self.assertIn("attempt was ignored", rejected.reason)
+        self.assertIn("next qualifying trigger rise", rejected.reason)
+        self.assertFalse(self.session.pattern_rejected)
+        self.assertFalse(self.session.percentage_triggered)
+        self.assertFalse(self.session.activity_frequency_check_pending)
+        self.assertEqual(self.session.state, SessionState.SELECTED)
 
-        self.assertFalse(self.session.on_tick(0).pattern_completed)
-        self.assertFalse(self.session.on_tick(7).pattern_completed)
+        # A new exact +0.1pp trigger rise can start another attempt in the
+        # same run; no fresh Run click or 15-second stability cycle is needed.
+        retrigger = over3_percentages()
+        retrigger[0] = 8.1
+        retrigger[1] = 8.3
+        next_update = self.add(18, retrigger, "retry-trigger-after-rejection")
+        self.assertTrue(next_update.percentage_triggered)
+        self.assertTrue(self.session.percentage_triggered)
+        self.assertEqual(self.session.state, SessionState.SELECTED)
+        self.assertFalse(self.session.signal_generated)
 
     def test_first_activity_digit_rise_exactly_one_tenth_is_accepted(self):
         self.start_stable_over3()
@@ -265,8 +277,10 @@ class DigitStrategySessionTests(unittest.TestCase):
         self.session.on_tick(2)  # Tick that produced the trigger snapshot is skipped.
         rejected = self.session.on_tick(1)
         self.assertFalse(rejected.pattern_completed)
-        self.assertIn("Pattern rejected", rejected.reason)
-        self.assertTrue(self.session.pattern_rejected)
+        self.assertIn("attempt was ignored", rejected.reason)
+        self.assertFalse(self.session.pattern_rejected)
+        self.assertFalse(self.session.percentage_triggered)
+        self.assertEqual(self.session.state, SessionState.SELECTED)
 
     def test_simultaneous_exact_triggers_choose_lowest_percentage(self):
         self.start_stable_over3()
