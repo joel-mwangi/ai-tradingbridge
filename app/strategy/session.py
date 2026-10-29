@@ -497,13 +497,6 @@ class DigitStrategySession:
                 self.qualification,
                 percentage_triggered=self.percentage_triggered,
             )
-        if self.pattern_rejected:
-            return SessionUpdate(
-                self.state,
-                "The first activity digit failed the required 0.1 percentage-point rise; this run cannot generate an entry. Click Run to start a fresh run.",
-                self.qualification,
-                percentage_triggered=self.percentage_triggered,
-            )
         if not self.percentage_triggered:
             return SessionUpdate(
                 self.state,
@@ -525,13 +518,30 @@ class DigitStrategySession:
                 and abs(float(current) - baseline - PERCENTAGE_TRIGGER_RISE) <= 1e-9
             )
             if not rose_by_required_amount:
+                # Reject only this pattern attempt. Keep the selected setup and
+                # stability interval, but establish fresh baselines so the next
+                # exact +0.1pp trigger can initiate another attempt in this run.
                 self.pattern_tracker.reset()
-                self.pattern_rejected = True
+                current_percentages = self.observations[-1].percentages
+                self.trigger_baselines = {
+                    candidate: float(current_percentages[candidate])
+                    for candidate in self.trigger_baselines
+                }
+                self.digit_baselines = {
+                    candidate: float(current_percentages[candidate])
+                    for candidate in range(10)
+                }
+                if self.trigger_digit in self.trigger_baselines:
+                    self.percentage_baseline = self.trigger_baselines[self.trigger_digit]
+                self.percentage_triggered = False
+                self.activity_frequency_check_pending = False
+                self.skip_current_tick = False
+                self.pattern_rejected = False
                 return SessionUpdate(
                     self.state,
-                    f"Pattern rejected: first activity digit {digit} did not rise by exactly 0.1 percentage points from its own baseline. No entry can be generated in this run; click Run to retry.",
+                    f"First activity digit {digit} rejected: it did not rise by exactly 0.1 percentage points from its baseline. This attempt was ignored; waiting for the next qualifying trigger rise.",
                     self.qualification,
-                    percentage_triggered=True,
+                    percentage_triggered=False,
                 )
         try:
             completed = self.pattern_tracker.on_tick(digit)
