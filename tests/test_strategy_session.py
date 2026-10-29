@@ -243,7 +243,8 @@ class DigitStrategySessionTests(unittest.TestCase):
         # A new exact +0.1pp trigger rise can start another attempt in the
         # same run; no fresh Run click or 15-second stability cycle is needed.
         retrigger = over3_percentages()
-        retrigger[0] = 8.2
+        retrigger[0] = 8.1
+        retrigger[1] = 8.3
         next_update = self.add(18, retrigger, "retry-trigger-after-rejection")
         self.assertTrue(next_update.percentage_triggered)
         self.assertTrue(self.session.percentage_triggered)
