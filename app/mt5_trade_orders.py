@@ -36,7 +36,7 @@ _MAX_SL_TP = 1_000_000.0
 # ---------------------------------------------------------------------------
 
 class CreateTradeOrderRequest(BaseModel):
-    """Parameters for a Phase 1 market order (buy or sell at market price)."""
+    """Parameters for a market or pending order (Phase 1 + Phase 2)."""
     broker_symbol: StrictStr = Field(
         min_length=2, max_length=40,
         description="Broker-side symbol (e.g. 'EURUSD', not the provider symbol).",
@@ -74,6 +74,15 @@ class CreateTradeOrderRequest(BaseModel):
     expires_in_seconds: int = Field(
         default=60, ge=10, le=300,
         description="Seconds before the order expires if not picked up by the EA.",
+    )
+    # Phase 2 additions — pending order support
+    order_type: StrictStr = Field(
+        default="market",
+        description="'market','buy_limit','sell_limit','buy_stop','sell_stop'",
+    )
+    entry_price: float | None = Field(
+        default=None, gt=0, le=1_000_000.0,
+        description="Required for non-market orders. Price at which the pending order triggers.",
     )
 
 
@@ -125,6 +134,26 @@ class EaReconciledAck(BaseModel):
     mt5_retcode_description: StrictStr | None = Field(default=None, max_length=300)
 
 
+class EaPlacedAck(BaseModel):
+    """EA reports that a pending order was placed at the broker (ticket assigned, no fill yet).
+
+    statusLabel: 'placed' → 'Pending at broker'
+    """
+    lease_token: UUID
+    mt5_order_ticket: int
+    mt5_retcode: int | None = None
+    mt5_retcode_description: StrictStr | None = Field(default=None, max_length=300)
+
+
+class EaCancelledPendingAck(BaseModel):
+    """EA or user cancelled a pending order before it triggered (filled).
+
+    statusLabel: 'cancelled_pending' → 'Pending order cancelled'
+    """
+    lease_token: UUID
+    reject_reason: StrictStr | None = Field(default=None, max_length=300)
+
+
 # ---------------------------------------------------------------------------
 # User-facing routes
 # ---------------------------------------------------------------------------
@@ -149,6 +178,18 @@ async def create_trade_order(
         raise HTTPException(status_code=422, detail="account_type must be 'demo' or 'real'.")
     if not _IDEMPOTENCY_RE.fullmatch(body.idempotency_key):
         raise HTTPException(status_code=422, detail="Invalid idempotency key format.")
+
+    # Phase 2: validate order_type and entry_price consistency
+    _VALID_ORDER_TYPES = ("market", "buy_limit", "sell_limit", "buy_stop", "sell_stop")
+    if body.order_type not in _VALID_ORDER_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="order_type must be 'market','buy_limit','sell_limit','buy_stop','sell_stop'.",
+        )
+    if body.order_type != "market" and body.entry_price is None:
+        raise HTTPException(status_code=422, detail="entry_price is required for non-market orders.")
+    if body.order_type == "market" and body.entry_price is not None:
+        raise HTTPException(status_code=422, detail="entry_price must be omitted for market orders.")
 
     # Verify device belongs to this user and is paired
     devices = await _request(
@@ -204,6 +245,8 @@ async def create_trade_order(
         "status": "queued",
         "requested_at": now.isoformat(),
         "expires_at": expires_at.isoformat(),
+        "order_type": body.order_type,
+        "entry_price": body.entry_price,
     }
 
     rows = await _request(
@@ -309,6 +352,9 @@ async def lease_next_trade_order(
             "account_type": order["account_type"],
             "expires_at": order["expires_at"],
             "lease_token": order["lease_token"],
+            # Phase 2: pending order fields
+            "order_type": order.get("order_type", "market"),
+            "entry_price": order.get("entry_price"),
         }
     }
 
@@ -445,6 +491,86 @@ async def ack_reconciled(
             "p_mt5_retcode_description": body.mt5_retcode_description,
         },
     )
+
+
+# Phase 2: pending order ack routes
+# statusLabel mapping:
+#   'placed'            → 'Pending at broker'   (non-terminal: order sits in broker's book)
+#   'cancelled_pending' → 'Pending order cancelled'  (terminal)
+
+@router.post("/ea/trade-orders/{order_id}/ack/placed")
+async def ack_placed(
+    order_id: UUID,
+    body: EaPlacedAck,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Pending order placed at broker. Transition: accepted → placed."""
+    return await _apply_ack(
+        authorization, order_id, "placed",
+        {
+            "p_lease_token": str(body.lease_token),
+            "p_mt5_order_ticket": body.mt5_order_ticket,
+            "p_mt5_retcode": body.mt5_retcode,
+            "p_mt5_retcode_description": body.mt5_retcode_description,
+        },
+    )
+
+
+@router.post("/ea/trade-orders/{order_id}/ack/cancelled-pending")
+async def ack_cancelled_pending(
+    order_id: UUID,
+    body: EaCancelledPendingAck,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Pending order cancelled before fill. Transition: placed → cancelled_pending."""
+    return await _apply_ack(
+        authorization, order_id, "cancelled_pending",
+        {
+            "p_lease_token": str(body.lease_token),
+            "p_reject_reason": body.reject_reason,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# User-facing: order history
+# ---------------------------------------------------------------------------
+
+@router.get("/devices/{device_id}/trade-orders")
+async def list_trade_orders(
+    device_id: UUID,
+    user_id: Annotated[str, Depends(current_user)],
+    limit: int = Query(default=50, ge=1, le=200),
+    before: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Paginated order history for a device, ordered by requested_at desc."""
+    # Verify device belongs to this user and is paired
+    devices = await _request(
+        "GET", "mt5_devices",
+        params={
+            "select": "id,status",
+            "id": f"eq.{device_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        },
+    )
+    if not isinstance(devices, list) or not devices or devices[0].get("status") != "paired":
+        raise HTTPException(status_code=404, detail="Paired MT5 device not found.")
+
+    params: dict[str, str] = {
+        "select": "*",
+        "device_id": f"eq.{device_id}",
+        "user_id": f"eq.{user_id}",
+        "order": "requested_at.desc",
+        "limit": str(limit),
+    }
+    if before is not None:
+        params["requested_at"] = f"lt.{before}"
+
+    rows = await _request("GET", "mt5_trade_orders", params=params)
+    if not isinstance(rows, list):
+        rows = []
+    return {"orders": rows, "count": len(rows)}
 
 
 __all__ = ["router"]

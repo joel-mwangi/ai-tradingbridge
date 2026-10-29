@@ -13,6 +13,7 @@ from app.analysis import analyze_digits
 from app.deriv import router as deriv_router
 from app.mt5_bridge import router as mt5_router
 from app.mt5_trade_orders import router as mt5_trade_router
+from app.mt5_position_commands import router as mt5_position_router
 
 
 app = FastAPI(
@@ -24,6 +25,7 @@ app = FastAPI(
 app.include_router(deriv_router)
 app.include_router(mt5_router)
 app.include_router(mt5_trade_router)
+app.include_router(mt5_position_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
