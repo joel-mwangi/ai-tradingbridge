@@ -12,16 +12,18 @@ from pydantic import BaseModel, Field, StrictInt
 from app.analysis import analyze_digits
 from app.deriv import router as deriv_router
 from app.mt5_bridge import router as mt5_router
+from app.mt5_trade_orders import router as mt5_trade_router
 
 
 app = FastAPI(
     title="TradeBridge AI",
     description="Authenticated Deriv session gateway and descriptive research API",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 app.include_router(deriv_router)
 app.include_router(mt5_router)
+app.include_router(mt5_trade_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
@@ -35,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )
