@@ -176,6 +176,14 @@ class AutomaticSelectionTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("strictly below 9%", reason)
 
+    def test_over5_yellow_at_9_percent_fails_even_when_outside_zone(self):
+        # Yellow is outside Over 5's low-side zone, but its <9% threshold still applies.
+        p = {0: 8.0, 1: 9.2, 2: 9.3, 3: 9.4, 4: 9.5, 5: 9.6,
+             6: 9.7, 7: 10.2, 8: 9.0, 9: 10.5}
+        ok, reason = evaluate_color_positions(p, Group.OVER, barrier=5)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
+
     def test_over5_red_alone_is_not_invalidated_by_yellow_outside_zone(self):
         # digit-0 = Red (7.8%, sole minimum, in zone 0..6, < 9%)
         # digit-8 = Yellow (8.0%, second lowest overall, outside zone 0..6)
@@ -187,6 +195,14 @@ class AutomaticSelectionTests(unittest.TestCase):
         ok, reason = evaluate_color_positions(p, Group.OVER, barrier=5)
         self.assertTrue(ok)
         self.assertIn("Red-alone", reason)
+
+    def test_under6_yellow_at_9_percent_fails_even_when_outside_zone(self):
+        # Yellow is outside Under 6's high-side zone, but its <9% threshold still applies.
+        p = {0: 10.9, 1: 10.8, 2: 10.7, 3: 10.6, 4: 9.0,
+             5: 8.0, 6: 9.1, 7: 9.2, 8: 9.3, 9: 9.4}
+        ok, reason = evaluate_color_positions(p, Group.UNDER, barrier=6)
+        self.assertFalse(ok)
+        self.assertIn("strictly below 9%", reason)
 
     def test_under6_red_alone_qualifies_when_yellow_is_outside_zone(self):
         # Under 6: Red/Yellow qualifying zone is digits 5..9 (B-1..9).
