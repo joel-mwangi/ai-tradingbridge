@@ -11,6 +11,7 @@ Database calls go through Supabase REST + RPC.
 """
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -143,6 +144,20 @@ async def create_position_command(
         raise HTTPException(status_code=422, detail="account_type must be 'demo' or 'real'.")
     if body.idempotency_key is not None and not _IDEMPOTENCY_RE.fullmatch(body.idempotency_key):
         raise HTTPException(status_code=422, detail="Invalid idempotency key format.")
+
+    # Real-account partial-close volume cap
+    if body.account_type == "real" and body.volume is not None:
+        raw = os.getenv("TRADEBRIDGE_MT5_REAL_MAX_VOLUME", "").strip()
+        if raw:
+            try:
+                cap = float(raw)
+                if cap > 0 and body.volume > cap:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Real-account close volume {body.volume} exceeds the configured maximum of {cap} lots.",
+                    )
+            except ValueError:
+                pass
 
     # Verify device belongs to this user and is paired
     devices = await _request(

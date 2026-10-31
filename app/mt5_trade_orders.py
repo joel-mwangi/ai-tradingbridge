@@ -9,6 +9,7 @@ Database calls go through Supabase REST + RPC, never directly to PostgreSQL.
 """
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -27,8 +28,25 @@ router = APIRouter(prefix="/mt5", tags=["mt5-trade-orders"])
 # Validation helpers
 # ---------------------------------------------------------------------------
 _BROKER_SYMBOL_RE = re.compile(r"^[A-Za-z0-9_\.]{2,40}$")
-_MAX_VOLUME = 100.0   # hard cap; broker limits are enforced by the EA itself
+_MAX_VOLUME = 100.0   # hard absolute cap; broker limits also enforced by the EA
 _MAX_SL_TP = 1_000_000.0
+
+
+def _real_max_volume() -> float | None:
+    """Return the configured real-account volume cap, or None if not set.
+
+    Set TRADEBRIDGE_MT5_REAL_MAX_VOLUME in the backend environment to a
+    positive float (e.g. 1.0) to protect real accounts from oversized orders.
+    When unset, only the hard _MAX_VOLUME cap applies.
+    """
+    raw = os.getenv("TRADEBRIDGE_MT5_REAL_MAX_VOLUME", "").strip()
+    if not raw:
+        return None
+    try:
+        val = float(raw)
+        return val if val > 0 else None
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +196,15 @@ async def create_trade_order(
         raise HTTPException(status_code=422, detail="account_type must be 'demo' or 'real'.")
     if not _IDEMPOTENCY_RE.fullmatch(body.idempotency_key):
         raise HTTPException(status_code=422, detail="Invalid idempotency key format.")
+
+    # Real-account volume cap: reject if operator has set TRADEBRIDGE_MT5_REAL_MAX_VOLUME
+    if body.account_type == "real":
+        cap = _real_max_volume()
+        if cap is not None and body.volume > cap:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Real-account order volume {body.volume} exceeds the configured maximum of {cap} lots.",
+            )
 
     # Phase 2: validate order_type and entry_price consistency
     _VALID_ORDER_TYPES = ("market", "buy_limit", "sell_limit", "buy_stop", "sell_stop")
