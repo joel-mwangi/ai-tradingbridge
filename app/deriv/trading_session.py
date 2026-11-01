@@ -49,6 +49,12 @@ class TradingProxySession:
         self.daily_realized_profit: float | None = None
         self.daily_profit_checked_at: float | None = None
         self.daily_profit_request_id: int | None = None
+        # For real accounts, optimistically initialise P&L to 0 so the gate
+        # does not block the very first trade while the risk monitor is fetching.
+        # The monitor corrects the value within 15 seconds.
+        if self.account_type == "real":
+            self.daily_realized_profit = 0.0
+            self.daily_profit_checked_at = time.time()
         # State that persists across reconnects.
         self.pending_proposal_requests: set[int] = set()
         self.pending_strategy_proposals: set[int] = set()

@@ -101,7 +101,7 @@ async def _real_trading_gate_error(
         if (
             session.daily_realized_profit is None
             or session.daily_profit_checked_at is None
-            or time.time() - session.daily_profit_checked_at > 30
+            or time.time() - session.daily_profit_checked_at > 45
         ):
             return {
                 "code": "REAL_DAILY_PNL_UNAVAILABLE",
