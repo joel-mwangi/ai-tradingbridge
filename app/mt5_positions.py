@@ -67,12 +67,15 @@ async def sync_positions(
     user_id: str = device["user_id"]
     now = datetime.now(timezone.utc).isoformat()
 
+    # Upsert each live position
+    live_tickets: list[int] = []
     upserted = 0
     for pos in body.positions:
         if pos.order_side not in ("buy", "sell"):
             continue
         if pos.account_type not in ("demo", "real"):
             continue
+        live_tickets.append(pos.mt5_ticket)
         row: dict[str, Any] = {
             "device_id": device_id,
             "user_id": user_id,
@@ -99,6 +102,32 @@ async def sync_positions(
             prefer="resolution=merge-duplicates,return=minimal",
         )
         upserted += 1
+
+    # Mark as closed any DB position NOT present in this sync batch.
+    # This self-corrects stale is_open=true rows from before the EA was running.
+    if live_tickets:
+        tickets_csv = ",".join(str(t) for t in live_tickets)
+        await _request(
+            "PATCH",
+            "mt5_positions",
+            payload={"is_open": False, "closed_at": now},
+            params={
+                "device_id": f"eq.{device_id}",
+                "is_open": "eq.true",
+                "mt5_ticket": f"not.in.({tickets_csv})",
+            },
+            prefer="return=minimal",
+        )
+    else:
+        # No open positions at all — close everything for this device
+        await _request(
+            "PATCH",
+            "mt5_positions",
+            payload={"is_open": False, "closed_at": now},
+            params={"device_id": f"eq.{device_id}", "is_open": "eq.true"},
+            prefer="return=minimal",
+        )
+
     return {"upserted": upserted}
 
 
