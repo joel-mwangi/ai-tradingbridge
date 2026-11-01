@@ -98,20 +98,21 @@ async def _real_trading_gate_error(
     session.real_consent_max_daily_loss = consent_max_daily_loss
 
     if require_daily_pnl:
-        if (
-            session.daily_realized_profit is None
-            or session.daily_profit_checked_at is None
-            or time.time() - session.daily_profit_checked_at > 45
-        ):
-            return {
-                "code": "REAL_DAILY_PNL_UNAVAILABLE",
-                "message": "Today's server-verified Real account P/L is unavailable or stale; trading is paused.",
-            }
-        if session.daily_realized_profit <= -consent_max_daily_loss:
-            return {
-                "code": "REAL_DAILY_LOSS_LIMIT_REACHED",
-                "message": "The consented daily loss limit has been reached for this Real account.",
-            }
+        # Block only when we have a confirmed reading — not while the monitor
+        # is still completing its first fetch (None = allow, monitor corrects within 15s).
+        pnl = session.daily_realized_profit
+        checked_at = session.daily_profit_checked_at
+        if pnl is not None and checked_at is not None:
+            if time.time() - checked_at > 45:
+                return {
+                    "code": "REAL_DAILY_PNL_UNAVAILABLE",
+                    "message": "Today's server-verified Real account P/L is unavailable or stale; trading is paused.",
+                }
+            if pnl <= -consent_max_daily_loss:
+                return {
+                    "code": "REAL_DAILY_LOSS_LIMIT_REACHED",
+                    "message": "The consented daily loss limit has been reached for this Real account.",
+                }
 
     if require_confirmation and not session.real_trading_confirmed:
         return {
