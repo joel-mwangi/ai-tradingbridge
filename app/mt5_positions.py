@@ -95,6 +95,7 @@ async def sync_positions(
             "POST",
             "mt5_positions",
             payload=row,
+            params={"on_conflict": "device_id,mt5_ticket"},
             prefer="resolution=merge-duplicates,return=minimal",
         )
         upserted += 1
