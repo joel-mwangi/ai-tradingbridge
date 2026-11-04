@@ -5,6 +5,7 @@ encryption key must remain separate from the database.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,6 +108,7 @@ async def _load_credential(user_id: str) -> Credential | None:
         if not isinstance(rows, list):
             raise HTTPException(status_code=503, detail="Credential storage returned invalid data.")
         if not rows:
+            _log.info("_load_credential: no credential found for user_id=%s (table returned empty)", user_id[:8] + "...")
             return None
         row = rows[0]
         if not isinstance(row, dict) or not isinstance(row.get("encrypted_access_token"), str):
@@ -212,7 +216,7 @@ async def _load_live_trading_consent(user_id: str, account_id: str) -> dict | No
 async def _owned_credential(user_id: str) -> Credential:
     credential = await _load_credential(user_id)
     if credential is None:
-        raise HTTPException(status_code=409, detail="Deriv is not connected to this backend session.")
+        raise HTTPException(status_code=409, detail="Deriv is not connected. Use the Connect Broker button to link your Deriv account.")
     if credential.expires_at <= time.time():
         await _delete_credential(user_id)
         raise HTTPException(status_code=401, detail="Deriv authorization expired; reconnect Deriv.")
