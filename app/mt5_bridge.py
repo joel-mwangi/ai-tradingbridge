@@ -47,7 +47,7 @@ class AckRequest(BaseModel):
 
 def _db_config() -> tuple[str, str]:
     url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    key = os.getenv("SUPABASE_SECRET_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not url or not key:
         raise HTTPException(status_code=503, detail="MT5 command storage is not configured.")
     return url, key

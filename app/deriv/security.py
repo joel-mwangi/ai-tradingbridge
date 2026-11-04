@@ -42,11 +42,11 @@ def _require_bridge_secret(supplied: str | None) -> None:
 async def _resolve_user_token(token: str) -> str:
     """Validate a Supabase access token without exposing it to logs or responses."""
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    anon_key = os.getenv("SUPABASE_ANON_KEY", "")
+    anon_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
     if not token:
         raise HTTPException(status_code=401, detail="Sign in is required.")
     if not supabase_url or not anon_key:
-        raise HTTPException(status_code=503, detail="User authentication is not configured.")
+        raise HTTPException(status_code=503, detail="User authentication is not configured. Set SUPABASE_PUBLISHABLE_KEY.")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(

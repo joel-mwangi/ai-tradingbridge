@@ -34,7 +34,7 @@ def _credential_cipher() -> Fernet:
 
 def _credential_store_config() -> tuple[str, str]:
     url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    service_key = os.getenv("SUPABASE_SECRET_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not url or not service_key:
         raise HTTPException(status_code=503, detail="Credential storage is not configured.")
     return url, service_key
@@ -214,7 +214,7 @@ async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
     if not account_ids:
         return set()
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    service_key = os.getenv("SUPABASE_SECRET_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not supabase_url or not service_key:
         raise HTTPException(status_code=503, detail="Secure account linking is not configured.")
     try:

@@ -108,7 +108,7 @@ def analyze_latest_ticks(
         raise HTTPException(status_code=422, detail="Invalid symbol format.")
 
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    service_key = os.getenv("SUPABASE_SECRET_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not supabase_url or not service_key:
         raise HTTPException(
             status_code=503,
