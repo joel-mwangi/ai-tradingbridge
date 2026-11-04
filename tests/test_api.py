@@ -61,6 +61,7 @@ def test_latest_rejects_invalid_symbol_before_database_call(monkeypatch):
 def test_latest_success(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-secret")
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
 
     class Response:
         def raise_for_status(self):

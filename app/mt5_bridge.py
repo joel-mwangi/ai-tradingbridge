@@ -54,7 +54,9 @@ def _db_config() -> tuple[str, str]:
 
 
 def _headers(key: str, *, prefer: str | None = None) -> dict[str, str]:
-    result = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    result: dict[str, str] = {"apikey": key, "Content-Type": "application/json"}
+    if not key.startswith("sb_secret_"):
+        result["Authorization"] = f"Bearer {key}"
     if prefer:
         result["Prefer"] = prefer
     return result

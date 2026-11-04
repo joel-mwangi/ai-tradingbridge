@@ -40,6 +40,22 @@ def _credential_store_config() -> tuple[str, str]:
     return url, service_key
 
 
+def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
+    """Build Supabase REST headers that work for both JWT and sb_secret_ keys.
+
+    New sb_secret_... keys must NOT be sent as Authorization: Bearer — Supabase
+    tries to parse them as JWTs and rejects the request. Send them on apikey only.
+    Legacy JWT service_role keys are sent on both headers as before.
+    """
+    is_new_format = service_key.startswith("sb_secret_") or service_key.startswith("sb_publishable_")
+    headers: dict = {"apikey": service_key}
+    if not is_new_format:
+        headers["Authorization"] = f"Bearer {service_key}"
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 async def _store_credential(user_id: str, access_token: str, expires_in: int) -> Credential:
     url, service_key = _credential_store_config()
     encrypted = _credential_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
@@ -57,10 +73,7 @@ async def _store_credential(user_id: str, access_token: str, expires_in: int) ->
                 f"{url}/rest/v1/deriv_backend_credentials",
                 params={"on_conflict": "user_id"},
                 headers={
-                    "apikey": service_key,
-                    "Authorization": f"Bearer {service_key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                    **_supabase_headers(service_key, {"Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"}),
                 },
                 json=payload,
             )
@@ -84,7 +97,7 @@ async def _load_credential(user_id: str) -> Credential | None:
                     "user_id": f"eq.{user_id}",
                     "limit": "1",
                 },
-                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                headers=_supabase_headers(service_key),
             )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Could not load the encrypted Deriv credential.")
@@ -116,7 +129,7 @@ async def _delete_credential(user_id: str) -> None:
             response = await client.delete(
                 f"{url}/rest/v1/deriv_backend_credentials",
                 params={"user_id": f"eq.{user_id}"},
-                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                headers=_supabase_headers(service_key),
             )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Could not revoke the stored Deriv credential.")
@@ -138,10 +151,7 @@ async def _store_account_links(user_id: str, account_ids: list[str]) -> None:
                 f"{url}/rest/v1/deriv_account_links",
                 params={"on_conflict": "user_id,deriv_account_id"},
                 headers={
-                    "apikey": service_key,
-                    "Authorization": f"Bearer {service_key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=ignore-duplicates,return=minimal",
+                    **_supabase_headers(service_key, {"Content-Type": "application/json", "Prefer": "resolution=ignore-duplicates,return=minimal"}),
                 },
                 json=rows,
             )
@@ -161,7 +171,7 @@ async def _delete_account_links(user_id: str) -> None:
             response = await client.delete(
                 f"{url}/rest/v1/deriv_account_links",
                 params={"user_id": f"eq.{user_id}"},
-                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                headers=_supabase_headers(service_key),
             )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Could not remove Deriv account links.")
@@ -184,7 +194,7 @@ async def _load_live_trading_consent(user_id: str, account_id: str) -> dict | No
                     "deriv_account_id": f"eq.{account_id}",
                     "limit": "1",
                 },
-                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                headers=_supabase_headers(service_key),
             )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Could not verify Real trading consent.")
@@ -226,7 +236,7 @@ async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
                     "user_id": f"eq.{user_id}",
                     "deriv_account_id": f"in.({','.join(account_ids)})",
                 },
-                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                headers=_supabase_headers(service_key),
             )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Secure account linking could not be verified.")
@@ -242,3 +252,4 @@ async def _linked_account_ids(user_id: str, account_ids: list[str]) -> set[str]:
         raise
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Secure account linking could not be verified.")
+

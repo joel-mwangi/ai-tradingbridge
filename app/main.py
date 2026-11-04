@@ -126,7 +126,7 @@ def analyze_latest_ticks(
             },
             headers={
                 "apikey": service_key,
-                "Authorization": f"Bearer {service_key}",
+                **({"Authorization": f"Bearer {service_key}"} if not service_key.startswith("sb_secret_") else {}),
             },
             timeout=10.0,
         )
