@@ -64,7 +64,10 @@ def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
 
 async def _store_credential(user_id: str, access_token: str, expires_in: int) -> Credential:
     url, service_key = _credential_store_config()
-    _log.info("_store_credential: attempting write for user_id=%s...", user_id[:8])
+    _log.info(
+        "_store_credential: attempting write for user_id=%s... supabase_url=%s key_prefix=%s",
+        user_id[:8], url[:40] if url else "MISSING", service_key[:12] if service_key else "MISSING",
+    )
     encrypted = _credential_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=expires_in)
