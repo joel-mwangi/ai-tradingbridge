@@ -44,16 +44,19 @@ def _credential_store_config() -> tuple[str, str]:
 
 
 def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
-    """Build Supabase REST headers that work for both JWT and sb_secret_ keys.
+    """Build Supabase REST headers for PostgREST calls.
 
-    New sb_secret_... keys must NOT be sent as Authorization: Bearer — Supabase
-    tries to parse them as JWTs and rejects the request. Send them on apikey only.
-    Legacy JWT service_role keys are sent on both headers as before.
+    Always send the key on both apikey and Authorization: Bearer.
+    PostgREST uses Authorization: Bearer for RLS bypass regardless of
+    whether the key is a legacy JWT or a new sb_secret_ key.
+    The Supabase gateway accepts new-format keys on Authorization: Bearer
+    for migration compatibility (it does not try JWT-verify them for
+    PostgREST — only Edge Function verify_jwt checks do that).
     """
-    is_new_format = service_key.startswith("sb_secret_") or service_key.startswith("sb_publishable_")
-    headers: dict = {"apikey": service_key}
-    if not is_new_format:
-        headers["Authorization"] = f"Bearer {service_key}"
+    headers: dict = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+    }
     if extra:
         headers.update(extra)
     return headers
