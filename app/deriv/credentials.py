@@ -83,6 +83,10 @@ async def _store_credential(user_id: str, access_token: str, expires_in: int) ->
                 },
                 json=payload,
             )
+        _log.info(
+            "_store_credential: user_id=%s status=%s body=%s",
+            user_id[:8] + "...", response.status_code, response.text[:200],
+        )
         if not response.is_success:
             raise HTTPException(status_code=503, detail="Could not store the encrypted Deriv credential.")
     except HTTPException:
