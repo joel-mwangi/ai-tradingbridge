@@ -104,10 +104,14 @@ async def exchange_oauth_code(
     if not accounts:
         raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
 
+    import logging as _logging
+    _log_routes = _logging.getLogger(__name__)
+    _log_routes.info("exchange_oauth_code: storing credential for user_id=%s accounts=%s", body.user_id[:8], [a["account_id"] for a in accounts])
     await _creds._store_credential(body.user_id, access_token, expires_in)
-    # Write account ownership links so _linked_account_ids() can verify them.
+    _log_routes.info("exchange_oauth_code: credential stored, writing account links")
     account_ids = [a["account_id"] for a in accounts]
     await _creds._store_account_links(body.user_id, account_ids)
+    _log_routes.info("exchange_oauth_code: account links stored, returning success")
     return {"accounts": accounts, "expires_in": expires_in}
 
 

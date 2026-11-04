@@ -64,6 +64,7 @@ def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
 
 async def _store_credential(user_id: str, access_token: str, expires_in: int) -> Credential:
     url, service_key = _credential_store_config()
+    _log.info("_store_credential: attempting write for user_id=%s...", user_id[:8])
     encrypted = _credential_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=expires_in)
@@ -88,6 +89,10 @@ async def _store_credential(user_id: str, access_token: str, expires_in: int) ->
             user_id[:8] + "...", response.status_code, response.text[:200],
         )
         if not response.is_success:
+            _log.error(
+                "_store_credential: FAILED for user_id=%s status=%s body=%s",
+                user_id[:8] + "...", response.status_code, response.text[:500],
+            )
             raise HTTPException(status_code=503, detail="Could not store the encrypted Deriv credential.")
     except HTTPException:
         raise
