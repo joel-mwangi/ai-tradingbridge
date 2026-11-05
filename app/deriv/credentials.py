@@ -44,19 +44,15 @@ def _credential_store_config() -> tuple[str, str]:
 
 
 def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
-    """Build Supabase REST headers for PostgREST calls.
+    """Build Supabase REST headers for both new and legacy API keys.
 
-    Always send the key on both apikey and Authorization: Bearer.
-    PostgREST uses Authorization: Bearer for RLS bypass regardless of
-    whether the key is a legacy JWT or a new sb_secret_ key.
-    The Supabase gateway accepts new-format keys on Authorization: Bearer
-    for migration compatibility (it does not try JWT-verify them for
-    PostgREST — only Edge Function verify_jwt checks do that).
+    New sb_secret_ / sb_publishable_ keys are opaque API keys, not JWTs.
+    They must be sent through apikey only. Legacy anon/service_role keys
+    are JWTs and retain the Authorization: Bearer header for compatibility.
     """
-    headers: dict = {
-        "apikey": service_key,
-        "Authorization": f"Bearer {service_key}",
-    }
+    headers: dict = {"apikey": service_key}
+    if not service_key.startswith(("sb_secret_", "sb_publishable_")):
+        headers["Authorization"] = f"Bearer {service_key}"
     if extra:
         headers.update(extra)
     return headers
@@ -65,8 +61,8 @@ def _supabase_headers(service_key: str, extra: dict | None = None) -> dict:
 async def _store_credential(user_id: str, access_token: str, expires_in: int) -> Credential:
     url, service_key = _credential_store_config()
     _log.info(
-        "_store_credential: attempting write for user_id=%s... supabase_url=%s key_prefix=%s",
-        user_id[:8], url[:40] if url else "MISSING", service_key[:12] if service_key else "MISSING",
+        "_store_credential: attempting write for user_id=%s... supabase_url=%s",
+        user_id[:8], url[:40] if url else "MISSING",
     )
     encrypted = _credential_cipher().encrypt(access_token.encode("utf-8")).decode("ascii")
     now = datetime.now(timezone.utc)

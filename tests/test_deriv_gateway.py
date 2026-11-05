@@ -190,6 +190,20 @@ def test_linked_account_lookup_fails_closed_without_service_role(monkeypatch):
     assert exc.value.status_code == 503
 
 
+def test_supabase_secret_key_is_sent_only_as_apikey():
+    headers = _creds._supabase_headers("sb_secret_test-value")
+    assert headers == {"apikey": "sb_secret_test-value"}
+
+
+def test_legacy_supabase_service_role_key_keeps_bearer_header():
+    legacy_key = "eyJhbGciOiJIUzI1NiJ9.legacy-service-role"
+    headers = _creds._supabase_headers(legacy_key)
+    assert headers == {
+        "apikey": legacy_key,
+        "Authorization": f"Bearer {legacy_key}",
+    }
+
+
 def test_credential_cipher_encrypts_and_round_trips_token(monkeypatch):
     key = Fernet.generate_key().decode("ascii")
     monkeypatch.setenv("TRADEBRIDGE_CREDENTIAL_ENCRYPTION_KEY", key)
