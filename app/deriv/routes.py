@@ -80,9 +80,6 @@ async def exchange_oauth_code(
         raise HTTPException(status_code=502, detail="Deriv OAuth verification failed.")
 
     root = accounts_payload if isinstance(accounts_payload, dict) else {}
-    import logging as _logging
-    _log_routes = _logging.getLogger(__name__)
-    _log_routes.info("exchange_oauth_code: accounts_payload=%s", str(accounts_payload)[:300])
     data = root.get("data")
     data_record = data if isinstance(data, dict) else {}
     candidates = (
@@ -105,15 +102,11 @@ async def exchange_oauth_code(
             "currency": item.get("currency") if isinstance(item.get("currency"), str) else None,
         })
     if not accounts:
-        _log_routes.error("exchange_oauth_code: no accounts parsed from payload=%s", str(accounts_payload)[:300])
         raise HTTPException(status_code=502, detail="Deriv returned no supported accounts.")
 
-    _log_routes.info("exchange_oauth_code: storing credential for user_id=%s accounts=%s", body.user_id[:8], [a["account_id"] for a in accounts])
     await _creds._store_credential(body.user_id, access_token, expires_in)
-    _log_routes.info("exchange_oauth_code: credential stored, writing account links")
     account_ids = [a["account_id"] for a in accounts]
     await _creds._store_account_links(body.user_id, account_ids)
-    _log_routes.info("exchange_oauth_code: account links stored, returning success")
     return {"accounts": accounts, "expires_in": expires_in}
 
 
