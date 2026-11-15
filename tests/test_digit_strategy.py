@@ -547,6 +547,48 @@ class FastPatternTrackerTests(unittest.TestCase):
         self.assertFalse(tracker.on_tick(5))
         self.assertFalse(tracker.armed)
 
+    def test_fast_tracker_neutral_digit_in_stage1_resets_to_stage0(self):
+        """A neutral digit (neither LOW nor HIGH) in stage 1 must reset to stage 0
+        and prevent a HIGH digit fired after it from completing the sequence."""
+        p = self._build_percentages()
+        # digits 0=Red(LOW), 1=Yellow(LOW), 8=Blue(HIGH), 9=Green(HIGH); 2-7 neutral
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        tracker.arm(p)
+        self.assertFalse(tracker.on_tick(0))   # stage 0 → 1 (LOW received)
+        self.assertFalse(tracker.on_tick(5))   # neutral → resets to stage 0
+        self.assertFalse(tracker.on_tick(9))   # stage 0 + HIGH → no completion
+
+
+class ReverseSignalUnderTests(unittest.TestCase):
+    """Cover Group.UNDER confirming zone in evaluate_reverse_signal."""
+
+    def _percentages_with_max_at(self, digit: int, pct: float) -> dict[int, float]:
+        base = 9.0
+        p = {d: base for d in range(10)}
+        p[digit] = pct
+        for d in range(10):
+            if d != digit:
+                p[d] = base - (d * 0.01)
+        return p
+
+    def test_reverse_suggested_when_green_in_confirming_zone_under_barrier5(self):
+        # barrier=5, Group.UNDER: confirming zone = range(0, 5) = {0,1,2,3,4}
+        # digit 0 at 13.0% → Green, in confirming zone → reverse suggested
+        p = self._percentages_with_max_at(0, 13.0)
+        result = evaluate_reverse_signal(p, Group.UNDER, barrier=5)
+        self.assertTrue(result.suggested)
+
+    def test_reverse_not_suggested_under_when_green_above_barrier(self):
+        # digit 7 at 13.0% — in activity zone 5..9, NOT confirming zone 0..4
+        p = self._percentages_with_max_at(7, 13.0)
+        result = evaluate_reverse_signal(p, Group.UNDER, barrier=5)
+        self.assertFalse(result.suggested)
+
+    def test_reverse_not_suggested_under_when_pct_below_12(self):
+        p = self._percentages_with_max_at(0, 11.5)
+        result = evaluate_reverse_signal(p, Group.UNDER, barrier=5)
+        self.assertFalse(result.suggested)
+
 
 class GroupEvaluationThresholdSignalTests(unittest.TestCase):
     def test_group_evaluation_includes_threshold_signal(self):

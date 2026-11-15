@@ -420,7 +420,9 @@ def evaluate_threshold_signal(
             f"No digit in the {contract_type.value.upper()} zone reached {THRESHOLD_ENTRY_PCT}%.")
 
     # Pick the highest-percentage qualifying digit; break ties by lowest digit index
-    best_pct, best_digit = max(qualifying)
+    max_pct = max(pct for pct, _ in qualifying)
+    best_digit = min(d for pct, d in qualifying if pct == max_pct)
+    best_pct = max_pct
 
     # Determine confidence via colour rank
     try:
@@ -788,7 +790,8 @@ class FastPatternTracker:
             self._completed = True
             self.completed_patterns += 1
             return True
-        # A LOW digit in stage 1 resets back to stage 0 (keeps arm active)
-        if digit in self._low_digits:
-            self._stage = 0
+        # Any digit that is not HIGH (including LOW and neutral) resets to stage 0.
+        # This enforces the 2-tick contract: HIGH must immediately follow the LOW
+        # with no intervening digits of any other class.
+        self._stage = 0
         return False
