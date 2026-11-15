@@ -19,6 +19,7 @@ from app.deriv import router
 from app.deriv.security import SYMBOL_PATTERN, _origin_allowed
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.live_feed import LiveStrategyFeed
+from app.strategy.market_scanner import scan_all_contracts
 
 
 @router.websocket("/live/market")
@@ -55,6 +56,8 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                         await upstream.send(json.dumps({"ticks": sym, "subscribe": 1}, separators=(",", ":")))
                     except Exception:
                         pass
+
+                _last_scanner_top: tuple[str, str, int | None] | None = None
 
                 async def client_to_upstream() -> None:
                     while True:
@@ -186,6 +189,47 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                             None,
                                         )
                                         provider_message["digit_frequency"] = tracker.snapshot(symbol, time.time())
+                                        # --- Scanner feed ---
+                                        nonlocal _last_scanner_top
+                                        _scanner_pct_by_symbol: dict[str, dict[int, float]] = {}
+                                        for _sym, _tracker in frequency_by_symbol.items():
+                                            _snap = _tracker.snapshot(_sym, time.time())
+                                            _w1000 = _snap.get("windows", {}).get("1000", {})
+                                            if _w1000.get("sample_size", 0) >= 50:
+                                                raw_pcts = _w1000.get("percentages", {})
+                                                try:
+                                                    _pcts = {int(k): float(v) for k, v in raw_pcts.items() if v is not None}
+                                                    if len(_pcts) == 10:
+                                                        _scanner_pct_by_symbol[_sym] = _pcts
+                                                except (TypeError, ValueError):
+                                                    pass
+                                        if _scanner_pct_by_symbol:
+                                            _scan_results = scan_all_contracts(_scanner_pct_by_symbol)
+                                            _top3 = _scan_results[:3]
+                                            if _top3:
+                                                _top = _top3[0]
+                                                _top_key = (_top.spec.symbol, _top.spec.contract_type, _top.spec.barrier)
+                                                if _top_key != _last_scanner_top:
+                                                    _last_scanner_top = _top_key
+                                                    _scanner_payload = {
+                                                        "type": "scanner_update",
+                                                        "results": [
+                                                            {
+                                                                "symbol": r.spec.symbol,
+                                                                "contract_type": r.spec.contract_type,
+                                                                "barrier": r.spec.barrier,
+                                                                "score": r.score,
+                                                                "confidence": r.confidence,
+                                                                "qualifying_digit": r.qualifying_digit,
+                                                                "qualifying_pct": r.qualifying_pct,
+                                                                "reason": r.reason,
+                                                            }
+                                                            for r in _top3
+                                                        ],
+                                                        "scanned_at": int(time.time()),
+                                                    }
+                                                    await websocket.send_json(_scanner_payload)
+                                        # --- End scanner feed ---
                                         active_strategy = (
                                             strategy_feed.symbol == symbol
                                             and strategy_feed.session is not None

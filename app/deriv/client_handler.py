@@ -252,6 +252,11 @@ async def _handle_strategy_start(
     window_size = control.get("window_size", 1000)
     barrier = control.get("barrier", 5)
     direction = control.get("direction")
+    contract_type = control.get("contract_type", "DIGITOVER")
+
+    _valid_contract_types = {
+        "DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"
+    }
 
     if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_SYMBOL", "message": "Strategy start requires a valid market symbol."}})
@@ -262,7 +267,13 @@ async def _handle_strategy_start(
     if type(barrier) is not int or barrier not in range(10):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
         return
-    if direction not in ("over", "under"):
+    if contract_type not in _valid_contract_types:
+        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
+        return
+
+    # Direction is only required for OVER/UNDER contracts
+    _direction_required = contract_type in ("DIGITOVER", "DIGITUNDER")
+    if _direction_required and direction not in ("over", "under"):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
         return
 
@@ -270,10 +281,27 @@ async def _handle_strategy_start(
         stake = float(control.get("stake", os.getenv("TRADEBRIDGE_STRATEGY_STAKE", "1")))
         duration = control.get("duration", 1)
         currency = control.get("currency", os.getenv("TRADEBRIDGE_STRATEGY_CURRENCY", "USD"))
-        group = Group(direction)
-        candidate_execution = StrategyExecution(
-            symbol, group, barrier, stake=stake, currency=currency, duration=duration,
-        )
+
+        if contract_type in ("DIGITOVER", "DIGITUNDER"):
+            group = Group(direction)
+            candidate_execution = StrategyExecution(
+                symbol, group, barrier, stake=stake, currency=currency, duration=duration,
+            )
+        else:
+            # EVEN/ODD/MATCHES/DIFFERS: use Group.OVER as placeholder, set override
+            # EVEN/ODD: barrier is irrelevant (use 0 as placeholder)
+            # MATCHES/DIFFERS: barrier is the target digit
+            _barrier = barrier if contract_type in ("DIGITMATCH", "DIGITDIFF") else 0
+            candidate_execution = StrategyExecution(
+                symbol,
+                Group.OVER,
+                _barrier,
+                stake=stake,
+                currency=currency,
+                duration=duration,
+                contract_type_override=contract_type,
+            )
+
         if stake <= 0:
             raise ValueError("Strategy stake must be a positive amount.")
         max_stake = _configured_stake_limit(session)
@@ -298,7 +326,7 @@ async def _handle_strategy_start(
             symbol,
             window_size=window_size,
             barrier=barrier,
-            direction=direction,
+            direction=direction if _direction_required else "over",
             initial_frequency=initial_frequency,
         )
     except ValueError as exc:

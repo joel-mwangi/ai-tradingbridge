@@ -4,9 +4,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.strategy.digit_strategy import Group, barrier_valid_for
+
+if TYPE_CHECKING:
+    from app.strategy.market_scanner import ScanResult
 
 
 class ExecutionState(str, Enum):
@@ -38,10 +41,17 @@ class StrategyExecution:
     active_contract_id: str | None = None
     active_contract_sub_id: str | None = None
     signal_accepted: bool = False
+    contract_type_override: str | None = None  # set for EVEN/ODD/MATCHES/DIFFERS
 
     def __post_init__(self) -> None:
-        if not self.symbol or not barrier_valid_for(self.group, self.barrier):
-            raise ValueError("Execution requires a valid symbol, direction, and barrier.")
+        # When an override is set the barrier constraint is not applied
+        # (EVEN/ODD have no barrier, and the override carries the real type).
+        if self.contract_type_override is None:
+            if not self.symbol or not barrier_valid_for(self.group, self.barrier):
+                raise ValueError("Execution requires a valid symbol, direction, and barrier.")
+        else:
+            if not self.symbol:
+                raise ValueError("Execution requires a valid symbol.")
         if not isinstance(self.stake, (int, float)) or isinstance(self.stake, bool):
             raise ValueError("Execution stake must be numeric.")
         if not math.isfinite(float(self.stake)) or float(self.stake) <= 0:
@@ -53,8 +63,46 @@ class StrategyExecution:
         if type(self.max_buys) is not int or self.max_buys != 3:
             raise ValueError("Strategy execution must allow exactly three buys maximum.")
 
+    @classmethod
+    def from_scan_result(
+        cls,
+        scan_result: "ScanResult",
+        stake: float,
+        currency: str,
+        duration: int,
+    ) -> "StrategyExecution":
+        """Factory: create a StrategyExecution from a ScanResult."""
+        ct = scan_result.spec.contract_type
+        # Map OVER/UNDER directly; all others use Group.OVER as a placeholder
+        # and store the real contract type in contract_type_override.
+        if ct == "DIGITOVER":
+            group = Group.OVER
+            barrier = scan_result.spec.barrier if scan_result.spec.barrier is not None else 5
+            override = None
+        elif ct == "DIGITUNDER":
+            group = Group.UNDER
+            barrier = scan_result.spec.barrier if scan_result.spec.barrier is not None else 5
+            override = None
+        else:
+            group = Group.OVER  # placeholder
+            # EVEN/ODD: barrier is irrelevant; use 0 as placeholder
+            # MATCHES/DIFFERS: barrier is the target digit
+            barrier = scan_result.spec.barrier if scan_result.spec.barrier is not None else 0
+            override = ct
+        return cls(
+            symbol=scan_result.spec.symbol,
+            group=group,
+            barrier=barrier,
+            stake=stake,
+            currency=currency,
+            duration=duration,
+            contract_type_override=override,
+        )
+
     @property
     def contract_type(self) -> str:
+        if self.contract_type_override is not None:
+            return self.contract_type_override
         return "DIGITOVER" if self.group is Group.OVER else "DIGITUNDER"
 
     def status(self, reason: str) -> dict[str, Any]:
@@ -178,18 +226,28 @@ class StrategyExecution:
         return self._block(reason)
 
     def _proposal(self, request_id: int) -> dict[str, Any]:
-        return {
+        ct = self.contract_type
+        payload: dict[str, Any] = {
             "proposal": 1,
             "amount": float(self.stake),
             "basis": "stake",
-            "contract_type": self.contract_type,
+            "contract_type": ct,
             "currency": self.currency.upper(),
             "duration": self.duration,
             "duration_unit": "t",
             "underlying_symbol": self.symbol,
-            "barrier": self.barrier,
             "req_id": request_id,
         }
+        # EVEN and ODD: no barrier field
+        if ct in ("DIGITEVEN", "DIGITODD"):
+            pass  # omit barrier intentionally
+        # MATCHES and DIFFERS: barrier is the target digit integer
+        elif ct in ("DIGITMATCH", "DIGITDIFF"):
+            payload["barrier"] = self.barrier
+        # OVER and UNDER: existing logic unchanged
+        else:
+            payload["barrier"] = self.barrier
+        return payload
 
     def _block(self, reason: str) -> None:
         self.state = ExecutionState.BLOCKED
