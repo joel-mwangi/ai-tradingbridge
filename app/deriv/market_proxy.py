@@ -87,7 +87,9 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                     await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
                                     continue
                                 direction = control.get("direction")
-                                if direction not in ("over", "under"):
+                                contract_type_start = control.get("contract_type", "DIGITOVER")
+                                _direction_required = contract_type_start in ("DIGITOVER", "DIGITUNDER")
+                                if _direction_required and direction not in ("over", "under"):
                                     await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})
                                     continue
                                 already_subscribed = symbol in subscribed_symbols
@@ -98,7 +100,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                         symbol,
                                         window_size=window_size,
                                         barrier=barrier,
-                                        direction=direction,
+                                        direction=direction if _direction_required else "over",
                                         initial_frequency=initial_frequency,
                                     )
                                 except ValueError as exc:
@@ -204,7 +206,10 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                                 except (TypeError, ValueError):
                                                     pass
                                         if _scanner_pct_by_symbol:
-                                            _scan_results = scan_all_contracts(_scanner_pct_by_symbol)
+                                            try:
+                                                _scan_results = scan_all_contracts(_scanner_pct_by_symbol)
+                                            except Exception:
+                                                _scan_results = []
                                             _top3 = _scan_results[:3]
                                             if _top3:
                                                 _top = _top3[0]

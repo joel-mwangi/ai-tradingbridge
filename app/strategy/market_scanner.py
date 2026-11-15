@@ -49,10 +49,23 @@ class ScanResult:
 
 
 def _valid_pct_map(percentages: Mapping[int, float]) -> bool:
-    return (
-        isinstance(percentages, Mapping)
-        and all(d in percentages for d in range(10))
-    )
+    """Accept only mappings where all ten digits map to finite floats in [0, 100]."""
+    if not isinstance(percentages, Mapping):
+        return False
+    import math as _math
+    for d in range(10):
+        if d not in percentages:
+            return False
+        v = percentages[d]
+        if isinstance(v, bool):
+            return False
+        try:
+            fv = float(v)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not _math.isfinite(fv) or fv < 0.0 or fv > 100.0:
+            return False
+    return True
 
 
 def score_contract(
@@ -140,42 +153,22 @@ def score_contract(
             reason_parts.append(color_reason)
 
     elif contract_type == "DIGITEVEN":
-        # Check if any even digit is ≥12%
-        even_digits = [0, 2, 4, 6, 8]
-        qualifying_pairs = [
-            (float(percentages[d]), d)
-            for d in even_digits
-            if float(percentages[d]) >= _THRESHOLD_PCT
-        ]
-        if qualifying_pairs:
-            best_pct, best_digit = max(qualifying_pairs)
-            threshold_met = True
-            qualifying_digit = best_digit
-            qualifying_pct = best_pct
-            # Confidence via evaluate_threshold_signal (EVEN uses ContractType.EVEN)
-            sig = evaluate_threshold_signal(percentages, ContractType.EVEN)
-            confidence = sig.confidence
-            reason_parts.append(sig.reason)
-        else:
-            reason_parts.append(f"No even digit reached {_THRESHOLD_PCT}%.")
+        # Delegate entirely to evaluate_threshold_signal so qualifying_digit,
+        # qualifying_pct, confidence, and reason all describe the same digit.
+        sig = evaluate_threshold_signal(percentages, ContractType.EVEN)
+        threshold_met = sig.triggered
+        qualifying_digit = sig.qualifying_digit
+        qualifying_pct = sig.qualifying_pct
+        confidence = sig.confidence
+        reason_parts.append(sig.reason)
 
     elif contract_type == "DIGITODD":
-        odd_digits = [1, 3, 5, 7, 9]
-        qualifying_pairs = [
-            (float(percentages[d]), d)
-            for d in odd_digits
-            if float(percentages[d]) >= _THRESHOLD_PCT
-        ]
-        if qualifying_pairs:
-            best_pct, best_digit = max(qualifying_pairs)
-            threshold_met = True
-            qualifying_digit = best_digit
-            qualifying_pct = best_pct
-            sig = evaluate_threshold_signal(percentages, ContractType.ODD)
-            confidence = sig.confidence
-            reason_parts.append(sig.reason)
-        else:
-            reason_parts.append(f"No odd digit reached {_THRESHOLD_PCT}%.")
+        sig = evaluate_threshold_signal(percentages, ContractType.ODD)
+        threshold_met = sig.triggered
+        qualifying_digit = sig.qualifying_digit
+        qualifying_pct = sig.qualifying_pct
+        confidence = sig.confidence
+        reason_parts.append(sig.reason)
 
     elif contract_type == "DIGITMATCH":
         if barrier is None:
