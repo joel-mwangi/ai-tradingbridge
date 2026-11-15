@@ -111,6 +111,7 @@ class StrategyExecution:
             "state": self.state.value,
             "reason": reason,
             "symbol": self.symbol,
+            "contract_type": self.contract_type,
             "direction": self.group.value,
             "barrier": self.barrier,
             "buy_count": self.buy_count,

@@ -29,6 +29,9 @@ class ContractSpec:
 
     symbol: str
     contract_type: str  # "DIGITOVER" | "DIGITUNDER" | "DIGITEVEN" | "DIGITODD" | "DIGITMATCH" | "DIGITDIFF"
+    # Note: "DIGITDIFF" is confirmed as Deriv's wire-format name for the
+    # "Digit Differs" contract — it has been accepted by the gateway's proposal
+    # validator (client_handler._validate_proposal) since the initial build.
     barrier: int | None  # None for EVEN / ODD
     direction: str  # "over" | "under" | "even" | "odd" | "matches" | "differs"
 

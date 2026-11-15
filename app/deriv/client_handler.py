@@ -264,11 +264,20 @@ async def _handle_strategy_start(
     if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
         return
-    if type(barrier) is not int or barrier not in range(10):
-        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
-        return
     if contract_type not in _valid_contract_types:
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
+        return
+
+    # Barrier validation is contract-type-specific.
+    # EVEN/ODD: reject any barrier field — matching _validate_proposal behaviour.
+    # OVER/UNDER/MATCHES/DIFFERS: require a valid integer digit 0–9.
+    if contract_type in ("DIGITEVEN", "DIGITODD"):
+        if "barrier" in control:
+            await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
+            return
+        barrier = 0  # internal placeholder, never sent to Deriv
+    elif type(barrier) is not int or barrier not in range(10):
+        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
         return
 
     # Direction is only required for OVER/UNDER contracts

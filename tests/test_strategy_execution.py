@@ -52,3 +52,60 @@ def test_execution_stops_after_three_buys_even_when_profitable():
     assert result is None
     assert execution.state is ExecutionState.COMPLETED
     assert execution.buy_count == 3
+
+
+# ── New contract-type tests ────────────────────────────────────────────────
+
+def test_status_includes_contract_type_field():
+    """status() must include contract_type for all execution objects."""
+    execution = StrategyExecution("1HZ100V", Group.OVER, barrier=4)
+    execution.begin_signal(1)
+    s = execution.status("test")
+    assert s["contract_type"] == "DIGITOVER"
+
+
+def test_from_scan_result_even_omits_barrier_in_proposal():
+    """DIGITEVEN proposal must not include a barrier field."""
+    from app.strategy.market_scanner import ScanResult, ContractSpec
+    spec = ContractSpec("1HZ100V", "DIGITEVEN", None, "even")
+    scan = ScanResult(spec, 80.0, 4, 12.5, "HIGH", True, True, "Digit 4 at 12.5%", 0.0)
+    execution = StrategyExecution.from_scan_result(scan, stake=1.0, currency="USD", duration=1)
+    assert execution.contract_type == "DIGITEVEN"
+    proposal = execution._proposal(1)
+    assert proposal["contract_type"] == "DIGITEVEN"
+    assert "barrier" not in proposal
+
+
+def test_from_scan_result_digitdiff_includes_barrier_in_proposal():
+    """DIGITDIFF proposal must include the target digit as barrier."""
+    from app.strategy.market_scanner import ScanResult, ContractSpec
+    spec = ContractSpec("R_100", "DIGITDIFF", 3, "differs")
+    scan = ScanResult(spec, 75.0, 3, 6.5, "MEDIUM", True, False, "Digit 3 at 6.5%", 0.0)
+    execution = StrategyExecution.from_scan_result(scan, stake=1.0, currency="USD", duration=1)
+    assert execution.contract_type == "DIGITDIFF"
+    proposal = execution._proposal(1)
+    assert proposal["contract_type"] == "DIGITDIFF"
+    assert proposal["barrier"] == 3
+
+
+def test_from_scan_result_status_shows_correct_contract_type():
+    """status() on a DIGITMATCH execution must report contract_type=DIGITMATCH."""
+    from app.strategy.market_scanner import ScanResult, ContractSpec
+    spec = ContractSpec("1HZ75V", "DIGITMATCH", 7, "matches")
+    scan = ScanResult(spec, 85.0, 7, 14.2, "HIGH", True, True, "Digit 7 at 14.2%", 0.0)
+    execution = StrategyExecution.from_scan_result(scan, stake=1.0, currency="USD", duration=1)
+    execution.begin_signal(1)
+    s = execution.status("running")
+    assert s["contract_type"] == "DIGITMATCH"
+    assert s["barrier"] == 7
+
+
+def test_from_scan_result_digitodd_omits_barrier_in_proposal():
+    """DIGITODD proposal must not include a barrier field."""
+    from app.strategy.market_scanner import ScanResult, ContractSpec
+    spec = ContractSpec("1HZ50V", "DIGITODD", None, "odd")
+    scan = ScanResult(spec, 72.0, 5, 12.1, "HIGH", True, False, "Digit 5 at 12.1%", 0.0)
+    execution = StrategyExecution.from_scan_result(scan, stake=1.0, currency="USD", duration=1)
+    proposal = execution._proposal(1)
+    assert proposal["contract_type"] == "DIGITODD"
+    assert "barrier" not in proposal
