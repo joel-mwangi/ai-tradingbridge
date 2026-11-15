@@ -18,6 +18,14 @@ from app.strategy.digit_strategy import (
     rank_bar_colors,
     validate_initial_observation_window,
 )
+from app.strategy.digit_strategy import (
+    ContractType,
+    FastPatternTracker,
+    ReverseSignal,
+    ThresholdSignal,
+    evaluate_reverse_signal,
+    evaluate_threshold_signal,
+)
 
 
 def over3_percentages():
@@ -388,6 +396,165 @@ class BarrierGeneralizationTests(unittest.TestCase):
         self.assertTrue(strategy_profile_supported(Group.UNDER, 5))
         self.assertFalse(strategy_profile_supported(Group.OVER, 7))
         self.assertFalse(strategy_profile_supported(Group.UNDER, 2))
+
+
+class ThresholdSignalTests(unittest.TestCase):
+    def _base_percentages(self):
+        """10 digits all at 10.0% (uniform)."""
+        return {d: 10.0 for d in range(10)}
+
+    def test_threshold_triggered_for_over_when_lower_zone_digit_reaches_12pct(self):
+        p = self._base_percentages()
+        # digit 1 is in 0..4 (Over 4 zone); elevate it above threshold
+        p[1] = 12.0
+        # keep all others clearly below 12%
+        for d in range(10):
+            if d != 1:
+                p[d] = 10.4
+        result = evaluate_threshold_signal(p, ContractType.OVER, barrier=4)
+        self.assertTrue(result.triggered)
+
+    def test_threshold_high_confidence_when_qualifying_digit_is_green(self):
+        p = self._base_percentages()
+        # digit 1 is both ≥12% AND the unique maximum (green)
+        for d in range(10):
+            p[d] = 9.0
+        p[1] = 14.0   # unique max → green
+        result = evaluate_threshold_signal(p, ContractType.OVER, barrier=4)
+        self.assertTrue(result.triggered)
+        self.assertEqual(result.confidence, "HIGH")
+
+    def test_threshold_medium_confidence_when_qualifying_digit_not_green_or_blue(self):
+        p = self._base_percentages()
+        # digit 1 ≥12% but NOT the max or second-max
+        p[0] = 9.0
+        p[1] = 12.5   # qualifies (≥12%) but not max/second-max
+        p[2] = 9.0
+        p[3] = 9.0
+        p[4] = 9.0
+        p[5] = 15.0   # green (max)
+        p[6] = 14.0   # blue (second-max)
+        p[7] = 9.5
+        p[8] = 9.6
+        p[9] = 9.7
+        result = evaluate_threshold_signal(p, ContractType.OVER, barrier=4)
+        self.assertTrue(result.triggered)
+        self.assertEqual(result.confidence, "MEDIUM")
+
+    def test_threshold_not_triggered_when_no_digit_reaches_12pct(self):
+        p = {d: 10.0 for d in range(10)}
+        result = evaluate_threshold_signal(p, ContractType.OVER, barrier=4)
+        self.assertFalse(result.triggered)
+        self.assertEqual(result.confidence, "NONE")
+
+    def test_threshold_triggered_for_under_when_upper_zone_digit_reaches_12pct(self):
+        # ContractType.UNDER barrier=6 → scan digits 6..9
+        p = {d: 9.0 for d in range(10)}
+        p[7] = 12.5   # in 6..9 zone
+        result = evaluate_threshold_signal(p, ContractType.UNDER, barrier=6)
+        self.assertTrue(result.triggered)
+
+    def test_threshold_triggered_for_even_contract(self):
+        p = {d: 9.0 for d in range(10)}
+        p[4] = 12.1   # even digit ≥ 12%
+        result = evaluate_threshold_signal(p, ContractType.EVEN)
+        self.assertTrue(result.triggered)
+
+    def test_threshold_triggered_for_odd_contract(self):
+        p = {d: 9.0 for d in range(10)}
+        p[5] = 12.3   # odd digit ≥ 12%
+        result = evaluate_threshold_signal(p, ContractType.ODD)
+        self.assertTrue(result.triggered)
+
+
+class ReverseSignalTests(unittest.TestCase):
+    def _percentages_with_max_at(self, digit: int, pct: float) -> dict[int, float]:
+        """Build a percentages map where the given digit is the unique maximum."""
+        base = 9.0
+        p = {d: base for d in range(10)}
+        p[digit] = pct
+        # make second-distinct level clear
+        for d in range(10):
+            if d != digit:
+                p[d] = base - (d * 0.01)   # all different, all < pct
+        return p
+
+    def test_reverse_suggested_when_green_in_confirming_zone_over_12pct(self):
+        # barrier=4, Group.OVER: confirming zone is 5..9; digit 9 at 13.0%
+        p = self._percentages_with_max_at(9, 13.0)
+        result = evaluate_reverse_signal(p, Group.OVER, barrier=4)
+        self.assertTrue(result.suggested)
+
+    def test_reverse_not_suggested_when_green_below_12pct(self):
+        p = self._percentages_with_max_at(9, 11.0)
+        result = evaluate_reverse_signal(p, Group.OVER, barrier=4)
+        self.assertFalse(result.suggested)
+
+    def test_reverse_not_suggested_when_green_in_low_zone(self):
+        # digit 2 at 13.0% — in 0..4 (activity zone for Over 4), NOT confirming zone 5..9
+        p = self._percentages_with_max_at(2, 13.0)
+        result = evaluate_reverse_signal(p, Group.OVER, barrier=4)
+        self.assertFalse(result.suggested)
+
+
+class FastPatternTrackerTests(unittest.TestCase):
+    def _build_percentages(self):
+        """
+        Build percentages with a clear RED digit (0) and clear GREEN digit (9).
+        """
+        p = {d: 10.0 for d in range(10)}
+        p[0] = 7.0    # unique minimum → Red
+        p[1] = 8.0    # second-lowest → Yellow
+        p[8] = 12.0   # second-highest → Blue
+        p[9] = 14.0   # unique maximum → Green
+        return p
+
+    def test_fast_tracker_completes_on_low_then_high(self):
+        p = self._build_percentages()
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        tracker.arm(p)
+        # Red digit (0) is LOW; Green digit (9) is HIGH
+        self.assertFalse(tracker.on_tick(0))   # stage 0 → 1
+        self.assertTrue(tracker.on_tick(9))    # stage 1 + HIGH → complete
+
+    def test_fast_tracker_does_not_complete_without_low_digit_first(self):
+        p = self._build_percentages()
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        tracker.arm(p)
+        # Start directly with high digit; should not complete
+        self.assertFalse(tracker.on_tick(9))
+        self.assertEqual(tracker.completed_patterns, 0)
+
+    def test_fast_tracker_requires_low_before_high(self):
+        p = self._build_percentages()
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        tracker.arm(p)
+        self.assertFalse(tracker.on_tick(9))   # HIGH first → stays in stage 0
+        self.assertFalse(tracker.on_tick(0))   # LOW → stage 1
+        self.assertTrue(tracker.on_tick(9))    # HIGH → complete
+
+    def test_fast_tracker_reset_prevents_completion(self):
+        p = self._build_percentages()
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        tracker.arm(p)
+        tracker.on_tick(0)   # stage 0 → 1
+        tracker.reset()
+        self.assertFalse(tracker.on_tick(9))   # not armed → False
+
+    def test_fast_tracker_not_armed_before_arm_call(self):
+        tracker = FastPatternTracker(Group.OVER, barrier=4)
+        # Should return False and not raise
+        self.assertFalse(tracker.on_tick(5))
+        self.assertFalse(tracker.armed)
+
+
+class GroupEvaluationThresholdSignalTests(unittest.TestCase):
+    def test_group_evaluation_includes_threshold_signal(self):
+        from app.strategy.digit_strategy import evaluate_group, ThresholdSignal
+        p = over3_percentages()
+        result = evaluate_group(p, [p, p], Group.OVER, barrier=3)
+        self.assertTrue(hasattr(result, "threshold_signal"))
+        self.assertIsInstance(result.threshold_signal, ThresholdSignal)
 
 
 if __name__ == "__main__":
