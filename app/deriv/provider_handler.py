@@ -302,6 +302,52 @@ async def handle_provider_messages(
                                         await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
                                         await websocket.send_json(session.strategy_execution.status("Confirmed signal received; requesting the first automatic buy."))
 
+                        # --- Signal Path B: EVEN/ODD consecutive parity sequence ---
+                        # Runs regardless of strategy_feed state so EVEN/ODD executions
+                        # don't require the M15/M5/M1 qualification pipeline.
+                        if (
+                            session.strategy_execution is not None
+                            and session.strategy_execution.state is ExecutionState.IDLE
+                            and session.strategy_execution.contract_type in ("DIGITEVEN", "DIGITODD")
+                        ):
+                            from app.market_analysis import extract_last_digit
+                            last_digit = extract_last_digit(tick.get("quote"), session.strategy_pip_size)
+                            if last_digit is not None:
+                                parity_signal = session.update_parity_streak(last_digit)
+                                if (
+                                    parity_signal is not None
+                                    and parity_signal == session.strategy_execution.contract_type
+                                ):
+                                    proposal_request_id = session.next_strategy_request_id()
+                                    proposal_message = session.strategy_execution.begin_signal(proposal_request_id)
+                                    if proposal_message is not None:
+                                        session.pending_strategy_proposals.add(proposal_request_id)
+                                        session.register_strategy_deadline(proposal_request_id, "proposal")
+                                        session.strategy_feed.lock_execution()
+                                        await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
+                                        await websocket.send_json(session.strategy_execution.status(
+                                            f"Parity signal: 3 consecutive opposite ticks → {parity_signal} entry."))
+
+                        # --- Signal Path A: Scanner direct execute (threshold trigger) ---
+                        # When scanner_direct_execute is set, fire immediately on
+                        # the very next tick — no sequence wait needed.
+                        if (
+                            session.scanner_direct_execute
+                            and session.strategy_execution is not None
+                            and session.strategy_execution.state is ExecutionState.IDLE
+                            and session.strategy_execution.contract_type in ("DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF")
+                        ):
+                            session.scanner_direct_execute = False
+                            proposal_request_id = session.next_strategy_request_id()
+                            proposal_message = session.strategy_execution.begin_signal(proposal_request_id)
+                            if proposal_message is not None:
+                                session.pending_strategy_proposals.add(proposal_request_id)
+                                session.register_strategy_deadline(proposal_request_id, "proposal")
+                                session.strategy_feed.lock_execution()
+                                await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
+                                await websocket.send_json(session.strategy_execution.status(
+                                    "Scanner threshold signal: executing immediately on next tick."))
+
         # --- Manual proposal caching ---
         if isinstance(request_id, int) and request_id in session.pending_proposal_requests:
             if provider_message.get("msg_type") == "proposal":

@@ -1,0 +1,1 @@
+{"verdict": "APPROVED", "note": "All 3 findings resolved: retryCount added to listener effect deps; cooldown persisted to sessionStorage; all 6 contract types routed through startStrategy with contractType field. tsc clean, 17 tests pass."}

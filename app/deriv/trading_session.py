@@ -26,6 +26,10 @@ import app.deriv.credentials as _creds
 _log = logging.getLogger(__name__)
 
 
+EVEN_DIGITS: frozenset[int] = frozenset({0, 2, 4, 6, 8})
+ODD_DIGITS: frozenset[int] = frozenset({1, 3, 5, 7, 9})
+
+
 class TradingProxySession:
     """Holds the per-connection strategy/contract state for the trading proxy."""
 
@@ -74,6 +78,13 @@ class TradingProxySession:
         # Deadline (monotonic) after which we fall back to profit_table if not settled.
         self.settlement_fallback_deadline: float | None = None
         self.settlement_fallback_seconds: float = 3.0
+        # EVEN/ODD parity consecutive sequence tracker.
+        # Stores the parity ("even"/"odd") of the last N completed ticks.
+        self.parity_streak: list[str] = []
+        self.parity_streak_max: int = 3
+        # When True, the next begin_signal call on a EVEN/ODD/MATCHES/DIFFERS
+        # execution fires immediately without waiting for the M15/M5/M1 pipeline.
+        self.scanner_direct_execute: bool = False
 
     def next_strategy_request_id(self) -> int:
         request_id = secrets.randbelow(1_000_000) + 9_000_000
@@ -122,6 +133,40 @@ class TradingProxySession:
             self.daily_realized_profit = None
             self.daily_profit_checked_at = None
             self.daily_profit_request_id = None
+
+    def update_parity_streak(self, last_digit: int) -> str | None:
+        """Record a tick's parity and return a signal if 3 consecutive same-parity ticks occurred.
+
+        Signal path B — consecutive sequence:
+        Three consecutive ODD digits → fire EVEN (reverse to opposite parity)
+        Three consecutive EVEN digits → fire ODD
+
+        Returns "DIGITEVEN" or "DIGITODD" when signal triggers, else None.
+        """
+        if last_digit in EVEN_DIGITS:
+            parity = "even"
+        elif last_digit in ODD_DIGITS:
+            parity = "odd"
+        else:
+            return None
+
+        self.parity_streak.append(parity)
+        # Keep only the last N ticks
+        if len(self.parity_streak) > self.parity_streak_max:
+            self.parity_streak = self.parity_streak[-self.parity_streak_max:]
+
+        if len(self.parity_streak) < self.parity_streak_max:
+            return None
+
+        # Check all same parity → fire the reverse
+        if all(p == "odd" for p in self.parity_streak):
+            self.parity_streak.clear()
+            return "DIGITEVEN"
+        if all(p == "even" for p in self.parity_streak):
+            self.parity_streak.clear()
+            return "DIGITODD"
+        return None
+
 
     async def real_risk_monitor(self, upstream: Any) -> None:
         """Refresh server-trusted daily P/L; Real orders fail closed if it goes stale."""
@@ -185,6 +230,8 @@ class TradingProxySession:
         self.strategy_window_size = 1000
         self.pending_settlement_checks.clear()
         self.settlement_fallback_deadline = None
+        self.parity_streak.clear()
+        self.scanner_direct_execute = False
 
     async def strategy_response_timeout_monitor(self, websocket: WebSocket, upstream: Any) -> None:
         while True:
