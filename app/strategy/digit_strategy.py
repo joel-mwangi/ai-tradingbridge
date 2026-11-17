@@ -80,8 +80,9 @@ class EvenOddSetup:
 def evaluate_even_odd_setup(
     percentages: Mapping[int, float],
     target: ContractType,
+    previous_parity_power: float | None = None,
 ) -> EvenOddSetup:
-    """Apply the independent fixed-stake EVEN/ODD confluence filter."""
+    """Apply the Maziwa parity-power and rank-alignment filter."""
     if target not in (ContractType.EVEN, ContractType.ODD):
         return EvenOddSetup(False, target, 0.0, "EVEN/ODD setup requires EVEN or ODD.")
     if not _valid_percentage_map(percentages):
@@ -93,19 +94,17 @@ def evaluate_even_odd_setup(
     required_power = 58.0 if target is ContractType.EVEN else 70.0
     ranked = sorted(range(10), key=lambda digit: (-float(percentages[digit]), digit))
     green, blue = ranked[0], ranked[1]
-    red, yellow = ranked[-1], ranked[-2]
+    yellow, red = ranked[-2], ranked[-1]
 
-    if parity_power < required_power:
-        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power {parity_power:.1f}% is below {required_power:.1f}%.")
+    if parity_power < 55.0:
+        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power {parity_power:.1f}% is below 55.0%.")
+    if previous_parity_power is not None and parity_power <= previous_parity_power:
+        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power is not rising ({parity_power:.1f}% vs {previous_parity_power:.1f}%).")
     if green not in target_digits or blue not in target_digits:
         return EvenOddSetup(False, target, parity_power, "Green and Blue must belong to the target parity.")
-    if float(percentages[green]) < 11.5 or float(percentages[blue]) < 11.5:
-        return EvenOddSetup(False, target, parity_power, "Green and Blue must each be at least 11.5%.")
     if red not in opposing_digits or yellow not in opposing_digits:
         return EvenOddSetup(False, target, parity_power, "Red and Yellow must belong to the opposing parity.")
-    if float(percentages[red]) > 9.0 or float(percentages[yellow]) > 9.0:
-        return EvenOddSetup(False, target, parity_power, "Red and Yellow must each be at most 9.0%.")
-    return EvenOddSetup(True, target, parity_power, f"{target.value.upper()} setup armed with {parity_power:.1f}% parity power.")
+    return EvenOddSetup(True, target, parity_power, f"{target.value.upper()} setup armed with rising {parity_power:.1f}% parity power.")
 
 
 @dataclass(frozen=True)

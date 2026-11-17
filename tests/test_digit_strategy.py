@@ -27,6 +27,7 @@ from app.strategy.digit_strategy import (
     evaluate_threshold_signal,
     evaluate_even_odd_setup,
 )
+from app.deriv.trading_session import TradingProxySession
 
 
 def over3_percentages():
@@ -44,11 +45,40 @@ class EvenOddSetupTests(unittest.TestCase):
         self.assertTrue(result.armed)
         self.assertEqual(result.parity_power, 58.0)
 
-    def test_odd_setup_uses_seventy_percent_floor(self):
+    def test_odd_setup_uses_same_fifty_five_percent_floor(self):
         percentages = {1: 14.0, 3: 14.0, 5: 14.0, 7: 14.0, 9: 14.0,
                        0: 6.0, 2: 6.0, 4: 6.0, 6: 6.0, 8: 6.0}
         result = evaluate_even_odd_setup(percentages, ContractType.ODD)
         self.assertTrue(result.armed)
+
+    def test_maziwa_setup_requires_rising_power_when_history_exists(self):
+        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+                       1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
+        self.assertTrue(evaluate_even_odd_setup(percentages, ContractType.EVEN).armed)
+        self.assertFalse(
+            evaluate_even_odd_setup(percentages, ContractType.EVEN, 56.0).armed
+        )
+
+    def test_maziwa_state_enters_on_first_target_tick_after_three_opposing(self):
+        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+                       1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
+        session = TradingProxySession(allowed_client_requests=set())
+        self.assertIsNone(session.update_even_odd_strategy(1, percentages, "DIGITEVEN"))
+        self.assertIsNone(session.update_even_odd_strategy(3, percentages, "DIGITEVEN"))
+        self.assertIsNone(session.update_even_odd_strategy(5, percentages, "DIGITEVEN"))
+        self.assertEqual(
+            session.update_even_odd_strategy(2, percentages, "DIGITEVEN"),
+            "DIGITEVEN",
+        )
+
+    def test_maziwa_cooldown_blocks_for_120_ticks(self):
+        session = TradingProxySession(allowed_client_requests=set())
+        session.start_even_odd_cooldown()
+        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+                       1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
+        for _ in range(120):
+            self.assertIsNone(session.update_even_odd_strategy(1, percentages, "DIGITEVEN"))
+        self.assertEqual(session.even_odd_cooldown_ticks, 0)
 
 
 def under6_percentages():

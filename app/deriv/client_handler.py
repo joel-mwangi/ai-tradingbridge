@@ -273,6 +273,8 @@ async def _handle_strategy_start(
     if contract_type not in _valid_contract_types:
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
         return
+    if contract_type in ("DIGITEVEN", "DIGITODD"):
+        window_size = 100
     if trigger_source not in ("manual", "scanner"):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_TRIGGER_SOURCE", "message": "Strategy trigger_source must be manual or scanner."}})
         return
@@ -357,6 +359,8 @@ async def _handle_strategy_start(
     session.even_odd_trigger_digits.clear()
     session.even_odd_confirmation_deadline = None
     session.even_odd_recent_digits.clear()
+    session.even_odd_power_history.clear()
+    session.even_odd_cooldown_ticks = 0
     session.scanner_direct_execute = (
         trigger_source == "scanner"
         and contract_type in ("DIGITMATCH", "DIGITDIFF")

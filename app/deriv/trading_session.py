@@ -86,6 +86,8 @@ class TradingProxySession:
         self.even_odd_trigger_digits: list[int] = []
         self.even_odd_confirmation_deadline: int | None = None
         self.even_odd_recent_digits: list[int] = []
+        self.even_odd_power_history: list[float] = []
+        self.even_odd_cooldown_ticks: int = 0
         # When True, the next begin_signal call on a EVEN/ODD/MATCHES/DIFFERS
         # execution fires immediately without waiting for the M15/M5/M1 pipeline.
         self.scanner_direct_execute: bool = False
@@ -177,48 +179,43 @@ class TradingProxySession:
         percentages: dict[int, float],
         target_contract: str,
     ) -> str | None:
-        """Advance the filtered opposing streak plus confirmation state."""
+        """Advance the Maziwa rolling-window state machine."""
         target = ContractType.EVEN if target_contract == "DIGITEVEN" else ContractType.ODD
-        self.even_odd_recent_digits.append(last_digit)
-        self.even_odd_recent_digits = self.even_odd_recent_digits[-10:]
-        parity_window = self.even_odd_recent_digits[-8:]
-        alternating = (
-            len(parity_window) >= 6
-            and all(
-                (parity_window[index] % 2) != (parity_window[index - 1] % 2)
-                for index in range(1, len(parity_window))
-            )
+        if self.even_odd_cooldown_ticks > 0:
+            self.even_odd_cooldown_ticks -= 1
+            return None
+
+        target_digits = EVEN_DIGITS if target is ContractType.EVEN else ODD_DIGITS
+        parity_power = sum(float(percentages[digit]) for digit in target_digits)
+        self.even_odd_power_history.append(parity_power)
+        self.even_odd_power_history = self.even_odd_power_history[-6:]
+        previous_power = (
+            self.even_odd_power_history[0]
+            if len(self.even_odd_power_history) >= 6
+            else None
         )
-        setup = evaluate_even_odd_setup(percentages, target)
-        if not setup.armed or alternating:
+        setup = evaluate_even_odd_setup(percentages, target, previous_power)
+        if not setup.armed:
             self.even_odd_trigger_digits.clear()
             self.even_odd_confirmation_deadline = None
             return None
 
-        target_is_even = last_digit % 2 == 0
-        target_parity = target is ContractType.EVEN
-        if self.even_odd_trigger_digits:
-            self.even_odd_confirmation_deadline = max(
-                0, (self.even_odd_confirmation_deadline or 0) - 1
-            )
-            if target_is_even == target_parity:
-                self.even_odd_trigger_digits.clear()
-                self.even_odd_confirmation_deadline = None
-                return target_contract
-            if self.even_odd_confirmation_deadline == 0:
-                self.even_odd_trigger_digits.clear()
-                self.even_odd_confirmation_deadline = None
-
-        if target_is_even != target_parity:
+        if last_digit not in target_digits:
             self.even_odd_trigger_digits.append(last_digit)
-            if len(self.even_odd_trigger_digits) > 4:
-                self.even_odd_trigger_digits = self.even_odd_trigger_digits[-4:]
-            if len(self.even_odd_trigger_digits) >= 3:
-                self.even_odd_confirmation_deadline = 3
-        else:
+            self.even_odd_trigger_digits = self.even_odd_trigger_digits[-4:]
+            self.even_odd_confirmation_deadline = len(self.even_odd_trigger_digits)
+            return None
+
+        if len(self.even_odd_trigger_digits) >= 3:
             self.even_odd_trigger_digits.clear()
             self.even_odd_confirmation_deadline = None
+            return target_contract
+        self.even_odd_trigger_digits.clear()
+        self.even_odd_confirmation_deadline = None
         return None
+
+    def start_even_odd_cooldown(self) -> None:
+        self.even_odd_cooldown_ticks = 120
 
 
     async def real_risk_monitor(self, upstream: Any) -> None:

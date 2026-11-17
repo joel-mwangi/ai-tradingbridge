@@ -78,18 +78,17 @@ operational monitoring, and Real execution tests are independently reviewed.
 
 ### Automatic EVEN/ODD execution
 
-`DIGITEVEN` and `DIGITODD` use an independent filtered parity strategy, not the
-OVER/UNDER Red/Green qualification pipeline. The selected side must first satisfy:
+`DIGITEVEN` and `DIGITODD` use the independent Maziwa/Dollar Printer state machine,
+not the OVER/UNDER Red/Green qualification pipeline. EVEN/ODD always uses a rolling
+100-tick window. The selected side must have at least 55% parity power and be rising
+compared with five ticks earlier. Rank 1 (Green) and rank 2 (Blue) must be on the
+selected parity, while ranks 9 (Yellow) and 10 (Red) must be on the opposing parity.
 
-- Overall parity power of at least 58% for EVEN or 70% for ODD.
-- Green and Blue are on the selected parity and each are at least 11.5%.
-- Red and Yellow are on the opposing parity and each are at most 9.0%.
-- The recent sequence is not an alternating chop pattern.
-
-After the filter is armed, three or four opposing-parity ticks must occur, followed
-by a selected-parity confirmation within three ticks. The setup then starts the
-existing fixed-stake sequence of up to three 1-tick buys. Red Reverse is deliberately
-excluded. EVEN/ODD proposal and start messages must omit `barrier` entirely.
+After the filter is armed, at least three consecutive opposing-parity ticks must occur,
+followed immediately by the first selected-parity confirmation tick. The setup then
+starts the existing fixed-stake sequence of up to three 1-tick buys. Completion or two
+losses starts a 120-tick cooldown. Red Reverse is deliberately excluded. EVEN/ODD
+proposal and start messages must omit `barrier` entirely.
 
 Real accounts are a required supported mode for API-supported products, not a promise that every
 Deriv product is available through this gateway. Multipliers use a separate `/deriv/multipliers/ws`

@@ -167,6 +167,8 @@ async def handle_provider_messages(
                     elif session.strategy_execution.state is ExecutionState.COMPLETED:
                         await websocket.send_json(session.strategy_execution.status("Three sequential buys completed; strategy execution stopped."))
                     if session.strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
+                        if session.strategy_execution.contract_type in ("DIGITEVEN", "DIGITODD"):
+                            session.start_even_odd_cooldown()
                         await websocket.send_json(session.strategy_feed.unlock_execution())
                         await websocket.send_json(session.strategy_feed.stop())
                         session.strategy_execution.reset_for_next_signal()
@@ -226,6 +228,8 @@ async def handle_provider_messages(
                                 "Three sequential buys completed; strategy execution stopped."
                             ))
                         if session.strategy_execution.state in (ExecutionState.STOPPED, ExecutionState.COMPLETED):
+                            if session.strategy_execution.contract_type in ("DIGITEVEN", "DIGITODD"):
+                                session.start_even_odd_cooldown()
                             await websocket.send_json(session.strategy_feed.unlock_execution())
                             await websocket.send_json(session.strategy_feed.stop())
                             session.strategy_execution.reset_for_next_signal()
