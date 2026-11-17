@@ -14,7 +14,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from fastapi import WebSocket
 
@@ -178,23 +178,29 @@ class TradingProxySession:
         last_digit: int,
         percentages: dict[int, float],
         target_contract: str,
+        sample_size: int | None = None,
+        recent_digits: Sequence[int] | None = None,
     ) -> str | None:
-        """Advance the Maziwa rolling-window state machine."""
+        """Advance the calibrated 1,000-tick Maziwa rolling-window state machine."""
         target = ContractType.EVEN if target_contract == "DIGITEVEN" else ContractType.ODD
         if self.even_odd_cooldown_ticks > 0:
             self.even_odd_cooldown_ticks -= 1
+            return None
+        if sample_size is not None and sample_size < 1000:
+            self.even_odd_trigger_digits.clear()
+            self.even_odd_confirmation_deadline = None
             return None
 
         target_digits = EVEN_DIGITS if target is ContractType.EVEN else ODD_DIGITS
         parity_power = sum(float(percentages[digit]) for digit in target_digits)
         self.even_odd_power_history.append(parity_power)
-        self.even_odd_power_history = self.even_odd_power_history[-6:]
+        self.even_odd_power_history = self.even_odd_power_history[-11:]
         previous_power = (
             self.even_odd_power_history[0]
-            if len(self.even_odd_power_history) >= 6
+            if len(self.even_odd_power_history) >= 11
             else None
         )
-        setup = evaluate_even_odd_setup(percentages, target, previous_power)
+        setup = evaluate_even_odd_setup(percentages, target, previous_power, recent_digits)
         if not setup.armed:
             self.even_odd_trigger_digits.clear()
             self.even_odd_confirmation_deadline = None
@@ -215,7 +221,7 @@ class TradingProxySession:
         return None
 
     def start_even_odd_cooldown(self) -> None:
-        self.even_odd_cooldown_ticks = 120
+        self.even_odd_cooldown_ticks = 180
 
 
     async def real_risk_monitor(self, upstream: Any) -> None:

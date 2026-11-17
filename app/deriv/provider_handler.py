@@ -321,10 +321,18 @@ async def handle_provider_messages(
                                     int(digit): float(value)
                                     for digit, value in provider_message["digit_frequency"]["windows"][str(session.strategy_window_size)]["percentages"].items()
                                 }
+                                frequency_window = provider_message["digit_frequency"]["windows"][str(session.strategy_window_size)]
+                                recent_digits = [
+                                    point["last_digit"]
+                                    for point in list(session.strategy_frequency.points)[-1000:]
+                                    if type(point.get("last_digit")) is int
+                                ]
                                 parity_signal = session.update_even_odd_strategy(
                                     last_digit,
                                     percentages,
                                     session.strategy_execution.contract_type,
+                                    sample_size=frequency_window["sample_size"],
+                                    recent_digits=recent_digits,
                                 )
                                 if (
                                     parity_signal is not None

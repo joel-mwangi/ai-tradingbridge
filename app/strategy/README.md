@@ -80,14 +80,17 @@ operational monitoring, and Real execution tests are independently reviewed.
 
 `DIGITEVEN` and `DIGITODD` use the independent Maziwa/Dollar Printer state machine,
 not the OVER/UNDER Red/Green qualification pipeline. EVEN/ODD always uses a rolling
-100-tick window. The selected side must have at least 55% parity power and be rising
-compared with five ticks earlier. Rank 1 (Green) and rank 2 (Blue) must be on the
-selected parity, while ranks 9 (Yellow) and 10 (Red) must be on the opposing parity.
+1,000-tick window. The selected side must have at least 52% parity power and be rising
+compared with ten ticks earlier. Rank 1 (Green) must be at least 11.0%, rank 2 (Blue)
+at least 10.7%, and both must be on the selected parity. Ranks 9 (Yellow) and 10 (Red)
+must be on the opposing parity, with Red at most 9.1%. Equal percentage ranks are
+broken by most-recent occurrence.
 
 After the filter is armed, at least three consecutive opposing-parity ticks must occur,
-followed immediately by the first selected-parity confirmation tick. The setup then
-starts the existing fixed-stake sequence of up to three 1-tick buys. Completion or two
-losses starts a 120-tick cooldown. Red Reverse is deliberately excluded. EVEN/ODD
+followed immediately by the first selected-parity confirmation tick. No setup is
+evaluated until the full 1,000-tick window is populated. The setup then starts the
+existing fixed-stake sequence of up to three 1-tick buys. Completion or two losses
+starts a 180-tick cooldown. Red Reverse is deliberately excluded. EVEN/ODD
 proposal and start messages must omit `barrier` entirely.
 
 Real accounts are a required supported mode for API-supported products, not a promise that every

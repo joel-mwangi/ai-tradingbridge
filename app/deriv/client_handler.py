@@ -274,7 +274,7 @@ async def _handle_strategy_start(
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
         return
     if contract_type in ("DIGITEVEN", "DIGITODD"):
-        window_size = 100
+        window_size = 1000
     if trigger_source not in ("manual", "scanner"):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_TRIGGER_SOURCE", "message": "Strategy trigger_source must be manual or scanner."}})
         return

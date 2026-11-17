@@ -71,14 +71,22 @@ class EvenOddSetupTests(unittest.TestCase):
             "DIGITEVEN",
         )
 
-    def test_maziwa_cooldown_blocks_for_120_ticks(self):
+    def test_maziwa_cooldown_blocks_for_180_ticks(self):
         session = TradingProxySession(allowed_client_requests=set())
         session.start_even_odd_cooldown()
         percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
                        1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
-        for _ in range(120):
+        for _ in range(180):
             self.assertIsNone(session.update_even_odd_strategy(1, percentages, "DIGITEVEN"))
         self.assertEqual(session.even_odd_cooldown_ticks, 0)
+
+    def test_maziwa_state_waits_for_full_1000_tick_window(self):
+        session = TradingProxySession(allowed_client_requests=set())
+        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+                       1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
+        self.assertIsNone(
+            session.update_even_odd_strategy(1, percentages, "DIGITEVEN", sample_size=999)
+        )
 
 
 def under6_percentages():

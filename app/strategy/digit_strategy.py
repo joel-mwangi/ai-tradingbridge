@@ -81,8 +81,9 @@ def evaluate_even_odd_setup(
     percentages: Mapping[int, float],
     target: ContractType,
     previous_parity_power: float | None = None,
+    recent_digits: Sequence[int] | None = None,
 ) -> EvenOddSetup:
-    """Apply the Maziwa parity-power and rank-alignment filter."""
+    """Apply the calibrated 1,000-tick Maziwa parity and rank filter."""
     if target not in (ContractType.EVEN, ContractType.ODD):
         return EvenOddSetup(False, target, 0.0, "EVEN/ODD setup requires EVEN or ODD.")
     if not _valid_percentage_map(percentages):
@@ -91,19 +92,26 @@ def evaluate_even_odd_setup(
     target_digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
     opposing_digits = set(range(10)) - target_digits
     parity_power = sum(float(percentages[d]) for d in target_digits)
-    required_power = 58.0 if target is ContractType.EVEN else 70.0
-    ranked = sorted(range(10), key=lambda digit: (-float(percentages[digit]), digit))
+    recency = {digit: index for index, digit in enumerate(recent_digits or ())}
+    ranked = sorted(
+        range(10),
+        key=lambda digit: (-float(percentages[digit]), -recency.get(digit, -1), digit),
+    )
     green, blue = ranked[0], ranked[1]
     yellow, red = ranked[-2], ranked[-1]
 
-    if parity_power < 55.0:
-        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power {parity_power:.1f}% is below 55.0%.")
+    if parity_power < 52.0:
+        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power {parity_power:.1f}% is below 52.0%.")
     if previous_parity_power is not None and parity_power <= previous_parity_power:
         return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power is not rising ({parity_power:.1f}% vs {previous_parity_power:.1f}%).")
     if green not in target_digits or blue not in target_digits:
         return EvenOddSetup(False, target, parity_power, "Green and Blue must belong to the target parity.")
+    if float(percentages[green]) < 11.0 or float(percentages[blue]) < 10.7:
+        return EvenOddSetup(False, target, parity_power, "Green must be at least 11.0% and Blue at least 10.7%.")
     if red not in opposing_digits or yellow not in opposing_digits:
         return EvenOddSetup(False, target, parity_power, "Red and Yellow must belong to the opposing parity.")
+    if float(percentages[red]) > 9.1:
+        return EvenOddSetup(False, target, parity_power, "Red must be at most 9.1%.")
     return EvenOddSetup(True, target, parity_power, f"{target.value.upper()} setup armed with rising {parity_power:.1f}% parity power.")
 
 
