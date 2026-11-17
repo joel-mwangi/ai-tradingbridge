@@ -13,6 +13,7 @@ from fastapi import HTTPException, WebSocket
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.digit_strategy import Group
 from app.strategy.execution import StrategyExecution
+from app.strategy.execution import MIN_STRATEGY_STAKE
 from app.deriv.security import SYMBOL_PATTERN
 from app.deriv.credentials import _load_live_trading_consent
 from app.deriv.trading_session import TradingProxySession
@@ -322,8 +323,8 @@ async def _handle_strategy_start(
                 contract_type_override=contract_type,
             )
 
-        if stake <= 0:
-            raise ValueError("Strategy stake must be a positive amount.")
+        if stake < MIN_STRATEGY_STAKE:
+            raise ValueError(f"Strategy stake must be at least {MIN_STRATEGY_STAKE:.2f}.")
         max_stake = _configured_stake_limit(session)
         if max_stake is None:
             raise ValueError(_stake_limit_error(session))

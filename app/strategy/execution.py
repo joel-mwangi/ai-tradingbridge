@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from app.strategy.digit_strategy import Group, barrier_valid_for
 
+MIN_STRATEGY_STAKE = 0.35
+
 if TYPE_CHECKING:
     from app.strategy.market_scanner import ScanResult
 
@@ -54,8 +56,8 @@ class StrategyExecution:
                 raise ValueError("Execution requires a valid symbol.")
         if not isinstance(self.stake, (int, float)) or isinstance(self.stake, bool):
             raise ValueError("Execution stake must be numeric.")
-        if not math.isfinite(float(self.stake)) or float(self.stake) <= 0:
-            raise ValueError("Execution stake must be positive and finite.")
+        if not math.isfinite(float(self.stake)) or float(self.stake) < MIN_STRATEGY_STAKE:
+            raise ValueError(f"Execution stake must be at least {MIN_STRATEGY_STAKE:.2f} and finite.")
         if not isinstance(self.currency, str) or not self.currency.strip():
             raise ValueError("Execution currency is required.")
         if type(self.duration) is not int or not 1 <= self.duration <= 10:
