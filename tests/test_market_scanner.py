@@ -6,8 +6,10 @@ import pytest
 from app.strategy.market_scanner import (
     get_best_signal,
     scan_all_contracts,
+    scan_maziwa_markets,
     score_contract,
 )
+from app.strategy.digit_strategy import ContractType
 
 
 def _uniform_percentages(value: float = 10.0) -> dict[int, float]:
@@ -105,3 +107,33 @@ def test_get_best_signal_returns_top_result_when_above_threshold() -> None:
     result = get_best_signal({"1HZ100V": pcts}, min_score=80.0)
     assert result is not None
     assert result.score >= 80.0
+
+
+def _maziwa_percentages(target: ContractType, power: float = 55.0) -> dict[int, float]:
+    target_digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
+    opposing_digits = set(range(10)) - target_digits
+    percentages = {digit: 9.0 for digit in range(10)}
+    for digit in target_digits:
+        percentages[digit] = power / 5
+    percentages[min(opposing_digits)] = 8.0
+    percentages[max(opposing_digits)] = 8.5
+    return percentages
+
+
+def test_maziwa_scanner_does_not_require_confirmation_streak() -> None:
+    current = _maziwa_percentages(ContractType.EVEN)
+    previous = {digit: value - 0.1 for digit, value in current.items()}
+    results = scan_maziwa_markets({
+        "1HZ100V": (current, previous, [2, 4, 6, 8], 1000),
+    })
+    assert results
+    assert results[0].status == "qualified_waiting_for_confirmation"
+    assert results[0].score > 0
+
+
+def test_maziwa_scanner_requires_rising_power_history() -> None:
+    current = _maziwa_percentages(ContractType.ODD)
+    results = scan_maziwa_markets({
+        "R_75": (current, None, [1, 3, 5, 7], 1000),
+    })
+    assert results == []
