@@ -10,6 +10,7 @@ from typing import Mapping
 
 from app.strategy.digit_strategy import (
     ContractType,
+    EvenOddSetup,
     evaluate_color_positions,
     evaluate_threshold_signal,
     Group,
@@ -55,7 +56,7 @@ class ScanResult:
 @dataclass
 class MaziwaMarketResult:
     symbol: str
-    contract_type: str
+    contract_type: str | None
     score: float
     status: str
     parity_power: float
@@ -72,9 +73,8 @@ def scan_maziwa_markets(
     """Rank markets for recommendation only; never starts execution."""
     results: list[MaziwaMarketResult] = []
     for symbol, (percentages, previous_percentages, recent_digits, sample_size) in market_data.items():
-        if sample_size < 1000 or previous_percentages is None:
-            continue
         previous_power_by_target = {}
+        candidates: list[tuple[float, ContractType, EvenOddSetup]] = []
         for target in (ContractType.EVEN, ContractType.ODD):
             digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
             previous_power_by_target[target] = (
@@ -85,28 +85,38 @@ def scan_maziwa_markets(
             setup = evaluate_even_odd_setup(
                 percentages, target, previous_power_by_target[target], recent_digits
             )
-            if not setup.armed:
-                continue
-            target_digits = digits
-            opposing = [d for d in recent_digits[-4:] if d not in target_digits]
-            streak = len(opposing) if len(opposing) == len(recent_digits[-4:]) else 0
-            # The scanner ranks the durable market setup. The opposing streak
-            # is an execution-time trigger and must not decide which market is
-            # recommended.
-            score = 60.0 + min(40.0, max(0.0, (setup.parity_power - 52.0) * 10))
-            results.append(MaziwaMarketResult(
-                symbol=symbol,
-                contract_type="DIGITEVEN" if target is ContractType.EVEN else "DIGITODD",
-                score=min(100.0, score),
-                status="qualified_waiting_for_confirmation",
-                parity_power=setup.parity_power,
-                power_rising=True,
-                rank_alignment=True,
-                sample_size=sample_size,
-                reason=setup.reason + (f" Opposing streak: {streak}." if streak else " Waiting for 3 opposing ticks."),
-                scanned_at=time.time(),
-            ))
-    return sorted(results, key=lambda item: item.score, reverse=True)
+            candidate_score = (
+                60.0 + min(40.0, max(0.0, (setup.parity_power - 52.0) * 10))
+                if setup.armed else 0.0
+            )
+            candidates.append((candidate_score, target, setup))
+        score, target, setup = max(candidates, key=lambda item: item[0])
+        qualified = bool(setup.armed and sample_size >= 1000 and previous_percentages is not None)
+        target_digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
+        opposing = [d for d in recent_digits[-4:] if d not in target_digits]
+        streak = len(opposing) if len(opposing) == len(recent_digits[-4:]) else 0
+        reason = setup.reason
+        if sample_size < 1000:
+            reason = f"Collecting history ({sample_size}/1000 ticks)."
+        elif previous_percentages is None:
+            reason = "Waiting for the prior 10-tick comparison window."
+        elif streak:
+            reason += f" Opposing streak: {streak}."
+        else:
+            reason += " Waiting for 3 opposing ticks."
+        results.append(MaziwaMarketResult(
+            symbol=symbol,
+            contract_type="DIGITEVEN" if target is ContractType.EVEN else "DIGITODD",
+            score=score,
+            status="qualified_waiting_for_confirmation" if qualified else "monitoring_not_qualified",
+            parity_power=setup.parity_power,
+            power_rising=previous_percentages is not None and setup.armed,
+            rank_alignment=setup.armed,
+            sample_size=sample_size,
+            reason=reason,
+            scanned_at=time.time(),
+        ))
+    return sorted(results, key=lambda item: (-int(item.status == "qualified_waiting_for_confirmation"), -item.score, item.symbol))
 
 
 def _valid_pct_map(percentages: Mapping[int, float]) -> bool:

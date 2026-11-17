@@ -136,4 +136,6 @@ def test_maziwa_scanner_requires_rising_power_history() -> None:
     results = scan_maziwa_markets({
         "R_75": (current, None, [1, 3, 5, 7], 1000),
     })
-    assert results == []
+    assert len(results) == 1
+    assert results[0].status == "monitoring_not_qualified"
+    assert "prior 10-tick" in results[0].reason

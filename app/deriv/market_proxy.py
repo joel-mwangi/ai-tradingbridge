@@ -259,15 +259,20 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                         for _sym, _tracker in frequency_by_symbol.items():
                                             _points = list(_tracker.points)
                                             _window = _points[-1010:]
-                                            if len(_window) < 1000:
-                                                continue
                                             def _percentages(points):
                                                 counts = {digit: 0 for digit in range(10)}
-                                                for point in points:
+                                                valid_points = [
+                                                    point for point in points
+                                                    if type(point.get("last_digit")) is int
+                                                ]
+                                                for point in valid_points:
                                                     digit = point.get("last_digit")
-                                                    if type(digit) is int:
-                                                        counts[digit] += 1
-                                                return {digit: counts[digit] / len(points) * 100 for digit in range(10)}
+                                                    counts[digit] += 1
+                                                total = len(valid_points)
+                                                return {
+                                                    digit: counts[digit] / total * 100 if total else 0.0
+                                                    for digit in range(10)
+                                                }
                                             current_window = _window[-1000:]
                                             previous_window = _window[-1010:-10] if len(_window) >= 1010 else None
                                             current = _percentages(current_window)
