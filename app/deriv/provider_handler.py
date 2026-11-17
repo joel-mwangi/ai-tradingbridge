@@ -318,6 +318,7 @@ async def handle_provider_messages(
                                     parity_signal is not None
                                     and parity_signal == session.strategy_execution.contract_type
                                 ):
+                                    session.scanner_direct_execute = False
                                     proposal_request_id = session.next_strategy_request_id()
                                     proposal_message = session.strategy_execution.begin_signal(proposal_request_id)
                                     if proposal_message is not None:
@@ -338,6 +339,7 @@ async def handle_provider_messages(
                             and session.strategy_execution.contract_type in ("DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF")
                         ):
                             session.scanner_direct_execute = False
+                            session.parity_streak.clear()
                             proposal_request_id = session.next_strategy_request_id()
                             proposal_message = session.strategy_execution.begin_signal(proposal_request_id)
                             if proposal_message is not None:

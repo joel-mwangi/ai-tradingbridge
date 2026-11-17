@@ -82,12 +82,17 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 if type(window_size) is not int or window_size not in (50, 100, 250, 500, 1000):
                                     await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
                                     continue
+                                contract_type_start = control.get("contract_type", "DIGITOVER")
                                 barrier = control.get("barrier", 5)
-                                if type(barrier) is not int or barrier not in range(10):
+                                if contract_type_start in ("DIGITEVEN", "DIGITODD"):
+                                    if "barrier" in control:
+                                        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
+                                        continue
+                                    barrier = 0
+                                elif type(barrier) is not int or barrier not in range(10):
                                     await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
                                     continue
                                 direction = control.get("direction")
-                                contract_type_start = control.get("contract_type", "DIGITOVER")
                                 _direction_required = contract_type_start in ("DIGITOVER", "DIGITUNDER")
                                 if _direction_required and direction not in ("over", "under"):
                                     await websocket.send_json({"error": {"code": "INVALID_STRATEGY_DIRECTION", "message": "Strategy start requires direction 'over' or 'under'."}})

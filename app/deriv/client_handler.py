@@ -221,6 +221,8 @@ async def _handle_strategy_control(
         await _handle_strategy_start(session, upstream, websocket, control)
     elif action == "stop":
         strategy_status = session.strategy_feed.stop()
+        session.parity_streak.clear()
+        session.scanner_direct_execute = False
         if session.strategy_execution is not None:
             session.strategy_execution.stop()
             await websocket.send_json(session.strategy_execution.status("Strategy execution stopped by the user."))
@@ -253,6 +255,7 @@ async def _handle_strategy_start(
     barrier = control.get("barrier", 5)
     direction = control.get("direction")
     contract_type = control.get("contract_type", "DIGITOVER")
+    trigger_source = control.get("trigger_source", "manual")
 
     _valid_contract_types = {
         "DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"
@@ -266,6 +269,9 @@ async def _handle_strategy_start(
         return
     if contract_type not in _valid_contract_types:
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
+        return
+    if trigger_source not in ("manual", "scanner"):
+        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_TRIGGER_SOURCE", "message": "Strategy trigger_source must be manual or scanner."}})
         return
 
     # Barrier validation is contract-type-specific.
@@ -344,6 +350,11 @@ async def _handle_strategy_start(
 
     session.strategy_execution = candidate_execution
     session.strategy_window_size = window_size
+    session.parity_streak.clear()
+    session.scanner_direct_execute = (
+        trigger_source == "scanner"
+        and contract_type in ("DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF")
+    )
 
     if not already_subscribed:
         if session.strategy_subscribed_symbol is not None:

@@ -62,12 +62,11 @@ closed. Never synthesize percentage updates or silently switch source types.
 python -m pytest tests/test_digit_strategy.py tests/test_feed_health.py tests/test_strategy_session.py tests/test_market_frequency_adapter.py tests/test_live_strategy_feed.py -v
 ```
 
-## Not implemented in this step
+## Remaining strategy limitations
 
-- Frontend controls and display for `strategy_status`.
 - Live safety-breach predicate.
 - Tie-break for equal lowest percentages.
-- Real-money execution, purchase acknowledgements, and settlement reconciliation.
+- Automated Real-money execution remains disabled.
 
 Execution is coordinated by `execution.py` and driven through the authenticated `/deriv/ws`
 WebSocket proxy. The proxy accepts both Demo and Real Options accounts. Real proposals, buys, and
@@ -76,6 +75,20 @@ finite `TRADEBRIDGE_REAL_MAX_STAKE`, and the per-connection confirmation message
 the root README. The confirmation resets on disconnect; the stake cap is always enforced.
 Automated Real runs should remain disabled in production until account-specific risk limits,
 operational monitoring, and Real execution tests are independently reviewed.
+
+### Automatic EVEN/ODD execution
+
+`DIGITEVEN` and `DIGITODD` support two Demo execution triggers:
+
+- A scanner-qualified result starts the sequence on the next valid tick. Scanner starts
+  identify themselves with `trigger_source: "scanner"`.
+- A manually armed EVEN/ODD strategy tracks completed ticks. Three consecutive odd ticks
+  trigger `DIGITEVEN`; three consecutive even ticks trigger `DIGITODD`.
+
+Both paths share the same execution lock and sequential lifecycle. A scanner trigger clears
+the parity streak, and a parity trigger clears any pending scanner trigger, so one signal
+cannot submit duplicate sequences. EVEN/ODD proposal and start messages must omit `barrier`
+entirely; the backend uses an internal placeholder only for strategy bookkeeping.
 
 Real accounts are a required supported mode for API-supported products, not a promise that every
 Deriv product is available through this gateway. Multipliers use a separate `/deriv/multipliers/ws`
