@@ -21,6 +21,7 @@ from fastapi import WebSocket
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.execution import StrategyExecution
 from app.strategy.live_feed import LiveStrategyFeed
+from app.strategy.digit_strategy import ContractType, evaluate_even_odd_setup
 import app.deriv.credentials as _creds
 
 _log = logging.getLogger(__name__)
@@ -82,6 +83,9 @@ class TradingProxySession:
         # Stores the parity ("even"/"odd") of the last N completed ticks.
         self.parity_streak: list[str] = []
         self.parity_streak_max: int = 3
+        self.even_odd_trigger_digits: list[int] = []
+        self.even_odd_confirmation_deadline: int | None = None
+        self.even_odd_recent_digits: list[int] = []
         # When True, the next begin_signal call on a EVEN/ODD/MATCHES/DIFFERS
         # execution fires immediately without waiting for the M15/M5/M1 pipeline.
         self.scanner_direct_execute: bool = False
@@ -165,6 +169,55 @@ class TradingProxySession:
         if all(p == "even" for p in self.parity_streak):
             self.parity_streak.clear()
             return "DIGITODD"
+        return None
+
+    def update_even_odd_strategy(
+        self,
+        last_digit: int,
+        percentages: dict[int, float],
+        target_contract: str,
+    ) -> str | None:
+        """Advance the filtered opposing streak plus confirmation state."""
+        target = ContractType.EVEN if target_contract == "DIGITEVEN" else ContractType.ODD
+        self.even_odd_recent_digits.append(last_digit)
+        self.even_odd_recent_digits = self.even_odd_recent_digits[-10:]
+        parity_window = self.even_odd_recent_digits[-8:]
+        alternating = (
+            len(parity_window) >= 6
+            and all(
+                (parity_window[index] % 2) != (parity_window[index - 1] % 2)
+                for index in range(1, len(parity_window))
+            )
+        )
+        setup = evaluate_even_odd_setup(percentages, target)
+        if not setup.armed or alternating:
+            self.even_odd_trigger_digits.clear()
+            self.even_odd_confirmation_deadline = None
+            return None
+
+        target_is_even = last_digit % 2 == 0
+        target_parity = target is ContractType.EVEN
+        if self.even_odd_trigger_digits:
+            self.even_odd_confirmation_deadline = max(
+                0, (self.even_odd_confirmation_deadline or 0) - 1
+            )
+            if target_is_even == target_parity:
+                self.even_odd_trigger_digits.clear()
+                self.even_odd_confirmation_deadline = None
+                return target_contract
+            if self.even_odd_confirmation_deadline == 0:
+                self.even_odd_trigger_digits.clear()
+                self.even_odd_confirmation_deadline = None
+
+        if target_is_even != target_parity:
+            self.even_odd_trigger_digits.append(last_digit)
+            if len(self.even_odd_trigger_digits) > 4:
+                self.even_odd_trigger_digits = self.even_odd_trigger_digits[-4:]
+            if len(self.even_odd_trigger_digits) >= 3:
+                self.even_odd_confirmation_deadline = 3
+        else:
+            self.even_odd_trigger_digits.clear()
+            self.even_odd_confirmation_deadline = None
         return None
 
 

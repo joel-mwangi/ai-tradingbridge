@@ -288,7 +288,7 @@ async def handle_provider_messages(
                         strategy_status = session.strategy_feed.on_frequency(provider_message["digit_frequency"])
                         if strategy_status:
                             await websocket.send_json(strategy_status)
-                        if was_selected:
+                        if was_selected and session.strategy_execution.contract_type not in ("DIGITEVEN", "DIGITODD"):
                             tick_status = session.strategy_feed.on_tick(symbol, tick, session.strategy_pip_size)
                             if tick_status:
                                 await websocket.send_json(tick_status)
@@ -313,7 +313,15 @@ async def handle_provider_messages(
                             from app.market_analysis import extract_last_digit
                             last_digit = extract_last_digit(tick.get("quote"), session.strategy_pip_size)
                             if last_digit is not None:
-                                parity_signal = session.update_parity_streak(last_digit)
+                                percentages = {
+                                    int(digit): float(value)
+                                    for digit, value in provider_message["digit_frequency"]["windows"][str(session.strategy_window_size)]["percentages"].items()
+                                }
+                                parity_signal = session.update_even_odd_strategy(
+                                    last_digit,
+                                    percentages,
+                                    session.strategy_execution.contract_type,
+                                )
                                 if (
                                     parity_signal is not None
                                     and parity_signal == session.strategy_execution.contract_type

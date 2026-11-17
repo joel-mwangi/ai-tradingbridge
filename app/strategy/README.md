@@ -78,17 +78,18 @@ operational monitoring, and Real execution tests are independently reviewed.
 
 ### Automatic EVEN/ODD execution
 
-`DIGITEVEN` and `DIGITODD` support two Demo execution triggers:
+`DIGITEVEN` and `DIGITODD` use an independent filtered parity strategy, not the
+OVER/UNDER Red/Green qualification pipeline. The selected side must first satisfy:
 
-- A scanner-qualified result starts the sequence on the next valid tick. Scanner starts
-  identify themselves with `trigger_source: "scanner"`.
-- A manually armed EVEN/ODD strategy tracks completed ticks. Three consecutive odd ticks
-  trigger `DIGITEVEN`; three consecutive even ticks trigger `DIGITODD`.
+- Overall parity power of at least 58% for EVEN or 70% for ODD.
+- Green and Blue are on the selected parity and each are at least 11.5%.
+- Red and Yellow are on the opposing parity and each are at most 9.0%.
+- The recent sequence is not an alternating chop pattern.
 
-Both paths share the same execution lock and sequential lifecycle. A scanner trigger clears
-the parity streak, and a parity trigger clears any pending scanner trigger, so one signal
-cannot submit duplicate sequences. EVEN/ODD proposal and start messages must omit `barrier`
-entirely; the backend uses an internal placeholder only for strategy bookkeeping.
+After the filter is armed, three or four opposing-parity ticks must occur, followed
+by a selected-parity confirmation within three ticks. The setup then starts the
+existing fixed-stake sequence of up to three 1-tick buys. Red Reverse is deliberately
+excluded. EVEN/ODD proposal and start messages must omit `barrier` entirely.
 
 Real accounts are a required supported mode for API-supported products, not a promise that every
 Deriv product is available through this gateway. Multipliers use a separate `/deriv/multipliers/ws`

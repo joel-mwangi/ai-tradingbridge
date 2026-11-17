@@ -222,6 +222,9 @@ async def _handle_strategy_control(
     elif action == "stop":
         strategy_status = session.strategy_feed.stop()
         session.parity_streak.clear()
+        session.even_odd_trigger_digits.clear()
+        session.even_odd_confirmation_deadline = None
+        session.even_odd_recent_digits.clear()
         session.scanner_direct_execute = False
         if session.strategy_execution is not None:
             session.strategy_execution.stop()
@@ -351,9 +354,12 @@ async def _handle_strategy_start(
     session.strategy_execution = candidate_execution
     session.strategy_window_size = window_size
     session.parity_streak.clear()
+    session.even_odd_trigger_digits.clear()
+    session.even_odd_confirmation_deadline = None
+    session.even_odd_recent_digits.clear()
     session.scanner_direct_execute = (
         trigger_source == "scanner"
-        and contract_type in ("DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF")
+        and contract_type in ("DIGITMATCH", "DIGITDIFF")
     )
 
     if not already_subscribed:

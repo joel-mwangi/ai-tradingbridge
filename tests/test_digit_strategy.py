@@ -25,6 +25,7 @@ from app.strategy.digit_strategy import (
     ThresholdSignal,
     evaluate_reverse_signal,
     evaluate_threshold_signal,
+    evaluate_even_odd_setup,
 )
 
 
@@ -33,6 +34,21 @@ def over3_percentages():
         0: 8.0, 1: 8.2, 2: 8.5, 3: 9.1, 4: 8.4,
         5: 10.0, 6: 10.1, 7: 10.2, 8: 10.8, 9: 10.9,
     }
+
+
+class EvenOddSetupTests(unittest.TestCase):
+    def test_even_setup_requires_asymmetric_confluence(self):
+        percentages = {0: 12.0, 2: 12.0, 4: 12.0, 6: 12.0, 8: 10.0,
+                       1: 8.4, 3: 8.4, 5: 8.4, 7: 8.4, 9: 8.4}
+        result = evaluate_even_odd_setup(percentages, ContractType.EVEN)
+        self.assertTrue(result.armed)
+        self.assertEqual(result.parity_power, 58.0)
+
+    def test_odd_setup_uses_seventy_percent_floor(self):
+        percentages = {1: 14.0, 3: 14.0, 5: 14.0, 7: 14.0, 9: 14.0,
+                       0: 6.0, 2: 6.0, 4: 6.0, 6: 6.0, 8: 6.0}
+        result = evaluate_even_odd_setup(percentages, ContractType.ODD)
+        self.assertTrue(result.armed)
 
 
 def under6_percentages():
