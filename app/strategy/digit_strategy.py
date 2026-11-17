@@ -38,10 +38,10 @@ MIN_ACTIVITY_TICKS = 1
 DEFAULT_BARRIER = 5
 THRESHOLD_ENTRY_PCT = 12.0
 REVERSION_THRESHOLD_PCT = 12.0
-EVEN_ODD_MIN_DIGITS_ABOVE_PCT = 10.5
+EVEN_ODD_MIN_DIGIT_PCT = 10.0
 EVEN_ODD_MIN_GREEN_PCT = 12.1
 EVEN_ODD_MIN_PARITY_GAP_PCT = 1.5
-EVEN_ODD_OPPOSING_MAX_PCT = 10.0
+EVEN_ODD_RED_MAX_PCT = 9.3
 
 
 class Group(str, Enum):
@@ -104,18 +104,18 @@ def evaluate_even_odd_setup(
     green, red = ranked[0], ranked[-1]
 
     parity_gap = parity_power - (100.0 - parity_power)
-    target_above_threshold = sum(
-        float(percentages[digit]) > EVEN_ODD_MIN_DIGITS_ABOVE_PCT
+    target_at_or_above_ten = sum(
+        float(percentages[digit]) >= EVEN_ODD_MIN_DIGIT_PCT
         for digit in target_digits
     )
-    opposing_below_threshold = sum(
-        float(percentages[digit]) < EVEN_ODD_OPPOSING_MAX_PCT
+    opposing_at_or_above_ten = sum(
+        float(percentages[digit]) >= EVEN_ODD_MIN_DIGIT_PCT
         for digit in opposing_digits
     )
-    if target_above_threshold < 3:
+    if target_at_or_above_ten <= opposing_at_or_above_ten:
         return EvenOddSetup(False, target, parity_power, (
-            f"{target.value.upper()} has {target_above_threshold}/3 digits above "
-            f"{EVEN_ODD_MIN_DIGITS_ABOVE_PCT:.1f}%."
+            f"{target.value.upper()} has {target_at_or_above_ten} digits at or above "
+            f"10.0% versus {opposing_at_or_above_ten} opposing digits."
         ))
     if green not in target_digits:
         return EvenOddSetup(False, target, parity_power, "The highest-frequency digit must belong to the target parity.")
@@ -128,13 +128,14 @@ def evaluate_even_odd_setup(
             f"{target.value.upper()} leads by {parity_gap:.1f} points; "
             f"{EVEN_ODD_MIN_PARITY_GAP_PCT:.1f} points required."
         ))
-    if opposing_below_threshold < 3:
-        return EvenOddSetup(False, target, parity_power, "A majority of opposing digits must be below 10.0%.")
-    if red not in opposing_digits:
-        return EvenOddSetup(False, target, parity_power, "The lowest-frequency digit must belong to the opposing parity.")
+    if float(percentages[red]) >= EVEN_ODD_RED_MAX_PCT:
+        return EvenOddSetup(False, target, parity_power, (
+            f"Red digit must be below {EVEN_ODD_RED_MAX_PCT:.1f}%."
+        ))
     return EvenOddSetup(True, target, parity_power, (
-        f"{target.value.upper()} setup qualified: {target_above_threshold} target digits "
-        f"above {EVEN_ODD_MIN_DIGITS_ABOVE_PCT:.1f}%, {parity_gap:.1f}-point parity lead."
+        f"{target.value.upper()} setup qualified: {target_at_or_above_ten} target digits "
+        f"at or above 10.0% versus {opposing_at_or_above_ten}, "
+        f"with a {parity_gap:.1f}-point parity lead."
     ))
 
 
