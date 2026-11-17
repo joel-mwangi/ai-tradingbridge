@@ -11,7 +11,7 @@ import math
 from typing import Any, Iterable
 
 WINDOW_SIZES = (50, 100, 250, 500, 1000)
-MAX_POINTS = max(WINDOW_SIZES)
+MAX_POINTS = max(WINDOW_SIZES) + 10
 
 
 def extract_last_digit(quote: Any, pip_size: Any = None) -> int | None:

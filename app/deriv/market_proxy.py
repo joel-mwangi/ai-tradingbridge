@@ -19,7 +19,7 @@ from app.deriv import router
 from app.deriv.security import SYMBOL_PATTERN, _origin_allowed
 from app.market_analysis import DigitFrequencyWindow
 from app.strategy.live_feed import LiveStrategyFeed
-from app.strategy.market_scanner import scan_all_contracts
+from app.strategy.market_scanner import scan_all_contracts, scan_maziwa_markets
 
 
 @router.websocket("/live/market")
@@ -34,7 +34,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
     frequency_by_symbol: dict[str, DigitFrequencyWindow] = {}
     pip_size_by_symbol: dict[str, int] = {}
     strategy_feed = LiveStrategyFeed()
-    allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping"}
+    allowed = {"active_symbols", "ticks", "ticks_history", "forget", "forget_all", "ping", "maziwa_scan"}
     _log = logging.getLogger(__name__)
     reconnect_attempt = 0
     _MAX_RECONNECT_ATTEMPTS = 5
@@ -129,6 +129,22 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                 await websocket.send_json(strategy_feed._status("Current strategy observation status."))
                             else:
                                 await websocket.send_json({"error": {"code": "INVALID_STRATEGY_ACTION", "message": "Supported strategy actions are start, stop, and status."}})
+                            continue
+                        if isinstance(message, dict) and isinstance(message.get("maziwa_scan"), dict):
+                            scan = message["maziwa_scan"]
+                            if scan.get("action") == "start":
+                                for symbol in scan.get("symbols", []):
+                                    if isinstance(symbol, str) and SYMBOL_PATTERN.fullmatch(symbol):
+                                        subscribed_symbols.add(symbol)
+                                        frequency_by_symbol.setdefault(symbol, DigitFrequencyWindow())
+                                        request_id = secrets.randbelow(1_000_000) + 7_000_000
+                                        history_requests[request_id] = symbol
+                                        await upstream.send(json.dumps({
+                                            "ticks_history": symbol, "count": 1010,
+                                            "end": "latest", "style": "ticks", "req_id": request_id,
+                                        }, separators=(",", ":")))
+                                        await upstream.send(json.dumps({"ticks": symbol, "subscribe": 1}, separators=(",", ":")))
+                                await websocket.send_json({"type": "maziwa_scan_status", "status": "scanning"})
                             continue
                         if not isinstance(message, dict) or not set(message).intersection(allowed):
                             await websocket.send_json({"error": {"code": "UNSUPPORTED_REQUEST", "message": "Unsupported market-data request."}})
@@ -239,6 +255,32 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                                         "scanned_at": int(time.time()),
                                                     }
                                                     await websocket.send_json(_scanner_payload)
+                                        maziwa_data = {}
+                                        for _sym, _tracker in frequency_by_symbol.items():
+                                            _points = list(_tracker.points)
+                                            _window = _points[-1010:]
+                                            if len(_window) < 1000:
+                                                continue
+                                            def _percentages(points):
+                                                counts = {digit: 0 for digit in range(10)}
+                                                for point in points:
+                                                    digit = point.get("last_digit")
+                                                    if type(digit) is int:
+                                                        counts[digit] += 1
+                                                return {digit: counts[digit] / len(points) * 100 for digit in range(10)}
+                                            current_window = _window[-1000:]
+                                            previous_window = _window[-1010:-10] if len(_window) >= 1010 else None
+                                            current = _percentages(current_window)
+                                            previous = _percentages(previous_window) if previous_window is not None else None
+                                            recent = [point["last_digit"] for point in current_window if type(point.get("last_digit")) is int]
+                                            maziwa_data[_sym] = (current, previous, recent, len(current_window))
+                                        if maziwa_data:
+                                            recommendations = scan_maziwa_markets(maziwa_data)[:5]
+                                            await websocket.send_json({
+                                                "type": "maziwa_market_recommendations",
+                                                "results": [result.__dict__ for result in recommendations],
+                                                "scanned_at": int(time.time()),
+                                            })
                                         # --- End scanner feed ---
                                         active_strategy = (
                                             strategy_feed.symbol == symbol

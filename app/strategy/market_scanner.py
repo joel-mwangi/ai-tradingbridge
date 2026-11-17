@@ -13,6 +13,7 @@ from app.strategy.digit_strategy import (
     evaluate_color_positions,
     evaluate_threshold_signal,
     Group,
+    evaluate_even_odd_setup,
 )
 
 # Threshold for EVEN/ODD/OVER/UNDER qualifying digit
@@ -49,6 +50,63 @@ class ScanResult:
     color_positions_pass: bool
     reason: str
     scanned_at: float     # epoch timestamp
+
+
+@dataclass
+class MaziwaMarketResult:
+    symbol: str
+    contract_type: str
+    score: float
+    status: str
+    parity_power: float
+    power_rising: bool
+    rank_alignment: bool
+    sample_size: int
+    reason: str
+    scanned_at: float
+
+
+def scan_maziwa_markets(
+    market_data: dict[str, tuple[dict[int, float], dict[int, float] | None, list[int], int]],
+) -> list[MaziwaMarketResult]:
+    """Rank markets for recommendation only; never starts execution."""
+    results: list[MaziwaMarketResult] = []
+    for symbol, (percentages, previous_percentages, recent_digits, sample_size) in market_data.items():
+        if sample_size < 1000 or previous_percentages is None:
+            continue
+        previous_power_by_target = {}
+        for target in (ContractType.EVEN, ContractType.ODD):
+            digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
+            previous_power_by_target[target] = (
+                sum(previous_percentages[d] for d in digits)
+                if previous_percentages is not None
+                else None
+            )
+            setup = evaluate_even_odd_setup(
+                percentages, target, previous_power_by_target[target], recent_digits
+            )
+            if not setup.armed:
+                continue
+            target_digits = digits
+            opposing = [d for d in recent_digits[-4:] if d not in target_digits]
+            streak = len(opposing) if len(opposing) == len(recent_digits[-4:]) else 0
+            ready = streak >= 3
+            score = 60.0 + min(20.0, max(0.0, (setup.parity_power - 52.0) * 10))
+            if ready:
+                score += 20.0
+            results.append(MaziwaMarketResult(
+                symbol=symbol,
+                contract_type="DIGITEVEN" if target is ContractType.EVEN else "DIGITODD",
+                score=min(100.0, score),
+                status="ready_for_confirmation" if ready else "armed_waiting_for_streak",
+                parity_power=setup.parity_power,
+                power_rising=True,
+                rank_alignment=True,
+                sample_size=sample_size,
+                reason=setup.reason + (f" Opposing streak: {streak}." if streak else " Waiting for 3 opposing ticks."),
+                scanned_at=time.time(),
+            ))
+    return sorted(results, key=lambda item: item.score, reverse=True)
 
 
 def _valid_pct_map(percentages: Mapping[int, float]) -> bool:
