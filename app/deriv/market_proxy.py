@@ -275,7 +275,7 @@ async def live_market_proxy(websocket: WebSocket) -> None:
                                             recent = [point["last_digit"] for point in current_window if type(point.get("last_digit")) is int]
                                             maziwa_data[_sym] = (current, previous, recent, len(current_window))
                                         if maziwa_data:
-                                            recommendations = scan_maziwa_markets(maziwa_data)[:5]
+                                            recommendations = scan_maziwa_markets(maziwa_data)[:10]
                                             await websocket.send_json({
                                                 "type": "maziwa_market_recommendations",
                                                 "results": [result.__dict__ for result in recommendations],
