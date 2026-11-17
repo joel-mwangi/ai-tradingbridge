@@ -90,15 +90,15 @@ def scan_maziwa_markets(
             target_digits = digits
             opposing = [d for d in recent_digits[-4:] if d not in target_digits]
             streak = len(opposing) if len(opposing) == len(recent_digits[-4:]) else 0
-            ready = streak >= 3
-            score = 60.0 + min(20.0, max(0.0, (setup.parity_power - 52.0) * 10))
-            if ready:
-                score += 20.0
+            # The scanner ranks the durable market setup. The opposing streak
+            # is an execution-time trigger and must not decide which market is
+            # recommended.
+            score = 60.0 + min(40.0, max(0.0, (setup.parity_power - 52.0) * 10))
             results.append(MaziwaMarketResult(
                 symbol=symbol,
                 contract_type="DIGITEVEN" if target is ContractType.EVEN else "DIGITODD",
                 score=min(100.0, score),
-                status="ready_for_confirmation" if ready else "armed_waiting_for_streak",
+                status="qualified_waiting_for_confirmation",
                 parity_power=setup.parity_power,
                 power_rising=True,
                 rank_alignment=True,
