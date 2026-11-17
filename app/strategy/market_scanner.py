@@ -91,15 +91,13 @@ def scan_maziwa_markets(
             )
             candidates.append((candidate_score, target, setup))
         score, target, setup = max(candidates, key=lambda item: item[0])
-        qualified = bool(setup.armed and sample_size >= 1000 and previous_percentages is not None)
+        qualified = bool(setup.armed and sample_size >= 1000)
         target_digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
         opposing = [d for d in recent_digits[-4:] if d not in target_digits]
         streak = len(opposing) if len(opposing) == len(recent_digits[-4:]) else 0
         reason = setup.reason
         if sample_size < 1000:
             reason = f"Collecting history ({sample_size}/1000 ticks)."
-        elif previous_percentages is None:
-            reason = "Waiting for the prior 10-tick comparison window."
         elif streak:
             reason += f" Opposing streak: {streak}."
         else:
@@ -110,7 +108,7 @@ def scan_maziwa_markets(
             score=score,
             status="qualified_waiting_for_confirmation" if qualified else "monitoring_not_qualified",
             parity_power=setup.parity_power,
-            power_rising=previous_percentages is not None and setup.armed,
+            power_rising=False,
             rank_alignment=setup.armed,
             sample_size=sample_size,
             reason=reason,

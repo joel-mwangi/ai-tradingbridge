@@ -39,11 +39,11 @@ def over3_percentages():
 
 class EvenOddSetupTests(unittest.TestCase):
     def test_even_setup_requires_asymmetric_confluence(self):
-        percentages = {0: 12.0, 2: 12.0, 4: 12.0, 6: 12.0, 8: 10.0,
+        percentages = {0: 12.1, 2: 12.0, 4: 12.0, 6: 12.0, 8: 10.0,
                        1: 8.4, 3: 8.4, 5: 8.4, 7: 8.4, 9: 8.4}
         result = evaluate_even_odd_setup(percentages, ContractType.EVEN)
         self.assertTrue(result.armed)
-        self.assertEqual(result.parity_power, 58.0)
+        self.assertEqual(result.parity_power, 58.1)
 
     def test_odd_setup_uses_same_fifty_five_percent_floor(self):
         percentages = {1: 14.0, 3: 14.0, 5: 14.0, 7: 14.0, 9: 14.0,
@@ -51,16 +51,14 @@ class EvenOddSetupTests(unittest.TestCase):
         result = evaluate_even_odd_setup(percentages, ContractType.ODD)
         self.assertTrue(result.armed)
 
-    def test_maziwa_setup_requires_rising_power_when_history_exists(self):
-        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+    def test_maziwa_setup_does_not_require_rising_power_history(self):
+        percentages = {0: 12.1, 2: 10.8, 4: 10.8, 6: 10.8, 8: 10.8,
                        1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
         self.assertTrue(evaluate_even_odd_setup(percentages, ContractType.EVEN).armed)
-        self.assertFalse(
-            evaluate_even_odd_setup(percentages, ContractType.EVEN, 56.0).armed
-        )
+        self.assertTrue(evaluate_even_odd_setup(percentages, ContractType.EVEN, 56.0).armed)
 
     def test_maziwa_state_enters_on_first_target_tick_after_three_opposing(self):
-        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+        percentages = {0: 12.1, 2: 10.8, 4: 10.8, 6: 10.8, 8: 10.8,
                        1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
         session = TradingProxySession(allowed_client_requests=set())
         self.assertIsNone(session.update_even_odd_strategy(1, percentages, "DIGITEVEN"))
@@ -74,7 +72,7 @@ class EvenOddSetupTests(unittest.TestCase):
     def test_maziwa_cooldown_blocks_for_180_ticks(self):
         session = TradingProxySession(allowed_client_requests=set())
         session.start_even_odd_cooldown()
-        percentages = {0: 12.0, 2: 11.0, 4: 11.0, 6: 11.0, 8: 11.0,
+        percentages = {0: 12.1, 2: 10.8, 4: 10.8, 6: 10.8, 8: 10.8,
                        1: 8.8, 3: 8.8, 5: 8.8, 7: 8.8, 9: 8.8}
         for _ in range(180):
             self.assertIsNone(session.update_even_odd_strategy(1, percentages, "DIGITEVEN"))

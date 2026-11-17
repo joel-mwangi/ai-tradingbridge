@@ -38,6 +38,10 @@ MIN_ACTIVITY_TICKS = 1
 DEFAULT_BARRIER = 5
 THRESHOLD_ENTRY_PCT = 12.0
 REVERSION_THRESHOLD_PCT = 12.0
+EVEN_ODD_MIN_DIGITS_ABOVE_PCT = 10.5
+EVEN_ODD_MIN_GREEN_PCT = 12.1
+EVEN_ODD_MIN_PARITY_GAP_PCT = 1.5
+EVEN_ODD_OPPOSING_MAX_PCT = 10.0
 
 
 class Group(str, Enum):
@@ -83,7 +87,7 @@ def evaluate_even_odd_setup(
     previous_parity_power: float | None = None,
     recent_digits: Sequence[int] | None = None,
 ) -> EvenOddSetup:
-    """Apply the calibrated 1,000-tick Maziwa parity and rank filter."""
+    """Apply the 1,000-tick Maziwa market-selection rules."""
     if target not in (ContractType.EVEN, ContractType.ODD):
         return EvenOddSetup(False, target, 0.0, "EVEN/ODD setup requires EVEN or ODD.")
     if not _valid_percentage_map(percentages):
@@ -97,22 +101,41 @@ def evaluate_even_odd_setup(
         range(10),
         key=lambda digit: (-float(percentages[digit]), -recency.get(digit, -1), digit),
     )
-    green, blue = ranked[0], ranked[1]
-    yellow, red = ranked[-2], ranked[-1]
+    green, red = ranked[0], ranked[-1]
 
-    if parity_power < 52.0:
-        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power {parity_power:.1f}% is below 52.0%.")
-    if previous_parity_power is not None and parity_power <= previous_parity_power:
-        return EvenOddSetup(False, target, parity_power, f"{target.value.upper()} power is not rising ({parity_power:.1f}% vs {previous_parity_power:.1f}%).")
-    if green not in target_digits or blue not in target_digits:
-        return EvenOddSetup(False, target, parity_power, "Green and Blue must belong to the target parity.")
-    if float(percentages[green]) < 11.0 or float(percentages[blue]) < 10.7:
-        return EvenOddSetup(False, target, parity_power, "Green must be at least 11.0% and Blue at least 10.7%.")
-    if red not in opposing_digits or yellow not in opposing_digits:
-        return EvenOddSetup(False, target, parity_power, "Red and Yellow must belong to the opposing parity.")
-    if float(percentages[red]) > 9.1:
-        return EvenOddSetup(False, target, parity_power, "Red must be at most 9.1%.")
-    return EvenOddSetup(True, target, parity_power, f"{target.value.upper()} setup armed with rising {parity_power:.1f}% parity power.")
+    parity_gap = parity_power - (100.0 - parity_power)
+    target_above_threshold = sum(
+        float(percentages[digit]) > EVEN_ODD_MIN_DIGITS_ABOVE_PCT
+        for digit in target_digits
+    )
+    opposing_below_threshold = sum(
+        float(percentages[digit]) < EVEN_ODD_OPPOSING_MAX_PCT
+        for digit in opposing_digits
+    )
+    if target_above_threshold < 3:
+        return EvenOddSetup(False, target, parity_power, (
+            f"{target.value.upper()} has {target_above_threshold}/3 digits above "
+            f"{EVEN_ODD_MIN_DIGITS_ABOVE_PCT:.1f}%."
+        ))
+    if green not in target_digits:
+        return EvenOddSetup(False, target, parity_power, "The highest-frequency digit must belong to the target parity.")
+    if float(percentages[green]) < EVEN_ODD_MIN_GREEN_PCT:
+        return EvenOddSetup(False, target, parity_power, (
+            f"Green digit must be at least {EVEN_ODD_MIN_GREEN_PCT:.1f}%."
+        ))
+    if parity_gap < EVEN_ODD_MIN_PARITY_GAP_PCT:
+        return EvenOddSetup(False, target, parity_power, (
+            f"{target.value.upper()} leads by {parity_gap:.1f} points; "
+            f"{EVEN_ODD_MIN_PARITY_GAP_PCT:.1f} points required."
+        ))
+    if opposing_below_threshold < 3:
+        return EvenOddSetup(False, target, parity_power, "A majority of opposing digits must be below 10.0%.")
+    if red not in opposing_digits:
+        return EvenOddSetup(False, target, parity_power, "The lowest-frequency digit must belong to the opposing parity.")
+    return EvenOddSetup(True, target, parity_power, (
+        f"{target.value.upper()} setup qualified: {target_above_threshold} target digits "
+        f"above {EVEN_ODD_MIN_DIGITS_ABOVE_PCT:.1f}%, {parity_gap:.1f}-point parity lead."
+    ))
 
 
 @dataclass(frozen=True)

@@ -113,8 +113,9 @@ def _maziwa_percentages(target: ContractType, power: float = 55.0) -> dict[int, 
     target_digits = {0, 2, 4, 6, 8} if target is ContractType.EVEN else {1, 3, 5, 7, 9}
     opposing_digits = set(range(10)) - target_digits
     percentages = {digit: 9.0 for digit in range(10)}
-    for digit in target_digits:
-        percentages[digit] = power / 5
+    target_values = [12.1, (power - 12.1) / 4, (power - 12.1) / 4, (power - 12.1) / 4, (power - 12.1) / 4]
+    for digit, value in zip(sorted(target_digits), target_values):
+        percentages[digit] = value
     percentages[min(opposing_digits)] = 8.0
     percentages[max(opposing_digits)] = 8.5
     return percentages
@@ -131,11 +132,11 @@ def test_maziwa_scanner_does_not_require_confirmation_streak() -> None:
     assert results[0].score > 0
 
 
-def test_maziwa_scanner_requires_rising_power_history() -> None:
+def test_maziwa_scanner_does_not_require_rising_power_history() -> None:
     current = _maziwa_percentages(ContractType.ODD)
     results = scan_maziwa_markets({
         "R_75": (current, None, [1, 3, 5, 7], 1000),
     })
     assert len(results) == 1
-    assert results[0].status == "monitoring_not_qualified"
-    assert "prior 10-tick" in results[0].reason
+    assert results[0].status == "qualified_waiting_for_confirmation"
+    assert results[0].sample_size == 1000

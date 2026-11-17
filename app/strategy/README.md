@@ -80,11 +80,13 @@ operational monitoring, and Real execution tests are independently reviewed.
 
 `DIGITEVEN` and `DIGITODD` use the independent Maziwa/Dollar Printer state machine,
 not the OVER/UNDER Red/Green qualification pipeline. EVEN/ODD always uses a rolling
-1,000-tick window. The selected side must have at least 52% parity power and be rising
-compared with ten ticks earlier. Rank 1 (Green) must be at least 11.0%, rank 2 (Blue)
-at least 10.7%, and both must be on the selected parity. Ranks 9 (Yellow) and 10 (Red)
-must be on the opposing parity, with Red at most 9.1%. Equal percentage ranks are
-broken by most-recent occurrence.
+1,000-tick window. At least three digits on the selected side must exceed 10.5%, the
+highest-frequency digit (Green) must be on the selected side at 12.1% or higher, and
+the selected side must lead the opposing side by at least 1.5 percentage points. At
+least three opposing digits must be below 10%, and the lowest-frequency digit (Red)
+must be on the opposing side. Equal percentage ranks are broken by most-recent
+occurrence. After the setup qualifies, execution separately waits for three opposing
+ticks followed by the first selected-parity confirmation tick.
 
 After the filter is armed, at least three consecutive opposing-parity ticks must occur,
 followed immediately by the first selected-parity confirmation tick. No setup is
