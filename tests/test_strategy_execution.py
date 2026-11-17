@@ -109,3 +109,22 @@ def test_from_scan_result_digitodd_omits_barrier_in_proposal():
     proposal = execution._proposal(1)
     assert proposal["contract_type"] == "DIGITODD"
     assert "barrier" not in proposal
+
+
+def test_rise_fall_proposal_uses_one_tick_without_barrier():
+    execution = StrategyExecution(
+        "R_100", Group.OVER, barrier=0, duration=1, duration_unit="t",
+        contract_type_override="CALL",
+    )
+    proposal = execution._proposal(1)
+    assert proposal["contract_type"] == "CALL"
+    assert proposal["duration"] == 1
+    assert proposal["duration_unit"] == "t"
+    assert "barrier" not in proposal
+
+
+def test_execution_accepts_frontend_configured_trade_count():
+    execution = StrategyExecution("R_100", Group.OVER, barrier=3, max_buys=7)
+    assert execution.max_buys == 7
+    status = execution.status("configured")
+    assert status["max_buys"] == 7

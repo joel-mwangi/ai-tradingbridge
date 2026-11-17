@@ -200,3 +200,12 @@ The public `/deriv/live/market` WebSocket enriches Deriv history/tick responses 
 The frontend must render these backend values rather than independently recomputing the displayed digit percentages. They are TradeBridge-calculated observed-tick frequencies, **not official Deriv Digit Analytics percentages**, and are not evidence that any digit predicts the next outcome.
 
 The strategy adapter `app.strategy.market_frequency_adapter.to_percentage_snapshot` converts the backend's selected tick window into the existing fail-closed strategy feed format. A strategy started on the authenticated Demo WebSocket requests the selected history window, observes live ticks, and can execute one confirmed signal as up to three sequential Demo buys. Each buy waits for settlement; two consecutive losses stop the sequence before a third buy. The public market WebSocket remains observation-only.
+
+Rise/Fall strategy starts use `CALL` for Rise and `PUT` for Fall. The strategy seeds its
+price history, then requires EMA trend alignment, RSI confirmation, and a breakout above
+recent resistance or below recent support before requesting a proposal. Rise/Fall proposals
+may use tick duration (`duration_unit: "t"`, 1–10) or seconds (`duration_unit: "s"`, 1–60);
+barriers are not used, and the contract expiry is fixed at exactly 1 tick. This confirms
+market conditions but does not guarantee a profitable outcome.
+The frontend may set `max_buys` from 1 to 10 (default 3) for the sequential execution
+sequence. The backend still stops after two consecutive losses and enforces stake limits.

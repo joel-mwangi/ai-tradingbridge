@@ -259,10 +259,12 @@ async def _handle_strategy_start(
     barrier = control.get("barrier", 5)
     direction = control.get("direction")
     contract_type = control.get("contract_type", "DIGITOVER")
+    duration_unit = control.get("duration_unit", "t")
     trigger_source = control.get("trigger_source", "manual")
 
     _valid_contract_types = {
-        "DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"
+        "DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF",
+        "CALL", "PUT",
     }
 
     if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
@@ -272,10 +274,17 @@ async def _handle_strategy_start(
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_WINDOW", "message": "Strategy window_size must be 50, 100, 250, 500, or 1000 ticks."}})
         return
     if contract_type not in _valid_contract_types:
-        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF."}})
+        await websocket.send_json({"error": {"code": "INVALID_STRATEGY_CONTRACT_TYPE", "message": "Strategy contract_type must be one of DIGITOVER, DIGITUNDER, DIGITEVEN, DIGITODD, DIGITMATCH, DIGITDIFF, CALL, PUT."}})
         return
     if contract_type in ("DIGITEVEN", "DIGITODD"):
         window_size = 1000
+    if contract_type in ("CALL", "PUT"):
+        if duration != 1 or duration_unit != "t":
+            await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Rise/Fall contracts must use exactly 1 tick."}})
+            return
+    if contract_type not in ("CALL", "PUT") and duration_unit != "t":
+        await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use tick duration."}})
+        return
     if trigger_source not in ("manual", "scanner"):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_TRIGGER_SOURCE", "message": "Strategy trigger_source must be manual or scanner."}})
         return
@@ -288,8 +297,11 @@ async def _handle_strategy_start(
             await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Even/Odd contracts must not include a barrier."}})
             return
         barrier = 0  # internal placeholder, never sent to Deriv
-    elif type(barrier) is not int or barrier not in range(10):
+    elif contract_type not in ("CALL", "PUT") and (type(barrier) is not int or barrier not in range(10)):
         await websocket.send_json({"error": {"code": "INVALID_STRATEGY_BARRIER", "message": "Strategy barrier must be an integer digit from 0 to 9."}})
+        return
+    elif contract_type in ("CALL", "PUT") and "barrier" in control:
+        await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Rise/Fall contracts must not include a barrier."}})
         return
 
     # Direction is only required for OVER/UNDER contracts
@@ -302,11 +314,13 @@ async def _handle_strategy_start(
         stake = float(control.get("stake", os.getenv("TRADEBRIDGE_STRATEGY_STAKE", "1")))
         duration = control.get("duration", 1)
         currency = control.get("currency", os.getenv("TRADEBRIDGE_STRATEGY_CURRENCY", "USD"))
+        max_buys = control.get("max_buys", 3)
 
         if contract_type in ("DIGITOVER", "DIGITUNDER"):
             group = Group(direction)
             candidate_execution = StrategyExecution(
                 symbol, group, barrier, stake=stake, currency=currency, duration=duration,
+                max_buys=max_buys,
             )
         else:
             # EVEN/ODD/MATCHES/DIFFERS: use Group.OVER as placeholder, set override
@@ -320,6 +334,8 @@ async def _handle_strategy_start(
                 stake=stake,
                 currency=currency,
                 duration=duration,
+                duration_unit=duration_unit,
+                max_buys=max_buys,
                 contract_type_override=contract_type,
             )
 
@@ -355,6 +371,19 @@ async def _handle_strategy_start(
         return
 
     session.strategy_execution = candidate_execution
+    if contract_type in ("CALL", "PUT"):
+        try:
+            from app.strategy.rise_fall import RiseFallStrategy
+            session.rise_fall_strategy = RiseFallStrategy(
+                "rise" if contract_type == "CALL" else "fall",
+                minimum_ticks=control.get("minimum_ticks", 3),
+            )
+        except (TypeError, ValueError) as exc:
+            await websocket.send_json({"error": {"code": "STRATEGY_CONFIG", "message": str(exc)}})
+            session.strategy_execution = None
+            return
+    else:
+        session.rise_fall_strategy = None
     session.strategy_window_size = window_size
     session.parity_streak.clear()
     session.even_odd_trigger_digits.clear()
@@ -423,7 +452,7 @@ async def _validate_proposal(
         if session.product_api == "multipliers"
         else message.get("underlying_symbol", message.get("symbol"))
     )
-    allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF"}
+    allowed_contracts = {"DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD", "DIGITMATCH", "DIGITDIFF", "CALL", "PUT"}
     try:
         stake = 0 if isinstance(amount, bool) else float(amount)
     except (TypeError, ValueError):
@@ -448,8 +477,16 @@ async def _validate_proposal(
     if contract_type not in allowed_contracts or not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
         await websocket.send_json({"error": {"code": "INVALID_CONTRACT", "message": "Only contracts supported by the selected product connection and valid symbols are allowed."}})
         return False
-    if duration_unit != "t" or type(duration) is not int or not 1 <= duration <= 10:
+    allowed_units = ("t",)
+    max_duration = 10
+    if duration_unit not in allowed_units or type(duration) is not int or not 1 <= duration <= max_duration:
         await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Digit contracts must use 1–10 ticks."}})
+        return False
+    if contract_type in {"CALL", "PUT"} and duration != 1:
+        await websocket.send_json({"error": {"code": "INVALID_DURATION", "message": "Rise/Fall contracts must use exactly 1 tick."}})
+        return False
+    if contract_type in {"CALL", "PUT"} and "barrier" in message:
+        await websocket.send_json({"error": {"code": "INVALID_BARRIER", "message": "Rise/Fall contracts must not include a barrier."}})
         return False
     if contract_type in {"DIGITOVER", "DIGITUNDER", "DIGITMATCH", "DIGITDIFF"}:
         barrier = message.get("barrier")

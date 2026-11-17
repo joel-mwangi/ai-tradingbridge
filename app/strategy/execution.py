@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from app.strategy.digit_strategy import Group, barrier_valid_for
 
 MIN_STRATEGY_STAKE = 0.35
+MAX_STRATEGY_BUYS = 10
 
 if TYPE_CHECKING:
     from app.strategy.market_scanner import ScanResult
@@ -26,7 +27,7 @@ class ExecutionState(str, Enum):
 
 @dataclass
 class StrategyExecution:
-    """Coordinate at most three sequential demo buys for one strategy signal."""
+    """Coordinate a bounded sequence of buys for one strategy signal."""
 
     symbol: str
     group: Group
@@ -34,6 +35,7 @@ class StrategyExecution:
     stake: float = 1.0
     currency: str = "USD"
     duration: int = 1
+    duration_unit: str = "t"
     max_buys: int = 3
     state: ExecutionState = ExecutionState.IDLE
     buy_count: int = 0
@@ -60,10 +62,17 @@ class StrategyExecution:
             raise ValueError(f"Execution stake must be at least {MIN_STRATEGY_STAKE:.2f} and finite.")
         if not isinstance(self.currency, str) or not self.currency.strip():
             raise ValueError("Execution currency is required.")
-        if type(self.duration) is not int or not 1 <= self.duration <= 10:
-            raise ValueError("Execution duration must be between 1 and 10 ticks.")
-        if type(self.max_buys) is not int or self.max_buys != 3:
-            raise ValueError("Strategy execution must allow exactly three buys maximum.")
+        if self.contract_type_override in ("CALL", "PUT") and (
+            self.duration != 1 or self.duration_unit != "t"
+        ):
+            raise ValueError("Rise/Fall contracts must use exactly 1 tick.")
+        if self.duration_unit not in ("t", "s"):
+            raise ValueError("Execution duration unit must be 't' (ticks) or 's' (seconds).")
+        if type(self.duration) is not int or not 1 <= self.duration <= (10 if self.duration_unit == "t" else 60):
+            limit = 10 if self.duration_unit == "t" else 60
+            raise ValueError(f"Execution duration must be between 1 and {limit} {self.duration_unit} units.")
+        if type(self.max_buys) is not int or not 1 <= self.max_buys <= MAX_STRATEGY_BUYS:
+            raise ValueError(f"Strategy execution must allow between 1 and {MAX_STRATEGY_BUYS} buys.")
 
     @classmethod
     def from_scan_result(
@@ -98,6 +107,7 @@ class StrategyExecution:
             stake=stake,
             currency=currency,
             duration=duration,
+            duration_unit=getattr(scan_result.spec, "duration_unit", "t"),
             contract_type_override=override,
         )
 
@@ -237,12 +247,12 @@ class StrategyExecution:
             "contract_type": ct,
             "currency": self.currency.upper(),
             "duration": self.duration,
-            "duration_unit": "t",
+            "duration_unit": self.duration_unit,
             "underlying_symbol": self.symbol,
             "req_id": request_id,
         }
-        # EVEN and ODD: no barrier field
-        if ct in ("DIGITEVEN", "DIGITODD"):
+        # EVEN/ODD and Rise/Fall: no barrier field
+        if ct in ("DIGITEVEN", "DIGITODD", "CALL", "PUT"):
             pass  # omit barrier intentionally
         # MATCHES and DIFFERS: barrier is the target digit integer
         elif ct in ("DIGITMATCH", "DIGITDIFF"):

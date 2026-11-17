@@ -91,6 +91,7 @@ class TradingProxySession:
         # When True, the next begin_signal call on a EVEN/ODD/MATCHES/DIFFERS
         # execution fires immediately without waiting for the M15/M5/M1 pipeline.
         self.scanner_direct_execute: bool = False
+        self.rise_fall_strategy = None
 
     def next_strategy_request_id(self) -> int:
         request_id = secrets.randbelow(1_000_000) + 9_000_000
@@ -288,6 +289,7 @@ class TradingProxySession:
         self.settlement_fallback_deadline = None
         self.parity_streak.clear()
         self.scanner_direct_execute = False
+        self.rise_fall_strategy = None
 
     async def strategy_response_timeout_monitor(self, websocket: WebSocket, upstream: Any) -> None:
         while True:

@@ -255,6 +255,11 @@ async def handle_provider_messages(
                     history.get("times") or [],
                     session.strategy_pip_size,
                 )
+                if session.rise_fall_strategy is not None:
+                    session.rise_fall_strategy.seed_ticks(
+                        history.get("prices") or [],
+                        history.get("times") or [],
+                    )
                 provider_message["digit_frequency"] = session.strategy_frequency.snapshot(history_symbol, time.time())
 
         # --- Live tick routing ---
@@ -272,6 +277,29 @@ async def handle_provider_messages(
                         tick.get("quote"), tick.get("epoch"), session.strategy_pip_size, None,
                     )
                     provider_message["digit_frequency"] = session.strategy_frequency.snapshot(symbol, time.time())
+                    # Rise/Fall uses raw price momentum rather than the digit
+                    # frequency qualification pipeline.
+                    if (
+                        session.rise_fall_strategy is not None
+                        and session.strategy_execution is not None
+                        and session.strategy_execution.state is ExecutionState.IDLE
+                    ):
+                        rise_fall_signal = session.rise_fall_strategy.on_tick(
+                            tick.get("quote"), tick.get("epoch"),
+                        )
+                        if rise_fall_signal is not None:
+                            proposal_request_id = session.next_strategy_request_id()
+                            proposal_message = session.strategy_execution.begin_signal(proposal_request_id)
+                            if proposal_message is not None:
+                                session.pending_strategy_proposals.add(proposal_request_id)
+                                session.register_strategy_deadline(proposal_request_id, "proposal")
+                                await upstream.send(json.dumps(proposal_message, separators=(",", ":")))
+                                await websocket.send_json(session.rise_fall_strategy.status(
+                                    f"Confirmed {rise_fall_signal} signal from {session.rise_fall_strategy.direction} price momentum."
+                                ))
+                                await websocket.send_json(session.strategy_execution.status(
+                                    "Rise/Fall signal received; requesting the first automatic buy."
+                                ))
                     active_strategy = (
                         session.strategy_feed.session is not None
                         and session.strategy_feed.session.state.value not in {"idle", "stopped", "blocked"}
