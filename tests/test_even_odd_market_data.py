@@ -77,6 +77,7 @@ def test_even_odd_endpoints_require_authentication():
     assert client.get("/even-odd/status").status_code == 401
     assert client.post("/even-odd/analyze", json={"digits": [1, 2]}).status_code == 401
     assert client.post("/even-odd/collect", json={"symbol": "R_50"}).status_code == 401
+    assert client.get("/even-odd/history?symbol=R_50").status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -328,3 +329,59 @@ async def test_collector_retains_valid_ticks_when_timeout_occurs(monkeypatch):
     with pytest.raises(TickCollectionError) as error:
         await collect_ticks("R_50", 10, 5)
     assert len(error.value.ticks) == 4
+
+
+
+def test_history_endpoint_returns_bounded_chronological_snapshot(monkeypatch):
+    snapshot = {
+        "snapshot_max_id": 42,
+        "rows": [
+            {
+                "id": 10,
+                "collection_id": "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10",
+                "sequence_no": 1,
+                "market_symbol": "R_50",
+                "tick_epoch": 1760000000,
+                "quote": "123.450",
+                "pip_size": 3,
+                "last_digit": 0,
+                "parity": "even",
+                "deriv_stream_id": "stream-123",
+                "received_at": "2026-11-19T00:00:01+00:00",
+            }
+        ],
+    }
+    captured = {}
+
+    async def fake_load_historical_ticks(**kwargs):
+        captured.update(kwargs)
+        return snapshot
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_historical_ticks)
+
+    response = client.get(
+        "/even-odd/history?symbol=R_50&limit=100&from_epoch=1760000000",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["returned_ticks"] == 1
+    assert payload["snapshot_max_id"] == 42
+    assert payload["truncated"] is False
+    assert payload["rows"][0]["last_digit"] == 0
+    assert captured == {
+        "symbol": "R_50",
+        "limit": 100,
+        "from_epoch": 1760000000,
+        "to_epoch": None,
+        "collection_id": None,
+    }
+
+
+def test_history_endpoint_rejects_inverted_epoch_range():
+    response = client.get(
+        "/even-odd/history?symbol=R_50&from_epoch=1760000002&to_epoch=1760000001",
+        headers=auth(),
+    )
+    assert response.status_code == 422
