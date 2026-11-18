@@ -772,13 +772,12 @@ def test_forecast_endpoint_rejects_retired_models(monkeypatch):
 
 
 
-def entry_check_payload():
+def entry_check_payload(rows):
     return {
         "observations": [
             {
-                "tick_epoch": epoch,
-                "sample_size": 1200,
-                "data_age_seconds": "1.0",
+                "tick_row_id": row["id"],
+                "tick_epoch": row["tick_epoch"],
                 "even_probability": "0.80",
                 "even_profit_if_win": "0.80",
                 "even_loss_if_lose": "1.00",
@@ -787,10 +786,10 @@ def entry_check_payload():
                 "model_id": "00000000-0000-0000-0000-000000000333",
                 "model_version": "v1",
             }
-            for epoch in (100, 105, 110)
+            for row in rows[1:]
         ],
         "policy": {
-            "minimum_sample_size": 1000,
+            "minimum_sample_size": 4,
             "maximum_data_age_seconds": "3.0",
             "required_confirmations": 3,
             "maximum_confirmation_gap_seconds": "10.0",
@@ -806,6 +805,7 @@ def entry_model(*, status="validated", interval_validated=True, version="v1"):
         "market_symbol": "R_50",
         "model_version": version,
         "status": status,
+        "model_artifact": {"feature_names": ["w4_even_rate"]},
         "metrics": {
             "walk_forward": {
                 "calibration_intervals": [{
@@ -823,17 +823,24 @@ def entry_model(*, status="validated", interval_validated=True, version="v1"):
 
 
 def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_pass(monkeypatch):
+    _, rows = forecast_fixture()
+
     async def fake_get_model(model_id):
         assert model_id == "00000000-0000-0000-0000-000000000333"
         return entry_model()
 
+    async def fake_load_history(**kwargs):
+        assert kwargs == {"symbol": "R_50", "limit": 5000}
+        return {"rows": rows, "snapshot_max_id": 4}
+
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
-        json=entry_check_payload(),
+        json=entry_check_payload(rows),
     )
     assert response.status_code == 200
     payload = response.json()
@@ -845,16 +852,22 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
 
 
 def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkeypatch):
+    _, rows = forecast_fixture()
+
     async def fake_candidate_model(model_id):
         return entry_model(status="candidate")
 
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 4}
+
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
-        json=entry_check_payload(),
+        json=entry_check_payload(rows),
     )
     assert response.status_code == 200
     assert response.json()["status"] == "wait"
@@ -866,7 +879,7 @@ def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkey
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
-        json=entry_check_payload(),
+        json=entry_check_payload(rows),
     )
     assert response.status_code == 200
     assert response.json()["status"] == "wait"
@@ -879,9 +892,10 @@ def test_hybrid_entry_endpoint_rejects_stale_model_version(monkeypatch):
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_old_model)
 
+    _, rows = forecast_fixture()
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
-        json=entry_check_payload(),
+        json=entry_check_payload(rows),
     )
     assert response.status_code == 409
