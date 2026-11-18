@@ -43,6 +43,9 @@ def observation(
         model_id="model-1",
         model_version=version,
         model_validated=validated,
+        uncertainty_method="block_bootstrap",
+        uncertainty_level=0.9,
+        uncertainty_validated=True,
     )
 
 
@@ -145,3 +148,21 @@ def test_hybrid_entry_rejects_invalid_probability_interval_and_boolean_values():
             ],
             policy=policy(),
         )
+
+
+
+def test_hybrid_entry_waits_for_unvalidated_probability_uncertainty():
+    observations = [
+        observation(100),
+        observation(105),
+        observation(110),
+    ]
+    observations[1] = EntryObservation(
+        **{
+            **observations[1].__dict__,
+            "uncertainty_validated": False,
+        }
+    )
+    result = evaluate_hybrid_entry(observations, policy=policy())
+    assert result["status"] == "wait"
+    assert "uncertainty bounds" in result["reason"]
