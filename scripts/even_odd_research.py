@@ -98,7 +98,7 @@ async def _run(args: argparse.Namespace) -> int:
                 max_epochs=args.max_epochs,
             )
 
-        model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
             "test_metrics": experiment["test_metrics"],
             "constant_baseline_metrics": experiment["constant_baseline_metrics"],
