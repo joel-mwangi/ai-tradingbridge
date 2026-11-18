@@ -87,6 +87,7 @@ async def persist_collection(
     symbol: str,
     requested_ticks: int,
     ticks: list[dict[str, Any]],
+    started_at: datetime,
 ) -> str:
     """Persist one collected sample and return its collection UUID.
 
@@ -108,6 +109,7 @@ async def persist_collection(
                     "status": "collecting",
                     "requested_ticks": requested_ticks,
                     "received_ticks": 0,
+                    "started_at": started_at.isoformat(),
                     "metadata": {"collector": "dedicated_deriv_public_websocket"},
                 },
             )
@@ -129,7 +131,7 @@ async def persist_collection(
                     "pip_size": tick["pip_size"],
                     "last_digit": tick["last_digit"],
                     "parity": tick["parity"],
-                    "deriv_tick_id": tick.get("tick_id"),
+                    "deriv_stream_id": tick.get("stream_id"),
                     "received_at": tick["received_at"],
                 }
                 for index, tick in enumerate(ticks, start=1)
