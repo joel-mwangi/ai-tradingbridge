@@ -316,3 +316,140 @@ async def load_historical_ticks(
         raise EvenOddStorageError(
             "Could not load historical ticks from the dedicated database."
         ) from exc
+
+
+async def start_research_run(
+    *,
+    symbol: str,
+    snapshot_max_id: int | None,
+    dataset_rows: int,
+    quality_report: dict[str, Any],
+) -> str:
+    """Create a durable research-run record before model fitting begins."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/even_odd_research_runs",
+                headers=_headers(key, "return=representation"),
+                json={
+                    "market_symbol": symbol,
+                    "snapshot_max_id": snapshot_max_id,
+                    "dataset_rows": dataset_rows,
+                    "status": "running",
+                    "quality_report": quality_report,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                raise EvenOddStorageError("Research run record was not returned.")
+            return str(UUID(str(rows[0]["id"])))
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError("Could not create the research run record.") from exc
+
+
+async def save_candidate_model(
+    *,
+    symbol: str,
+    model_version: str,
+    model_artifact: dict[str, Any],
+    metrics: dict[str, Any],
+    snapshot_max_id: int,
+    partition_sizes: dict[str, int],
+) -> str:
+    """Persist a trained model as a non-authorized candidate, never as validated."""
+    required_partitions = ("train", "validation", "calibration", "test")
+    if any(type(partition_sizes.get(name)) is not int or partition_sizes[name] <= 0
+           for name in required_partitions):
+        raise ValueError("All model research partitions must contain positive row counts.")
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/even_odd_model_registry",
+                headers=_headers(key, "return=representation"),
+                json={
+                    "market_symbol": symbol,
+                    "model_name": str(model_artifact.get("model_type", "unknown")),
+                    "model_version": model_version,
+                    "status": "candidate",
+                    "execution_authorized": False,
+                    "model_artifact": model_artifact,
+                    "metrics": metrics,
+                    "dataset_snapshot_max_id": snapshot_max_id,
+                    "training_rows": partition_sizes["train"],
+                    "validation_rows": partition_sizes["validation"],
+                    "calibration_rows": partition_sizes["calibration"],
+                    "test_rows": partition_sizes["test"],
+                },
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                raise EvenOddStorageError("Candidate model record was not returned.")
+            return str(UUID(str(rows[0]["id"])))
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError("Could not persist the candidate model.") from exc
+
+
+async def complete_research_run(
+    *,
+    research_run_id: str,
+    model_id: str,
+    partition_sizes: dict[str, int],
+    evaluation: dict[str, Any],
+) -> None:
+    """Mark a research run completed only after its candidate model is saved."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.patch(
+                f"{url}/rest/v1/even_odd_research_runs",
+                params={"id": f"eq.{research_run_id}"},
+                headers=_headers(key, "return=representation"),
+                json={
+                    "status": "completed",
+                    "model_id": model_id,
+                    "partition_sizes": partition_sizes,
+                    "evaluation": evaluation,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                raise EvenOddStorageError("Research run completion did not update a row.")
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError("Could not complete the research run record.") from exc
+
+
+async def fail_research_run(*, research_run_id: str) -> None:
+    """Best-effort failure transition; never stores raw exception or credential data."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.patch(
+                f"{url}/rest/v1/even_odd_research_runs",
+                params={"id": f"eq.{research_run_id}"},
+                headers=_headers(key, "return=minimal"),
+                json={
+                    "status": "failed",
+                    "error_message": "Research run failed. Inspect local research logs.",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            response.raise_for_status()
+    except (httpx.HTTPError, ValueError, TypeError, EvenOddStorageError):
+        return
