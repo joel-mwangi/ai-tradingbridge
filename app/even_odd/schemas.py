@@ -73,7 +73,7 @@ class EntryObservationRequest(BaseModel):
     even_loss_if_lose: Decimal = Field(gt=0)
     odd_profit_if_win: Decimal = Field(gt=0)
     odd_loss_if_lose: Decimal = Field(gt=0)
-    model_id: str = Field(min_length=1, max_length=128)
+    model_id: UUID
     model_version: str = Field(min_length=1, max_length=128)
 
 
