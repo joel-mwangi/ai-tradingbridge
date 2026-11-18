@@ -772,6 +772,7 @@ async def plan_adaptive_sequence(
         forecast_details = []
         previous_id = 0
         previous_epoch = 0
+        previous_position = None
         even_quote = payout_quote["even"]
         odd_quote = payout_quote["odd"]
 
@@ -788,9 +789,16 @@ async def plan_adaptive_sequence(
                 raise HTTPException(status_code=409, detail="Sequence observation is future-dated.")
             previous_id = item.tick_row_id
             previous_epoch = item.tick_epoch
+            current_position = row_positions[item.tick_row_id]
+            if previous_position is not None and current_position != previous_position + 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Sequence observations must reference consecutive persisted market ticks.",
+                )
+            previous_position = current_position
 
             data_age_seconds = max(0.0, now_epoch - item.tick_epoch)
-            target_index = row_positions[item.tick_row_id]
+            target_index = current_position
             prior_rows = market_rows[:target_index]
             if len(prior_rows) < max(windows):
                 raise HTTPException(status_code=409, detail="Not enough history precedes a sequence observation.")
@@ -1072,6 +1080,7 @@ async def check_hybrid_entry(
         model_validated = model.get("status") == "validated"
 
         observations = []
+        previous_position = None
         for item in request.observations:
             persisted_tick = rows_by_id.get(item.tick_row_id)
             if (
@@ -1087,11 +1096,18 @@ async def check_hybrid_entry(
                     status_code=409,
                     detail="Entry observation contains a future-dated market tick.",
                 )
+            current_position = row_positions[item.tick_row_id]
+            if previous_position is not None and current_position != previous_position + 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Entry confirmations must reference consecutive persisted market ticks.",
+                )
+            previous_position = current_position
             data_age_seconds = max(
                 0.0,
                 now_epoch - persisted_tick["tick_epoch"],
             )
-            target_index = row_positions[item.tick_row_id]
+            target_index = current_position
             prior_rows = market_rows[:target_index]
             if len(prior_rows) < max(windows):
                 raise HTTPException(
