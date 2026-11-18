@@ -55,8 +55,8 @@ blocks. Results are compared against the constant 50% baseline and simple
 rolling-frequency baselines. A moving-block bootstrap estimates the
 baseline-minus-model log-loss improvement interval and an approximate
 one-sided bootstrap tail probability. Statistical support is reported only
-when the lower interval bound is positive and every walk-forward fold has
-positive mean improvement. This is a conservative research gate, not a
+when at least five walk-forward folds are available, the lower interval bound
+is positive, and every fold has positive mean improvement. This is a conservative research gate, not a
 guarantee of future performance. Performance must also be stable across
 multiple markets and time periods, not concentrated in one favourable segment.
 
