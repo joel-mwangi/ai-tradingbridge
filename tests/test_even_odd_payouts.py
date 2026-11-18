@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -52,7 +53,7 @@ class FakeWebSocket:
                 "ask_price": ask_price,
                 "payout": payout,
                 "spot": 100.0,
-                "spot_time": int(__import__("datetime").datetime.now(__import__("datetime").timezone.utc).timestamp()),
+                "spot_time": int(datetime.now(timezone.utc).timestamp()),
             },
         })
 
