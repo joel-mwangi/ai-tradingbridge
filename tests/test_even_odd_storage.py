@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from app.even_odd.storage import (
@@ -98,7 +99,7 @@ async def test_failed_collection_update_sets_terminal_status_without_sensitive_d
 async def test_failure_status_update_is_best_effort_and_does_not_raise():
     class Response:
         def raise_for_status(self):
-            raise RuntimeError("unexpected test response error")
+            raise httpx.HTTPError("database unavailable")
 
     class Client:
         async def patch(self, *args, **kwargs):
