@@ -96,3 +96,27 @@ dedicated Even/Odd database, performs the quality audit, then writes a JSON
 research report to stdout. The default 50/100/250/500/1000 feature windows
 require a sufficiently large historical sample; a small sample should fail
 rather than silently train on inadequate history.
+
+
+## Hybrid entry confirmation
+
+The entry detector is a separate, deterministic gate. It consumes:
+- a model probability interval for Even (and the complementary lower bound for Odd);
+- the model ID/version and an explicit validated flag;
+- current data age and sample size;
+- side-specific payout profit and loss;
+- multiple strictly chronological forecast snapshots.
+
+It requires the configured number of consecutive confirmations to agree on
+the same side, remain within the freshness and time-gap limits, and exceed
+both the minimum conservative probability edge over the payout-derived
+break-even probability and the minimum conservative expected value.
+
+The detector returns either `wait` or a non-executable `candidate`. It never
+submits an order. Thresholds are explicit policy inputs rather than hidden
+hard-coded claims of profitability. Probability intervals must come from a
+separately validated uncertainty method; the current logistic model only
+produces point probabilities plus a calibration mapping, so it cannot yet
+satisfy this entry gate by itself. That uncertainty-estimation component
+remains a prerequisite before entry candidates can be generated from the
+trained model.
