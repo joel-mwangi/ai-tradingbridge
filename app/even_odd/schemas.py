@@ -28,6 +28,11 @@ class CreateSessionRequest(BaseModel):
     max_consecutive_losses: StrictInt = Field(default=2, ge=1, le=2)
 
 
+class SequencePlanObservationRequest(BaseModel):
+    tick_row_id: StrictInt = Field(gt=0)
+    tick_epoch: StrictInt = Field(gt=0)
+
+
 class StartSequenceRequest(BaseModel):
     session_id: UUID
     model_id: UUID
@@ -75,11 +80,6 @@ class EvaluateEntryRequest(BaseModel):
     session_id: UUID
     observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
 
-
-
-class SequencePlanObservationRequest(BaseModel):
-    tick_row_id: StrictInt = Field(gt=0)
-    tick_epoch: StrictInt = Field(gt=0)
 
 
 class PlanSequenceRequest(BaseModel):
