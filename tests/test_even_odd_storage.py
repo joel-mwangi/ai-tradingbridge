@@ -1,6 +1,11 @@
 import pytest
 
-from app.even_odd.storage import EvenOddStorageError, _configuration, storage_is_configured
+from app.even_odd.storage import (
+    EvenOddStorageError,
+    _configuration,
+    _headers,
+    storage_is_configured,
+)
 
 
 def test_storage_requires_dedicated_environment_variables(monkeypatch):
@@ -35,3 +40,17 @@ def test_storage_supports_legacy_dedicated_service_role_key(monkeypatch):
         "https://dedicated.example.supabase.co",
         "dedicated-legacy-secret",
     )
+
+
+def test_opaque_secret_key_is_sent_only_as_apikey():
+    headers = _headers("sb_secret_example")
+
+    assert headers["apikey"] == "sb_secret_example"
+    assert "Authorization" not in headers
+
+
+def test_legacy_service_role_jwt_uses_bearer_and_apikey():
+    headers = _headers("legacy-service-role-jwt")
+
+    assert headers["apikey"] == "legacy-service-role-jwt"
+    assert headers["Authorization"] == "Bearer legacy-service-role-jwt"
