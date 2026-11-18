@@ -464,7 +464,7 @@ def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
 
     async def fake_plan(request, _):
         assert str(request.session_id) == "00000000-0000-0000-0000-000000000444"
-        assert len(request.observations) == 1
+        assert len(request.observations) == 3
         return {
             "status": "plan",
             "planned_trades": 3,
@@ -497,7 +497,11 @@ def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
             "session_id": "00000000-0000-0000-0000-000000000444",
             "model_id": "00000000-0000-0000-0000-000000000333",
             "model_version": "v1",
-            "observations": [{"tick_row_id": 24, "tick_epoch": 1_800_000_000}],
+            "observations": [
+                {"tick_row_id": 22, "tick_epoch": 1_799_999_998},
+                {"tick_row_id": 23, "tick_epoch": 1_799_999_999},
+                {"tick_row_id": 24, "tick_epoch": 1_800_000_000},
+            ],
             # These legacy fields must not control the server's plan.
             "planned_trades": 7,
             "expected_value_snapshot": {"trade_1": 999},
@@ -1337,6 +1341,10 @@ def test_start_sequence_schema_uses_persisted_observation_references():
         "session_id": "00000000-0000-0000-0000-000000000444",
         "model_id": "00000000-0000-0000-0000-000000000333",
         "model_version": "v1",
-        "observations": [{"tick_row_id": 24, "tick_epoch": 1_800_000_000}],
+        "observations": [
+            {"tick_row_id": 22, "tick_epoch": 1_799_999_998},
+            {"tick_row_id": 23, "tick_epoch": 1_799_999_999},
+            {"tick_row_id": 24, "tick_epoch": 1_800_000_000},
+        ],
     })
-    assert request.observations[0].tick_row_id == 24
+    assert request.observations[0].tick_row_id == 22
