@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from math import ceil, floor, isfinite
+from math import ceil, floor, isfinite, log
 from typing import Sequence
 
 
