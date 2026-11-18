@@ -37,7 +37,7 @@ class StartSequenceRequest(BaseModel):
     session_id: UUID
     model_id: UUID
     model_version: str = Field(min_length=1, max_length=128)
-    observations: list[SequencePlanObservationRequest] = Field(min_length=1, max_length=7)
+    observations: list[SequencePlanObservationRequest] = Field(min_length=3, max_length=7)
 
 
 class RevalidationEvidence(BaseModel):
