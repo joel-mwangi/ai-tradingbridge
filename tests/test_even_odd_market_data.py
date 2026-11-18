@@ -966,3 +966,33 @@ def test_hybrid_entry_endpoint_rejects_tick_ids_not_in_persisted_history(monkeyp
         json=payload,
     )
     assert response.status_code == 409
+
+
+
+def test_settlement_revalidation_flags_reject_string_boolean_coercion():
+    response = client.post(
+        "/even-odd/settlements",
+        headers=auth(),
+        json={
+            "sequence_id": "00000000-0000-0000-0000-000000000555",
+            "trade_number": 1,
+            "side": "even",
+            "stake": "1.00",
+            "profit_if_win": "0.80",
+            "loss_if_lose": "1.00",
+            "even_probability": "0.80",
+            "lower_even_probability": "0.75",
+            "upper_even_probability": "0.85",
+            "conservative_expected_value": "0.35",
+            "revalidation": {
+                "model_validated": "true",
+                "uncertainty_validated": True,
+                "signal_valid": True,
+                "data_fresh": True,
+                "risk_budget_available": True,
+            },
+            "outcome": "win",
+            "realized_profit": "0.80",
+        },
+    )
+    assert response.status_code == 422
