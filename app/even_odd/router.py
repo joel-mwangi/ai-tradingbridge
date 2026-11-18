@@ -13,13 +13,23 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.even_odd.collector import TickCollectionError, collect_ticks
 from app.even_odd.data_quality import inspect_historical_ticks
 from app.even_odd.digit_engine import analyze_digits
-from app.even_odd.schemas import AnalyzeDigitsRequest, CollectTicksRequest
+from app.even_odd.schemas import (
+    AnalyzeDigitsRequest,
+    CollectTicksRequest,
+    CreateSessionRequest,
+    RecordTradeSettlementRequest,
+    StartSequenceRequest,
+)
 from app.even_odd.storage import (
+    EvenOddPolicyError,
     EvenOddStorageError,
+    create_even_odd_session,
     fail_collection_run,
     finish_collection_run,
     load_historical_ticks,
+    record_even_odd_settlement,
     start_collection_run,
+    start_even_odd_sequence,
     storage_is_configured,
 )
 
@@ -60,6 +70,9 @@ def even_odd_status(
         "storage_configured": storage_is_configured(),
         "execution_enabled": False,
         "predictive_model_available": False,
+        "research_pipeline_available": True,
+        "persistent_session_management_available": True,
+        "order_execution_enabled": False,
         "warning": "Descriptive market analysis only; no trading signal is produced.",
     }
 
@@ -302,4 +315,110 @@ async def audit_even_odd_history(
         "snapshot_max_id": snapshot["snapshot_max_id"],
         "limit_reached": len(snapshot["rows"]) == limit,
         "quality": quality,
+    }
+
+
+
+@router.post("/sessions")
+async def create_session(
+    request: CreateSessionRequest,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Create a fixed-stake session; this endpoint does not place an order."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        session = await create_even_odd_session(
+            symbol=request.symbol,
+            account_mode=request.account_mode,
+            currency=request.currency,
+            fixed_stake=str(request.fixed_stake),
+            max_session_loss=(
+                str(request.max_session_loss)
+                if request.max_session_loss is not None
+                else None
+            ),
+            max_trades_per_session=request.max_trades_per_session,
+            max_consecutive_losses=request.max_consecutive_losses,
+        )
+    except EvenOddPolicyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not create session.") from exc
+
+    return {
+        "session": session,
+        "order_execution_enabled": False,
+    }
+
+
+@router.post("/sequences")
+async def start_sequence(
+    request: StartSequenceRequest,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Start a sequence only when the database confirms a validated model."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        result = await start_even_odd_sequence(
+            session_id=str(request.session_id),
+            model_id=str(request.model_id),
+            model_version=request.model_version,
+            planned_trades=request.planned_trades,
+            expected_value_snapshot=request.expected_value_snapshot,
+        )
+    except EvenOddPolicyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not start sequence.") from exc
+
+    return {
+        **result,
+        "order_execution_enabled": False,
+    }
+
+
+@router.post("/settlements")
+async def record_trade_settlement(
+    request: RecordTradeSettlementRequest,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Record a settled trade and atomically enforce sequence/session limits."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        result = await record_even_odd_settlement(
+            sequence_id=str(request.sequence_id),
+            trade_number=request.trade_number,
+            side=request.side,
+            stake=str(request.stake),
+            profit_if_win=str(request.profit_if_win),
+            loss_if_lose=str(request.loss_if_lose),
+            even_probability=str(request.even_probability),
+            lower_even_probability=str(request.lower_even_probability),
+            upper_even_probability=str(request.upper_even_probability),
+            conservative_expected_value=str(request.conservative_expected_value),
+            revalidation=request.revalidation.model_dump(mode="json"),
+            outcome=request.outcome,
+            realized_profit=str(request.realized_profit),
+            external_contract_id=request.external_contract_id,
+        )
+    except EvenOddPolicyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not record settlement.") from exc
+
+    return {
+        **result,
+        "order_execution_enabled": False,
     }
