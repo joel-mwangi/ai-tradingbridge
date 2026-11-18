@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
+from app.even_odd.data_quality import inspect_historical_ticks
 from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.schemas import AnalyzeDigitsRequest, CollectTicksRequest
 from app.even_odd.storage import (
@@ -252,4 +253,53 @@ async def get_even_odd_history(
             "Historical observations are research data, not proof of predictive "
             "edge. Overlapping collection windows may contain repeated market ticks."
         ),
+    }
+
+
+
+@router.get("/quality")
+async def audit_even_odd_history(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    from_epoch: int | None = Query(default=None, ge=1),
+    to_epoch: int | None = Query(default=None, ge=1),
+    collection_id: UUID | None = None,
+) -> dict:
+    """Audit structural integrity of a bounded historical market-data snapshot."""
+    if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
+        raise HTTPException(
+            status_code=422,
+            detail="from_epoch cannot exceed to_epoch.",
+        )
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        snapshot = await load_historical_ticks(
+            symbol=symbol,
+            limit=limit,
+            from_epoch=from_epoch,
+            to_epoch=to_epoch,
+            collection_id=str(collection_id) if collection_id else None,
+        )
+        quality = inspect_historical_ticks(
+            snapshot["rows"],
+            expected_symbol=symbol,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not load historical ticks for quality auditing.",
+        ) from exc
+
+    return {
+        "symbol": symbol,
+        "snapshot_max_id": snapshot["snapshot_max_id"],
+        "limit_reached": len(snapshot["rows"]) == limit,
+        "quality": quality,
     }
