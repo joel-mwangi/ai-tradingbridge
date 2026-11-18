@@ -80,7 +80,8 @@ The request also supplies an explicit entry policy:
 - minimum conservative expected value.
 
 A `candidate` response means all configured gates passed. It is not an order
-instruction. A missing/invalid model or uncertainty interval, stale data,
+instruction. Do not use caller-supplied payout values for execution until a
+server-side Deriv proposal-quote integration verifies them. A missing/invalid model or uncertainty interval, stale data,
 invalid tick reference, unstable side, insufficient payout-adjusted EV, or
 failed confirmation returns `wait` or an HTTP error.
 
