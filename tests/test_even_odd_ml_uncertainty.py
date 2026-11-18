@@ -5,6 +5,7 @@ import pytest
 from app.even_odd.ml.uncertainty import (
     UncertaintyPolicy,
     estimate_local_probability_interval,
+    select_probability_interval,
 )
 
 
@@ -105,3 +106,40 @@ def test_uncertainty_rejects_duplicate_target_indices_and_bad_probabilities():
             make_predictions(),
             target_probability=float("nan"),
         )
+
+
+
+def test_select_probability_interval_requires_validated_nearby_band():
+    intervals = [
+        {
+            "validated": True,
+            "target_probability": 0.6,
+            "probability_bandwidth": 0.1,
+            "lower_probability": 0.52,
+            "upper_probability": 0.68,
+            "method": "block-bootstrap",
+            "confidence_level": 0.9,
+        },
+        {
+            "validated": False,
+            "target_probability": 0.8,
+            "probability_bandwidth": 0.1,
+            "lower_probability": 0.7,
+            "upper_probability": 0.9,
+        },
+    ]
+    selected = select_probability_interval(intervals, target_probability=0.65)
+    assert selected["validated"] is True
+    assert selected["lower_probability"] == 0.52
+
+    outside = select_probability_interval(intervals, target_probability=0.9)
+    assert outside["validated"] is False
+    assert outside["lower_probability"] is None
+
+
+def test_select_probability_interval_refuses_when_no_validated_interval_exists():
+    result = select_probability_interval(
+        [{"validated": False, "target_probability": 0.5}],
+        target_probability=0.5,
+    )
+    assert result["validated"] is False
