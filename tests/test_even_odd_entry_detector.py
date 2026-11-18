@@ -31,6 +31,7 @@ def observation(
     version="v1",
 ):
     return EntryObservation(
+        tick_row_id=epoch,
         tick_epoch=epoch,
         sample_size=sample,
         data_age_seconds=age,
