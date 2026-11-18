@@ -1,5 +1,4 @@
 """Authenticated API for the independent Even/Odd Lab data domain."""
-
 from __future__ import annotations
 
 import hmac
@@ -15,7 +14,9 @@ from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.schemas import AnalyzeDigitsRequest, CollectTicksRequest
 from app.even_odd.storage import (
     EvenOddStorageError,
-    persist_collection,
+    fail_collection_run,
+    finish_collection_run,
+    start_collection_run,
     storage_is_configured,
 )
 
@@ -81,7 +82,7 @@ async def collect_even_odd_market_ticks(
     request: CollectTicksRequest,
     _: Annotated[None, Depends(require_even_odd_api_token)],
 ) -> dict:
-    """Collect a bounded Deriv sample and persist it to the dedicated database."""
+    """Create an audit record, collect ticks, then persist a terminal run state."""
     if not storage_is_configured():
         raise HTTPException(
             status_code=503,
@@ -90,27 +91,93 @@ async def collect_even_odd_market_ticks(
 
     collection_started_at = datetime.now(timezone.utc)
     try:
+        collection_id = await start_collection_run(
+            symbol=request.symbol,
+            requested_ticks=request.tick_count,
+            started_at=collection_started_at,
+        )
+    except EvenOddStorageError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not create the collection audit record.",
+        ) from exc
+
+    try:
         ticks = await collect_ticks(
             symbol=request.symbol,
             tick_count=request.tick_count,
             timeout_seconds=request.timeout_seconds,
         )
     except ValueError as exc:
+        await fail_collection_run(
+            collection_id=collection_id,
+            received_ticks=0,
+            error_message="Invalid collection request.",
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TickCollectionError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        partial_ticks = exc.ticks
+        if partial_ticks:
+            try:
+                await finish_collection_run(
+                    collection_id=collection_id,
+                    symbol=request.symbol,
+                    requested_ticks=request.tick_count,
+                    ticks=partial_ticks,
+                    status="partial",
+                    error_message=str(exc),
+                )
+            except EvenOddStorageError as storage_exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "message": "Collection failed and partial ticks could not be persisted.",
+                        "collection_id": collection_id,
+                        "received_ticks": len(partial_ticks),
+                    },
+                ) from storage_exc
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": str(exc),
+                    "collection_id": collection_id,
+                    "status": "partial",
+                    "received_ticks": len(partial_ticks),
+                },
+            ) from exc
+
+        await fail_collection_run(
+            collection_id=collection_id,
+            received_ticks=0,
+            error_message=str(exc),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": str(exc),
+                "collection_id": collection_id,
+                "status": "failed",
+                "received_ticks": 0,
+            },
+        ) from exc
 
     try:
-        collection_id = await persist_collection(
+        await finish_collection_run(
+            collection_id=collection_id,
             symbol=request.symbol,
             requested_ticks=request.tick_count,
             ticks=ticks,
-            started_at=collection_started_at,
+            status="completed",
         )
     except EvenOddStorageError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Ticks were collected but could not be saved to the dedicated Even/Odd database.",
+            detail={
+                "message": "Ticks were collected but could not be finalized in the dedicated database.",
+                "collection_id": collection_id,
+                "status": "failed_or_unconfirmed",
+                "received_ticks": len(ticks),
+            },
         ) from exc
 
     digits = [tick["last_digit"] for tick in ticks]
@@ -122,7 +189,8 @@ async def collect_even_odd_market_ticks(
         "persisted": True,
         "requested_ticks": request.tick_count,
         "returned_ticks": len(ticks),
-        "complete": len(ticks) == request.tick_count,
+        "complete": True,
+        "status": "completed",
         "ticks": ticks,
         "analysis": analyze_digits(digits),
         "predictive_edge_established": False,
