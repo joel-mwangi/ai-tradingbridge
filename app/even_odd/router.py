@@ -29,6 +29,8 @@ from app.even_odd.storage import (
     get_even_odd_sequence_state,
     get_even_odd_session_state,
     load_historical_ticks,
+    list_even_odd_models,
+    list_even_odd_research_runs,
     record_even_odd_settlement,
     start_collection_run,
     start_even_odd_sequence,
@@ -461,3 +463,46 @@ async def get_sequence_state(
     if result is None:
         raise HTTPException(status_code=404, detail="Sequence not found.")
     return result
+
+
+
+@router.get("/models")
+async def list_models(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    """List candidate/validated model metadata without returning model artifacts."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        models = await list_even_odd_models(symbol=symbol, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not list models.") from exc
+    return {"symbol": symbol, "count": len(models), "models": models}
+
+
+@router.get("/research-runs")
+async def list_research_runs(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    """List persisted research experiment summaries for one market."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        runs = await list_even_odd_research_runs(symbol=symbol, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not list research runs.") from exc
+    return {"symbol": symbol, "count": len(runs), "research_runs": runs}
