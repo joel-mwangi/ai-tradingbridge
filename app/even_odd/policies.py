@@ -19,6 +19,16 @@ class EvenOddPolicy:
     max_concurrent_contracts: int = 1
 
     def __post_init__(self) -> None:
+        for name, value in (
+            ("max_trades_per_sequence", self.max_trades_per_sequence),
+            ("max_consecutive_losses", self.max_consecutive_losses),
+            ("max_trades_per_session", self.max_trades_per_session),
+            ("max_concurrent_contracts", self.max_concurrent_contracts),
+        ):
+            if type(value) is not int:
+                raise ValueError(f"{name} must be an integer.")
+        if type(self.fixed_stake) is not bool or type(self.martingale_enabled) is not bool:
+            raise ValueError("fixed_stake and martingale_enabled must be booleans.")
         if not 1 <= self.max_trades_per_sequence <= 7:
             raise ValueError("max_trades_per_sequence must be between 1 and 7.")
         if self.max_consecutive_losses < 1:
