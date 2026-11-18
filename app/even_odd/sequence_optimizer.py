@@ -23,6 +23,7 @@ class CandidateTradeForecast:
     loss_if_lose: float
     signal_valid: bool
     model_validated: bool
+    uncertainty_validated: bool
     model_id: str
     model_version: str
 
@@ -45,8 +46,14 @@ class CandidateTradeForecast:
             raise ValueError("A model ID is required.")
         if not isinstance(self.model_version, str) or not self.model_version.strip():
             raise ValueError("A model version is required.")
-        if type(self.signal_valid) is not bool or type(self.model_validated) is not bool:
-            raise ValueError("signal_valid and model_validated must be booleans.")
+        if (
+            type(self.signal_valid) is not bool
+            or type(self.model_validated) is not bool
+            or type(self.uncertainty_validated) is not bool
+        ):
+            raise ValueError(
+                "signal_valid, model_validated and uncertainty_validated must be booleans."
+            )
 
     @property
     def expected_value(self) -> float:
@@ -114,6 +121,9 @@ def select_sequence_length(
             break
         if not forecast.model_validated:
             stop_reason = "The forecasting model has not passed validation."
+            break
+        if not forecast.uncertainty_validated:
+            stop_reason = "The model probability uncertainty has not passed validation."
             break
         if selected_model and (
             forecast.model_id != selected_model.model_id
