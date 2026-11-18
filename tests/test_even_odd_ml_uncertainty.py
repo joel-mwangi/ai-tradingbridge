@@ -1,0 +1,107 @@
+import random
+
+import pytest
+
+from app.even_odd.ml.uncertainty import (
+    UncertaintyPolicy,
+    estimate_local_probability_interval,
+)
+
+
+def make_predictions():
+    generator = random.Random(42)
+    predictions = []
+    for index in range(1500):
+        probability = 0.70 + ((index % 5) - 2) * 0.005
+        actual = "even" if generator.random() < 0.70 else "odd"
+        predictions.append({
+            "target_index": index,
+            "fold": index // 300 + 1,
+            "probability_even": probability,
+            "actual_parity": actual,
+        })
+    return predictions
+
+
+def test_block_bootstrap_interval_passes_sample_block_and_fold_stability_gates():
+    result = estimate_local_probability_interval(
+        make_predictions(),
+        target_probability=0.70,
+        policy=UncertaintyPolicy(
+            minimum_local_observations=200,
+            minimum_observations_per_fold=20,
+            block_size=20,
+            minimum_blocks=10,
+            minimum_walk_forward_folds=5,
+            maximum_fold_rate_spread=0.2,
+            maximum_interval_width=0.25,
+            bootstrap_replicates=300,
+        ),
+    )
+
+    assert result["validated"] is True
+    assert result["method"] == "walk_forward_moving_block_bootstrap_local_calibration"
+    assert result["local_sample_size"] == 1500
+    assert result["local_fold_count"] == 5
+    assert result["local_block_count"] >= 10
+    assert result["lower_probability"] <= result["point_estimate"]
+    assert result["point_estimate"] <= result["upper_probability"]
+    assert result["interval_width"] <= 0.25
+
+
+def test_block_bootstrap_is_deterministic_for_same_seed():
+    predictions = make_predictions()
+    policy = UncertaintyPolicy(bootstrap_replicates=200)
+    first = estimate_local_probability_interval(
+        predictions,
+        target_probability=0.70,
+        policy=policy,
+        seed=123,
+    )
+    second = estimate_local_probability_interval(
+        predictions,
+        target_probability=0.70,
+        policy=policy,
+        seed=123,
+    )
+    assert first == second
+
+
+def test_uncertainty_remains_unvalidated_without_enough_walk_forward_folds():
+    predictions = make_predictions()
+    for item in predictions:
+        item["fold"] = 1
+
+    result = estimate_local_probability_interval(
+        predictions,
+        target_probability=0.70,
+        policy=UncertaintyPolicy(bootstrap_replicates=200),
+    )
+    assert result["validated"] is False
+    assert "folds" in result["reason"]
+
+
+def test_uncertainty_returns_unvalidated_when_probability_band_is_sparse():
+    result = estimate_local_probability_interval(
+        make_predictions(),
+        target_probability=0.05,
+        policy=UncertaintyPolicy(bootstrap_replicates=200),
+    )
+    assert result["validated"] is False
+    assert result["lower_probability"] is None
+
+
+def test_uncertainty_rejects_duplicate_target_indices_and_bad_probabilities():
+    predictions = make_predictions()
+    predictions[1]["target_index"] = predictions[0]["target_index"]
+    with pytest.raises(ValueError, match="unique"):
+        estimate_local_probability_interval(
+            predictions,
+            target_probability=0.7,
+        )
+
+    with pytest.raises(ValueError, match="target_probability"):
+        estimate_local_probability_interval(
+            make_predictions(),
+            target_probability=float("nan"),
+        )
