@@ -107,9 +107,10 @@ payout-adjusted EV, or failed confirmation returns `wait` or an HTTP error.
 | GET | `/even-odd/sequences/{sequence_id}` | Read sequence and settled trade records |
 | POST | `/even-odd/settlements` | Record a completed trade outcome |
 
-The sequence planner recomputes forecasts from persisted tick history, applies
-the current live payout quote and uncertainty bounds, and selects the longest
-positive-conservative-EV prefix. Its current persistence input is a recent
+The request supplies a session ID, model ID/version, and 3–7 consecutive
+persisted tick-row IDs/epochs. The sequence planner recomputes forecasts from
+persisted tick history, applies the current live payout quote and uncertainty
+bounds, and selects the longest positive-conservative-EV prefix. Its current persistence input is a recent
 historical opportunity proxy, not a trained forward sequence-survival model
 or a historical payout replay. The result is only an upper bound; revalidate
 after every completed trade.
