@@ -17,6 +17,7 @@ from app.even_odd.ml.features import build_next_tick_features
 from app.even_odd.ml.model import predict_even_probability
 from app.even_odd.ml.uncertainty import select_probability_interval
 from app.even_odd.payouts import PayoutQuoteError, get_even_odd_payout_quote
+from app.even_odd.policies import EvenOddPolicy
 from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.entry_detector import (
     EntryObservation,
@@ -24,6 +25,7 @@ from app.even_odd.entry_detector import (
     evaluate_hybrid_entry,
 )
 from app.even_odd.schemas import (
+    PlanSequenceRequest,
     AnalyzeDigitsRequest,
     CollectTicksRequest,
     CreateSessionRequest,
@@ -31,6 +33,7 @@ from app.even_odd.schemas import (
     RecordTradeSettlementRequest,
     StartSequenceRequest,
 )
+from app.even_odd.sequence_optimizer import CandidateTradeForecast, select_sequence_length
 from app.even_odd.storage import (
     EvenOddPolicyError,
     EvenOddStorageError,
