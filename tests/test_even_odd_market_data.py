@@ -1104,7 +1104,7 @@ def test_entry_check_blocks_exhausted_session_trade_limits(monkeypatch, field, v
 
 def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch):
     rows = entry_history_fixture()
-    for row in rows[-3:]:
+    for row in rows:
         row["tick_epoch"] -= 100
 
     async def fake_get_model(model_id):
