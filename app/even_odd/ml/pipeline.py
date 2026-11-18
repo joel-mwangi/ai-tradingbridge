@@ -10,7 +10,10 @@ from app.even_odd.ml.model import (
     predict_even_probability,
     train_logistic_model,
 )
-from app.even_odd.ml.uncertainty import estimate_local_probability_interval
+from app.even_odd.ml.uncertainty import (
+    bootstrap_log_loss_improvement,
+    estimate_local_probability_interval,
+)
 from app.even_odd.ml.walk_forward import (
     chronological_research_split,
     expanding_walk_forward_splits,
@@ -153,6 +156,8 @@ def run_walk_forward_evaluation(
                 "target_index": row["target_index"],
                 "fold": fold_number,
                 "probability_even": probability,
+                "constant_probability": 0.5,
+                "rolling_probability": row["features"][rolling_key],
                 "actual_parity": row["target_parity"],
             }
             for row, probability in zip(test_partition, model_probabilities)
@@ -185,12 +190,23 @@ def run_walk_forward_evaluation(
         )
         for target_probability in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
     ]
+    statistical_comparisons = {
+        "vs_constant_baseline": bootstrap_log_loss_improvement(
+            out_of_sample_predictions,
+            baseline_key="constant_probability",
+        ),
+        "vs_rolling_frequency_baseline": bootstrap_log_loss_improvement(
+            out_of_sample_predictions,
+            baseline_key="rolling_probability",
+        ),
+    }
 
     return {
         "fold_count": len(fold_reports),
         "evaluated_rows": len(all_actual),
         "folds": fold_reports,
         "calibration_intervals": calibration_intervals,
+        "statistical_comparisons": statistical_comparisons,
         "out_of_sample_predictions": out_of_sample_predictions,
         "aggregate_model_metrics": evaluate_even_probabilities(
             all_actual, all_model_probabilities
