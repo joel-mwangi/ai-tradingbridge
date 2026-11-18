@@ -213,6 +213,11 @@ async def get_even_odd_history(
     collection_id: UUID | None = None,
 ) -> dict:
     """Return a bounded, chronologically ordered snapshot of stored market ticks."""
+    if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
+        raise HTTPException(
+            status_code=422,
+            detail="from_epoch cannot exceed to_epoch.",
+        )
     if not storage_is_configured():
         raise HTTPException(
             status_code=503,
