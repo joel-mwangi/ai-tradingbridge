@@ -825,20 +825,10 @@ async def check_hybrid_entry(
                 )
             )
 
-        policy = EntryPolicy(
-            minimum_sample_size=request.policy.minimum_sample_size,
-            maximum_data_age_seconds=float(request.policy.maximum_data_age_seconds),
-            required_confirmations=request.policy.required_confirmations,
-            maximum_confirmation_gap_seconds=float(
-                request.policy.maximum_confirmation_gap_seconds
-            ),
-            minimum_edge_over_break_even=float(
-                request.policy.minimum_edge_over_break_even
-            ),
-            minimum_conservative_expected_value=float(
-                request.policy.minimum_conservative_expected_value
-            ),
-        )
+        # Entry thresholds are server-owned. The required history sample is
+        # tied to the model's largest trained feature window; callers cannot
+        # weaken freshness, confirmation, edge, or expected-value gates.
+        policy = EntryPolicy(minimum_sample_size=max(windows))
         result = evaluate_hybrid_entry(observations, policy=policy)
     except HTTPException:
         raise
