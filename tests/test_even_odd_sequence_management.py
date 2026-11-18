@@ -168,3 +168,18 @@ def test_sequence_optimizer_rejects_unvalidated_probability_uncertainty():
     assert decision.approved is False
     assert decision.selected_trades == 0
     assert "uncertainty" in decision.reason
+
+
+
+def test_sequence_policy_and_revalidation_reject_boolean_coercion():
+    with pytest.raises(ValueError, match="integer"):
+        EvenOddPolicy(max_trades_per_sequence=True)
+    with pytest.raises(ValueError, match="must be boolean"):
+        Revalidation(
+            model_validated="true",
+            uncertainty_validated=True,
+            signal_valid=True,
+            data_fresh=True,
+            conservative_expected_value=0.2,
+            risk_budget_available=True,
+        )
