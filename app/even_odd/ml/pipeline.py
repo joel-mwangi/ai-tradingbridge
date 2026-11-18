@@ -10,6 +10,7 @@ from app.even_odd.ml.model import (
     predict_even_probability,
     train_logistic_model,
 )
+from app.even_odd.ml.uncertainty import estimate_local_probability_interval
 from app.even_odd.ml.walk_forward import (
     chronological_research_split,
     expanding_walk_forward_splits,
@@ -177,10 +178,19 @@ def run_walk_forward_evaluation(
             ),
         })
 
+    calibration_intervals = [
+        estimate_local_probability_interval(
+            out_of_sample_predictions,
+            target_probability=target_probability,
+        )
+        for target_probability in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+    ]
+
     return {
         "fold_count": len(fold_reports),
         "evaluated_rows": len(all_actual),
         "folds": fold_reports,
+        "calibration_intervals": calibration_intervals,
         "out_of_sample_predictions": out_of_sample_predictions,
         "aggregate_model_metrics": evaluate_even_probabilities(
             all_actual, all_model_probabilities
