@@ -463,7 +463,7 @@ def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
     captured = {}
 
     async def fake_plan(request, _):
-        assert request.session_id == "00000000-0000-0000-0000-000000000444"
+        assert str(request.session_id) == "00000000-0000-0000-0000-000000000444"
         assert len(request.observations) == 1
         return {
             "status": "plan",
