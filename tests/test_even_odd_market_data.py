@@ -78,6 +78,9 @@ def test_even_odd_endpoints_require_authentication():
     assert client.post("/even-odd/analyze", json={"digits": [1, 2]}).status_code == 401
     assert client.post("/even-odd/collect", json={"symbol": "R_50"}).status_code == 401
     assert client.get("/even-odd/history?symbol=R_50").status_code == 401
+    assert client.post("/even-odd/sessions", json={}).status_code == 401
+    assert client.post("/even-odd/sequences", json={}).status_code == 401
+    assert client.post("/even-odd/settlements", json={}).status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -417,3 +420,124 @@ def test_quality_endpoint_audits_historical_snapshot(monkeypatch):
     assert payload["quality"]["quality_passed"] is True
     assert payload["quality"]["valid_rows"] == 1
     assert payload["snapshot_max_id"] == 1
+
+
+
+def test_create_session_endpoint_validates_and_persists_fixed_stake(monkeypatch):
+    captured = {}
+
+    async def fake_create_session(**kwargs):
+        captured.update(kwargs)
+        return {"id": "session-1", "market_symbol": "R_50", "fixed_stake": "1.00"}
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.create_even_odd_session", fake_create_session)
+
+    response = client.post(
+        "/even-odd/sessions",
+        headers=auth(),
+        json={
+            "symbol": "R_50",
+            "account_mode": "research",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_session_loss": "10.00",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["order_execution_enabled"] is False
+    assert captured["fixed_stake"] == "1.00"
+    assert captured["max_trades_per_session"] == 10
+
+
+def test_start_sequence_endpoint_uses_validated_model_gate(monkeypatch):
+    captured = {}
+
+    async def fake_start_sequence(**kwargs):
+        captured.update(kwargs)
+        return {
+            "sequence_id": "sequence-1",
+            "planned_trades": 3,
+            "status": "active",
+            "execution_authorized": False,
+        }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.start_even_odd_sequence", fake_start_sequence)
+
+    response = client.post(
+        "/even-odd/sequences",
+        headers=auth(),
+        json={
+            "session_id": "00000000-0000-0000-0000-000000000444",
+            "model_id": "00000000-0000-0000-0000-000000000333",
+            "model_version": "v1",
+            "planned_trades": 3,
+            "expected_value_snapshot": {"trade_1": 0.25},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["order_execution_enabled"] is False
+    assert captured["planned_trades"] == 3
+    assert captured["model_version"] == "v1"
+
+
+def test_settlement_endpoint_records_result_without_order_execution(monkeypatch):
+    captured = {}
+
+    async def fake_settlement(**kwargs):
+        captured.update(kwargs)
+        return {
+            "trade_id": "trade-1",
+            "sequence_status": "completed",
+            "session_status": "active",
+            "execution_authorized": False,
+        }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.record_even_odd_settlement", fake_settlement)
+
+    response = client.post(
+        "/even-odd/settlements",
+        headers=auth(),
+        json={
+            "sequence_id": "00000000-0000-0000-0000-000000000555",
+            "trade_number": 1,
+            "side": "even",
+            "stake": "1.00",
+            "profit_if_win": "0.80",
+            "loss_if_lose": "1.00",
+            "even_probability": "0.80",
+            "lower_even_probability": "0.75",
+            "upper_even_probability": "0.85",
+            "conservative_expected_value": "0.35",
+            "revalidation": {
+                "model_validated": True,
+                "uncertainty_validated": True,
+                "signal_valid": True,
+                "data_fresh": True,
+                "risk_budget_available": True,
+            },
+            "outcome": "win",
+            "realized_profit": "0.80",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["order_execution_enabled"] is False
+    assert captured["side"] == "even"
+    assert captured["revalidation"]["uncertainty_validated"] is True
+
+
+def test_session_endpoint_rejects_stake_escalation_policy_values():
+    response = client.post(
+        "/even-odd/sessions",
+        headers=auth(),
+        json={
+            "symbol": "R_50",
+            "account_mode": "research",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_trades_per_session": 11,
+        },
+    )
+    assert response.status_code == 422
