@@ -64,9 +64,11 @@ Risk controls are hard constraints and can veto ML recommendations. Every
 persistent session requires a fixed stake, currency, and explicit user-approved
 maximum session loss. No monetary risk cap is silently assumed. The database
 rejects any settlement whose stake differs from the session's fixed stake.
-The session closes when its completed-trade cap or realized-loss cap is reached.
-If the minimum permitted contract stake exceeds the configured risk cap, reject
-the trade.
+The database checks the remaining loss budget before inserting a settled
+trade record, then closes the session if its completed-trade cap or realized
+loss cap is reached. If the proposed loss would exceed the remaining budget,
+the settlement record is rejected. If the minimum permitted contract stake
+exceeds the configured risk cap, reject the trade.
 
 ## Persistent state and atomic transitions
 
