@@ -1305,3 +1305,21 @@ def test_sequence_plan_rejects_a_session_with_an_active_sequence(monkeypatch):
         json=sequence_plan_payload(rows),
     )
     assert response.status_code == 409
+
+
+
+def test_payouts_endpoint_returns_read_only_even_and_odd_quotes(monkeypatch):
+    async def fake_quote(**kwargs):
+        assert kwargs == {"symbol": "R_50", "currency": "USD", "stake": Decimal("1")}
+        return fake_entry_payout_quote()
+
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_quote)
+    response = client.get(
+        "/even-odd/payouts?symbol=R_50&currency=USD&stake=1",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["even"]["contract_type"] == "DIGITEVEN"
+    assert payload["odd"]["contract_type"] == "DIGITODD"
+    assert payload["execution_enabled"] is False
