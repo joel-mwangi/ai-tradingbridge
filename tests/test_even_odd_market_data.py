@@ -711,7 +711,7 @@ def test_forecast_endpoint_returns_research_only_probability_and_interval(monkey
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
-    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", lambda session_id: entry_session_state())
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
@@ -839,6 +839,11 @@ def entry_session_state():
         },
         "sequences": [],
     }
+
+
+async def fake_entry_session_state(session_id):
+    assert session_id == "00000000-0000-0000-0000-000000000444"
+    return entry_session_state()
 
 
 async def fake_entry_payout_quote(*, symbol, currency, stake):
