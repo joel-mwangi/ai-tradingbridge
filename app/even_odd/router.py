@@ -654,7 +654,7 @@ async def check_hybrid_entry(
     model_id = str(request.observations[0].model_id)
     model_version = request.observations[0].model_version
     if any(
-        item.model_id != model_id or item.model_version != model_version
+        str(item.model_id) != model_id or item.model_version != model_version
         for item in request.observations
     ):
         raise HTTPException(
