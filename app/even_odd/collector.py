@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -30,8 +29,8 @@ def normalize_tick(payload: Any, expected_symbol: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Tick payload must be an object.")
 
-    symbol = payload.get("symbol", expected_symbol)
-    if symbol != expected_symbol:
+    symbol = payload.get("symbol")
+    if not isinstance(symbol, str) or symbol != expected_symbol:
         raise ValueError("Tick symbol does not match the requested market.")
 
     quote_raw = payload.get("quote")
