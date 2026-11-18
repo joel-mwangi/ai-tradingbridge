@@ -823,7 +823,7 @@ def entry_model(*, status="validated", interval_validated=True, version="v1"):
     from app.even_odd.ml.features import build_next_tick_features
 
     feature_names = sorted(
-        build_next_tick_features(list(range(20)), windows=(20,))
+        build_next_tick_features([index % 10 for index in range(20)], windows=(20,))
     )
     return {
         "id": "00000000-0000-0000-0000-000000000333",
@@ -862,7 +862,7 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
 
     async def fake_load_history(**kwargs):
         assert kwargs == {"symbol": "R_50", "limit": 5000}
-        return {"rows": rows, "snapshot_max_id": 23}
+        return {"rows": rows, "snapshot_max_id": 24}
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
