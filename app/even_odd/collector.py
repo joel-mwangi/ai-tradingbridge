@@ -90,8 +90,8 @@ async def collect_ticks(
         raise ValueError("Invalid Deriv symbol.")
     if not 10 <= tick_count <= 300:
         raise ValueError("tick_count must be between 10 and 300.")
-    if not 5 <= timeout_seconds <= 120:
-        raise ValueError("timeout_seconds must be between 5 and 120.")
+    if not 5 <= timeout_seconds <= 80:
+        raise ValueError("timeout_seconds must be between 5 and 80.")
 
     collected: list[dict] = []
     deadline = asyncio.get_running_loop().time() + timeout_seconds
