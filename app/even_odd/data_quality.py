@@ -54,10 +54,12 @@ def inspect_historical_ticks(
             continue
 
         try:
-            row_id = int(row["id"])
-            epoch = int(row["tick_epoch"])
-            pip_size = int(row["pip_size"])
-            digit = int(row["last_digit"])
+            if any(type(row[field]) is not int for field in ("id", "tick_epoch", "pip_size", "last_digit")):
+                raise ValueError
+            row_id = row["id"]
+            epoch = row["tick_epoch"]
+            pip_size = row["pip_size"]
+            digit = row["last_digit"]
             symbol = row["market_symbol"]
             quote = Decimal(str(row["quote"]))
             parity = row["parity"]
