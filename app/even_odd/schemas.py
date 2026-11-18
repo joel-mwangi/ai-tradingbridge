@@ -67,7 +67,6 @@ class RecordTradeSettlementRequest(BaseModel):
 class EntryObservationRequest(BaseModel):
     tick_row_id: StrictInt = Field(gt=0)
     tick_epoch: StrictInt = Field(gt=0)
-    even_probability: Decimal = Field(ge=0, le=1)
     even_profit_if_win: Decimal = Field(gt=0)
     even_loss_if_lose: Decimal = Field(gt=0)
     odd_profit_if_win: Decimal = Field(gt=0)
