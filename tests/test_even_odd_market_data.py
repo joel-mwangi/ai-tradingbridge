@@ -1227,3 +1227,36 @@ def test_sequence_plan_waits_for_model_validation_and_risk_budget(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "wait"
     assert response.json()["planned_trades"] == 0
+
+
+
+def test_hybrid_entry_endpoint_rejects_cherry_picked_nonconsecutive_ticks(monkeypatch):
+    rows = entry_history_fixture()
+
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 24}
+
+    payload = entry_check_payload(rows)
+    skipped_tick = rows[-4]
+    payload["observations"][0] = {
+        "tick_row_id": skipped_tick["id"],
+        "tick_epoch": skipped_tick["tick_epoch"],
+        "model_id": "00000000-0000-0000-0000-000000000333",
+        "model_version": "v1",
+    }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=payload,
+    )
+    assert response.status_code == 409
