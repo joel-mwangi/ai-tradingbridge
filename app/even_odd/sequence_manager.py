@@ -21,6 +21,24 @@ class Revalidation:
     conservative_expected_value: float
     risk_budget_available: bool
 
+    def __post_init__(self) -> None:
+        for name in (
+            "model_validated",
+            "uncertainty_validated",
+            "signal_valid",
+            "data_fresh",
+            "risk_budget_available",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be boolean.")
+        value = self.conservative_expected_value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            raise ValueError("conservative_expected_value must be finite and numeric.")
+
 
 @dataclass(slots=True)
 class SequenceState:
