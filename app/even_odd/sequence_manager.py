@@ -15,6 +15,7 @@ class TradeOutcome(str, Enum):
 @dataclass(frozen=True, slots=True)
 class Revalidation:
     model_validated: bool
+    uncertainty_validated: bool
     signal_valid: bool
     data_fresh: bool
     conservative_expected_value: float
@@ -70,6 +71,8 @@ class SequenceManager:
             return False, "Consecutive-loss limit has been reached."
         if not revalidation.model_validated:
             return False, "Model is not validated."
+        if not revalidation.uncertainty_validated:
+            return False, "Probability uncertainty is not validated."
         if not revalidation.data_fresh:
             return False, "Market data is stale."
         if not revalidation.signal_valid:
