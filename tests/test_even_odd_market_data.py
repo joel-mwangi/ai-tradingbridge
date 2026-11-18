@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -802,10 +802,6 @@ def entry_check_payload(rows):
             {
                 "tick_row_id": row["id"],
                 "tick_epoch": row["tick_epoch"],
-                "even_profit_if_win": "0.80",
-                "even_loss_if_lose": "1.00",
-                "odd_profit_if_win": "0.90",
-                "odd_loss_if_lose": "1.00",
                 "model_id": "00000000-0000-0000-0000-000000000333",
                 "model_version": "v1",
             }
@@ -915,28 +911,10 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
         assert kwargs == {"symbol": "R_50", "limit": 5000}
         return {"rows": rows, "snapshot_max_id": 24}
 
-    async def fake_get_session(session_id):
-        return {"session": {
-            "id": session_id,
-            "status": "active",
-            "market_symbol": "R_50",
-            "currency": "USD",
-            "fixed_stake": "1.00",
-            "max_session_loss": "10.00",
-            "realized_profit": "0.00",
-        }, "sequences": []}
-
-    async def fake_get_quotes(**kwargs):
-        assert kwargs == {"symbol": "R_50", "currency": "USD", "stake": Decimal("1.00")}
-        return {"quotes": {
-            "even": {"profit_if_win": "0.80", "loss_if_lose": "1.00"},
-            "odd": {"profit_if_win": "0.90", "loss_if_lose": "1.00"},
-        }}
-
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
-    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_get_session)
-    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quotes", fake_get_quotes)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
@@ -968,7 +946,7 @@ def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkey
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
-    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", lambda session_id: entry_session_state())
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
@@ -1033,6 +1011,8 @@ def test_hybrid_entry_endpoint_rejects_tick_ids_not_in_persisted_history(monkeyp
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
