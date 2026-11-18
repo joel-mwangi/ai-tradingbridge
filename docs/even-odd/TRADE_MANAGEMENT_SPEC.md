@@ -37,11 +37,18 @@ forecast sequence is incomplete/out of order, the signal is invalid, or
 conservative expected value is non-positive. The selected length is a planned
 upper bound only. It does not authorize blind execution of all selected trades.
 
-This initial optimizer is a deterministic decision layer consuming ML outputs;
-it is not itself a trained ML model. A trained sequence policy must be
-developed and evaluated with chronological splits and walk-forward validation.
-It must demonstrate incremental out-of-sample value over simple baselines
-before it is permitted to control demo execution.
+The `POST /even-odd/sequence-plan` endpoint wires this optimizer to
+server-recomputed forecasts for three to seven consecutive persisted ticks.
+It uses recent qualifying opportunities as a persistence proxy and applies
+the current live payout quote to those historical observations. It does not
+replay historical payout quotes and is not a trained forward sequence-survival
+model. The result is a planning upper bound only.
+
+The optimizer remains a deterministic decision layer consuming ML forecasts;
+it is not itself a trained ML model. A trained forward sequence policy should
+be developed and evaluated with chronological splits and walk-forward
+validation. It must demonstrate incremental out-of-sample value over simple
+baselines before it is permitted to control demo execution.
 
 ## Revalidation and stopping
 
