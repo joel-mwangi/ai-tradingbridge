@@ -112,14 +112,17 @@ def run_walk_forward_evaluation(
     all_model_probabilities: list[float] = []
     all_constant_probabilities: list[float] = []
     all_rolling_probabilities: list[float] = []
+    out_of_sample_predictions: list[dict] = []
     fold_reports = []
     rolling_key = f"w{max(windows)}_even_rate"
 
     for fold_number, fold in enumerate(folds, start=1):
         train_validation = fold["train"]
-        train_end = int(len(train_validation) * 0.8)
+        train_end = int(len(train_validation) * 0.7)
+        validation_end = int(len(train_validation) * 0.85)
         train_partition = train_validation[:train_end]
-        validation_partition = train_validation[train_end:]
+        validation_partition = train_validation[train_end:validation_end]
+        calibration_partition = train_validation[validation_end:]
         model = train_logistic_model(
             train_partition,
             validation_partition,
@@ -128,6 +131,7 @@ def run_walk_forward_evaluation(
             max_epochs=max_epochs,
             patience=patience,
         )
+        model = calibrate_model_probabilities(model, calibration_partition)
         test_partition = fold["test"]
         actual = [row["target_parity"] for row in test_partition]
         model_probabilities = [
@@ -143,10 +147,20 @@ def run_walk_forward_evaluation(
         all_model_probabilities.extend(model_probabilities)
         all_constant_probabilities.extend(constant_probabilities)
         all_rolling_probabilities.extend(rolling_probabilities)
+        out_of_sample_predictions.extend([
+            {
+                "target_index": row["target_index"],
+                "fold": fold_number,
+                "probability_even": probability,
+                "actual_parity": row["target_parity"],
+            }
+            for row, probability in zip(test_partition, model_probabilities)
+        ])
         fold_reports.append({
             "fold": fold_number,
             "training_rows": len(train_partition),
             "validation_rows": len(validation_partition),
+            "calibration_rows": len(calibration_partition),
             "test_rows": len(test_partition),
             "test_target_index_range": {
                 "start": test_partition[0]["target_index"],
@@ -167,6 +181,7 @@ def run_walk_forward_evaluation(
         "fold_count": len(fold_reports),
         "evaluated_rows": len(all_actual),
         "folds": fold_reports,
+        "out_of_sample_predictions": out_of_sample_predictions,
         "aggregate_model_metrics": evaluate_even_probabilities(
             all_actual, all_model_probabilities
         ),
