@@ -60,9 +60,17 @@ multiple markets and time periods, not concentrated in one favourable segment.
 Tick parity frequencies can be serially dependent, non-stationary, and affected
 by overlapping collection windows. Ordinary IID confidence intervals and
 single-sample significance tests can overstate evidence. The quality audit is
-structural, not a test of independence or stationarity. Further dependence-aware
-inference, drift analysis, and block-based uncertainty estimates are required
-before a model can be considered for demo trading.
+structural, not a test of independence or stationarity.
+
+An exploratory moving-block bootstrap estimates a local calibration interval
+from calibrated walk-forward forecasts near a requested probability. It
+resamples contiguous blocks, requires sufficient local observations and blocks,
+and checks stability across walk-forward folds and interval width. The
+`validated` flag means only that these configured empirical gates passed; it
+is not a distribution-free coverage guarantee and does not validate the model
+itself. The interval selector refuses extrapolation outside the calibrated
+probability band. Regime drift and long-memory dependence remain risks that
+must be assessed before demo use.
 
 ## Promotion gate
 
@@ -101,7 +109,7 @@ rather than silently train on inadequate history.
 ## Hybrid entry confirmation
 
 The entry detector is a separate, deterministic gate. It consumes:
-- a model probability interval for Even (and the complementary lower bound for Odd);
+- a model probability interval for Even (and the complementary lower bound for Odd), sourced from the local walk-forward block-bootstrap calibration report;
 - the model ID/version and an explicit validated flag;
 - current data age and sample size;
 - side-specific payout profit and loss;
