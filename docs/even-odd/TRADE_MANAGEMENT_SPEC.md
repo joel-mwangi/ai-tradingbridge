@@ -37,11 +37,18 @@ forecast sequence is incomplete/out of order, the signal is invalid, or
 conservative expected value is non-positive. The selected length is a planned
 upper bound only. It does not authorize blind execution of all selected trades.
 
-This initial optimizer is a deterministic decision layer consuming ML outputs;
-it is not itself a trained ML model. A trained sequence policy must be
-developed and evaluated with chronological splits and walk-forward validation.
-It must demonstrate incremental out-of-sample value over simple baselines
-before it is permitted to control demo execution.
+The `POST /even-odd/sequence-plan` endpoint wires this optimizer to
+server-recomputed forecasts for three to seven consecutive persisted ticks.
+It uses recent qualifying opportunities as a persistence proxy and applies
+the current live payout quote to those historical observations. It does not
+replay historical payout quotes and is not a trained forward sequence-survival
+model. The result is a planning upper bound only.
+
+The optimizer remains a deterministic decision layer consuming ML forecasts;
+it is not itself a trained ML model. A trained forward sequence policy should
+be developed and evaluated with chronological splits and walk-forward
+validation. It must demonstrate incremental out-of-sample value over simple
+baselines before it is permitted to control demo execution.
 
 ## Revalidation and stopping
 
@@ -60,15 +67,53 @@ reset session exposure or session trade count.
 
 ## Risk boundary
 
-Risk controls are hard constraints and can veto ML recommendations. Monetary
-stake and session-loss caps must be configured from the account balance and
-user-approved risk tolerance before execution. No monetary default is silently
-assumed. If the minimum permitted contract stake exceeds the configured risk
-cap, reject the trade.
+Risk controls are hard constraints and can veto ML recommendations. Every
+persistent session requires a fixed stake, currency, and explicit user-approved
+maximum session loss. No monetary risk cap is silently assumed. The database
+rejects any settlement whose stake differs from the session's fixed stake.
+The database checks the remaining loss budget before inserting a settled
+trade record, then closes the session if its completed-trade cap or realized
+loss cap is reached. If the proposed loss would exceed the remaining budget,
+the settlement record is rejected. If the minimum permitted contract stake
+exceeds the configured risk cap, reject the trade.
+
+## Persistent state and atomic transitions
+
+Session, sequence, and settled-trade records are stored in the dedicated
+Even/Odd Supabase project. A database transaction locks the session and
+sequence rows while recording each settlement, then updates the counters and
+terminal state atomically. This prevents concurrent requests from bypassing
+the seven-trade sequence limit, ten-trade session limit, fixed-stake rule, or
+two-consecutive-loss stop. Only one active sequence is permitted per session.
+
+Starting a sequence requires a model registry entry marked validated with the
+same market and version as the session. Recording a settlement rechecks the
+model status, probability interval, payout-derived conservative expected
+value, fixed stake, fresh-data/signal/risk revalidation flags, and trade order.
+A new sequence is an explicit restart and resets the sequence-level loss streak.
+
+These APIs only create session records, start research sequences, and record
+settled outcomes. They do not submit Deriv orders. All responses explicitly
+keep order execution disabled.
 
 ## Research and execution boundary
 
-The current implementation provides policy validation, sequence-length
-selection from supplied forecasts, and in-memory sequence/session guardrails.
-It does not connect to Deriv, persist sessions, train models, or place orders.
-Those capabilities require separate milestones and tests.
+The backend includes chronological feature generation, candidate-model
+training, calibration, holdout evaluation, expanding walk-forward evaluation,
+baseline comparison, and uncertainty estimation. Research results and model
+artifacts are persisted as candidates. There is no automatic model promotion;
+a model must pass the documented out-of-sample gates before an authorized
+operator can mark it validated.
+
+The entry-check API verifies persisted tick identity and freshness, computes
+probabilities on the server from history preceding each referenced tick,
+retrieves fresh one-tick `DIGITEVEN`/`DIGITODD` proposal prices from Deriv,
+and applies server-owned confirmation, uncertainty, break-even, conservative
+EV, and session-risk thresholds. Caller-supplied probabilities, payouts, data
+ages, and relaxed thresholds are not trusted.
+
+The payout proposal is read-only. The backend records session/sequence state
+and settled outcomes but does not buy proposals or submit Deriv orders. The
+currently verified database sample is too small to establish predictive edge;
+execution remains disabled until adequate out-of-sample evidence and final
+production verification are available.

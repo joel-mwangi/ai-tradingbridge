@@ -148,3 +148,25 @@ def chronological_split(
         "validation": list(rows[train_end:validation_end]),
         "test": list(rows[validation_end:]),
     }
+
+
+
+def build_next_tick_features(
+    digits: Sequence[int],
+    windows: Sequence[int] = DEFAULT_WINDOWS,
+) -> dict[str, float]:
+    """Build pre-target features for the next unseen tick without inventing a label."""
+    _validate_digits(digits)
+    if not windows or any(type(size) is not int or size < 2 for size in windows):
+        raise ValueError("windows must contain positive integer sizes of at least 2.")
+    if len(set(windows)) != len(windows):
+        raise ValueError("Feature windows must be unique.")
+    if len(digits) < max(windows):
+        raise ValueError("Not enough historical digits for the requested feature windows.")
+
+    # The appended placeholder is used only to emit the final feature row.
+    # build_supervised_rows never includes the target digit in its features.
+    prediction_rows = build_supervised_rows([*digits, 0], windows=windows)
+    if not prediction_rows:
+        raise ValueError("Unable to build next-tick prediction features.")
+    return prediction_rows[-1]["features"]

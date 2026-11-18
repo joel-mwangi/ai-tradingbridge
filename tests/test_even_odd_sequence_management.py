@@ -17,6 +17,8 @@ def forecast(
     lower: float = 0.56,
     signal_valid: bool = True,
     model_validated: bool = True,
+    uncertainty_validated: bool = True,
+    risk_budget_available: bool = True,
     model_id: str = "test-model",
     model_version: str = "1",
 ) -> CandidateTradeForecast:
@@ -28,6 +30,8 @@ def forecast(
         loss_if_lose=1.0,
         signal_valid=signal_valid,
         model_validated=model_validated,
+        uncertainty_validated=uncertainty_validated,
+        risk_budget_available=risk_budget_available,
         model_id=model_id,
         model_version=model_version,
     )
@@ -36,6 +40,7 @@ def forecast(
 def valid_revalidation(**overrides) -> Revalidation:
     values = {
         "model_validated": True,
+        "uncertainty_validated": True,
         "signal_valid": True,
         "data_fresh": True,
         "conservative_expected_value": 0.12,
@@ -113,10 +118,10 @@ def test_win_resets_consecutive_loss_counter():
     ("changes", "expected_fragment"),
     [
         ({"model_validated": False}, "not validated"),
+        ({"uncertainty_validated": False}, "uncertainty is not validated"),
         ({"data_fresh": False}, "stale"),
         ({"signal_valid": False}, "no longer valid"),
         ({"conservative_expected_value": 0.0}, "not positive"),
-        ({"conservative_expected_value": float("nan")}, "not positive"),
         ({"risk_budget_available": False}, "exhausted"),
     ],
 )
@@ -153,3 +158,46 @@ def test_unknown_outcome_is_rejected_without_mutating_counters():
         manager.record_outcome("unknown")
     assert state.completed_trades == 0
     assert manager.session_trades == 0
+
+
+
+def test_sequence_optimizer_rejects_unvalidated_probability_uncertainty():
+    decision = select_sequence_length([
+        forecast(1, uncertainty_validated=False),
+        forecast(2),
+    ])
+    assert decision.approved is False
+    assert decision.selected_trades == 0
+    assert "uncertainty" in decision.reason
+
+
+
+def test_sequence_policy_and_revalidation_reject_boolean_coercion():
+    with pytest.raises(ValueError, match="integer"):
+        EvenOddPolicy(max_trades_per_sequence=True)
+    with pytest.raises(ValueError, match="must be boolean"):
+        Revalidation(
+            model_validated="true",
+            uncertainty_validated=True,
+            signal_valid=True,
+            data_fresh=True,
+            conservative_expected_value=0.2,
+            risk_budget_available=True,
+        )
+
+
+
+def test_revalidation_rejects_non_finite_expected_value_at_construction():
+    with pytest.raises(ValueError, match="finite and numeric"):
+        valid_revalidation(conservative_expected_value=float("nan"))
+
+
+
+def test_sequence_optimizer_rejects_insufficient_session_loss_budget():
+    decision = select_sequence_length([
+        forecast(1, risk_budget_available=False),
+        forecast(2),
+    ])
+    assert decision.approved is False
+    assert decision.selected_trades == 0
+    assert "loss budget" in decision.reason

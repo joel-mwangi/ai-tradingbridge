@@ -23,28 +23,52 @@ class CandidateTradeForecast:
     loss_if_lose: float
     signal_valid: bool
     model_validated: bool
+    uncertainty_validated: bool
+    risk_budget_available: bool
     model_id: str
     model_version: str
 
     def __post_init__(self) -> None:
-        if self.trade_number < 1:
-            raise ValueError("trade_number must be positive.")
+        if type(self.trade_number) is not int or self.trade_number < 1:
+            raise ValueError("trade_number must be a positive integer.")
         for name, value in (
             ("win_probability", self.win_probability),
             ("lower_bound_win_probability", self.lower_bound_win_probability),
         ):
-            if not isfinite(value) or not 0 <= value <= 1:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or not 0 <= value <= 1
+            ):
                 raise ValueError(f"{name} must be a finite probability from 0 to 1.")
         if self.lower_bound_win_probability > self.win_probability:
             raise ValueError("Lower-bound probability cannot exceed the point estimate.")
-        if not isfinite(self.profit_if_win) or self.profit_if_win <= 0:
-            raise ValueError("profit_if_win must be finite and positive.")
-        if not isfinite(self.loss_if_lose) or self.loss_if_lose <= 0:
-            raise ValueError("loss_if_lose must be finite and positive.")
+        for name, value in (
+            ("profit_if_win", self.profit_if_win),
+            ("loss_if_lose", self.loss_if_lose),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} must be finite and positive.")
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError("A model ID is required.")
         if not isinstance(self.model_version, str) or not self.model_version.strip():
             raise ValueError("A model version is required.")
+        if (
+            type(self.signal_valid) is not bool
+            or type(self.model_validated) is not bool
+            or type(self.uncertainty_validated) is not bool
+            or type(self.risk_budget_available) is not bool
+        ):
+            raise ValueError(
+                "signal_valid, model_validated, uncertainty_validated and "
+                "risk_budget_available must be booleans."
+            )
 
     @property
     def expected_value(self) -> float:
@@ -112,6 +136,12 @@ def select_sequence_length(
             break
         if not forecast.model_validated:
             stop_reason = "The forecasting model has not passed validation."
+            break
+        if not forecast.uncertainty_validated:
+            stop_reason = "The model probability uncertainty has not passed validation."
+            break
+        if not forecast.risk_budget_available:
+            stop_reason = "The remaining session loss budget is insufficient."
             break
         if selected_model and (
             forecast.model_id != selected_model.model_id

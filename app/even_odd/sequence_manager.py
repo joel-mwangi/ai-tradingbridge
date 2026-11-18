@@ -15,10 +15,29 @@ class TradeOutcome(str, Enum):
 @dataclass(frozen=True, slots=True)
 class Revalidation:
     model_validated: bool
+    uncertainty_validated: bool
     signal_valid: bool
     data_fresh: bool
     conservative_expected_value: float
     risk_budget_available: bool
+
+    def __post_init__(self) -> None:
+        for name in (
+            "model_validated",
+            "uncertainty_validated",
+            "signal_valid",
+            "data_fresh",
+            "risk_budget_available",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be boolean.")
+        value = self.conservative_expected_value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            raise ValueError("conservative_expected_value must be finite and numeric.")
 
 
 @dataclass(slots=True)
@@ -70,6 +89,8 @@ class SequenceManager:
             return False, "Consecutive-loss limit has been reached."
         if not revalidation.model_validated:
             return False, "Model is not validated."
+        if not revalidation.uncertainty_validated:
+            return False, "Probability uncertainty is not validated."
         if not revalidation.data_fresh:
             return False, "Market data is stale."
         if not revalidation.signal_valid:

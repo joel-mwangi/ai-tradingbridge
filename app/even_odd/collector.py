@@ -3,7 +3,6 @@
 Each collection creates and closes its own public market-data WebSocket. It
 does not use the legacy collector, shared strategy feed, or trading session.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -21,14 +20,17 @@ SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,32}$")
 
 
 class TickCollectionError(RuntimeError):
-    """Raised when the Deriv public feed cannot provide a valid tick sample."""
+    """Upstream collection failure, retaining any valid ticks already received."""
+
+    def __init__(self, message: str, *, ticks: list[dict] | None = None):
+        super().__init__(message)
+        self.ticks = list(ticks or [])
 
 
 def normalize_tick(payload: Any, expected_symbol: str) -> dict:
     """Normalize one Deriv tick without binary-float rounding of its last digit."""
     if not isinstance(payload, dict):
         raise ValueError("Tick payload must be an object.")
-
     symbol = payload.get("symbol")
     if not isinstance(symbol, str) or symbol != expected_symbol:
         raise ValueError("Tick symbol does not match the requested market.")
@@ -83,17 +85,16 @@ async def collect_ticks(
     tick_count: int,
     timeout_seconds: int = 60,
 ) -> list[dict]:
-    """Collect a finite sample from an independent Deriv public WebSocket."""
+    """Collect a finite sample, preserving valid partial data on upstream failure."""
     if not SYMBOL_PATTERN.fullmatch(symbol):
         raise ValueError("Invalid Deriv symbol.")
     if not 10 <= tick_count <= 300:
         raise ValueError("tick_count must be between 10 and 300.")
-    if not 5 <= timeout_seconds <= 120:
-        raise ValueError("timeout_seconds must be between 5 and 120.")
+    if not 5 <= timeout_seconds <= 80:
+        raise ValueError("timeout_seconds must be between 5 and 80.")
 
     collected: list[dict] = []
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-
     try:
         async with websockets.connect(
             DERIV_PUBLIC_WS_URL,
@@ -108,7 +109,6 @@ async def collect_ticks(
                 "subscribe": 1,
                 "req_id": 1,
             }))
-
             while len(collected) < tick_count:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
@@ -121,30 +121,36 @@ async def collect_ticks(
                 if not isinstance(message, dict):
                     continue
                 if message.get("error"):
-                    error = message["error"]
-                    description = (
-                        error.get("message", "Deriv returned an API error.")
-                        if isinstance(error, dict)
-                        else "Deriv returned an API error."
+                    raise TickCollectionError(
+                        "Deriv returned an API error.", ticks=collected
                     )
-                    raise TickCollectionError(description)
                 if message.get("msg_type") != "tick":
                     continue
-                tick = message.get("tick")
                 try:
-                    normalized = normalize_tick(tick, symbol)
+                    normalized = normalize_tick(message.get("tick"), symbol)
                 except ValueError:
                     continue
                 collected.append(normalized)
     except asyncio.TimeoutError:
         pass
-    except TickCollectionError:
+    except TickCollectionError as exc:
+        if not exc.ticks:
+            exc.ticks = list(collected)
         raise
     except Exception as exc:
-        raise TickCollectionError("Unable to collect ticks from the Deriv public feed.") from exc
+        raise TickCollectionError(
+            "Unable to collect ticks from the Deriv public feed.",
+            ticks=collected,
+        ) from exc
 
     if len(collected) < 10:
         raise TickCollectionError(
-            f"Insufficient valid ticks received: {len(collected)} of {tick_count} requested."
+            f"Insufficient valid ticks received: {len(collected)} of {tick_count} requested.",
+            ticks=collected,
+        )
+    if len(collected) < tick_count:
+        raise TickCollectionError(
+            f"Collection timed out after receiving {len(collected)} of {tick_count} requested ticks.",
+            ticks=collected,
         )
     return collected

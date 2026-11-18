@@ -8,7 +8,7 @@ on:
       - "tests/test_even_odd_*.py"
       - ".github/workflows/even-odd-tests.yml"
   push:
-    branches: ["feat/even-odd-backend-foundation"]
+    branches: ["feature/even-odd-backend-complete"]
     paths:
       - "app/even_odd/**"
       - "tests/test_even_odd_*.py"
