@@ -184,3 +184,123 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
     assert tick_payload["deriv_stream_id"] == "deriv-stream-abc"
     assert "deriv_tick_id" not in tick_payload
     assert finish_client.patches[0]["json"]["status"] == "completed"
+
+
+
+@pytest.mark.asyncio
+async def test_load_historical_ticks_uses_stable_snapshot_and_paginates(monkeypatch):
+    from app.even_odd.storage import load_historical_ticks
+
+    first_page = [
+        {
+            "id": i + 1,
+            "tick_epoch": 1760000000 + i,
+            "last_digit": i % 10,
+            "market_symbol": "R_50",
+        }
+        for i in range(1000)
+    ]
+    second_page = [
+        {
+            "id": 1001,
+            "tick_epoch": 1760001000,
+            "last_digit": 1,
+            "market_symbol": "R_50",
+        },
+        {
+            "id": 1002,
+            "tick_epoch": 1760001001,
+            "last_digit": 2,
+            "market_symbol": "R_50",
+        },
+    ]
+
+    class Response:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.rows
+
+    class FakeAsyncClient:
+        instance = None
+
+        def __init__(self, **kwargs):
+            self.calls = []
+            FakeAsyncClient.instance = self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params, headers):
+            self.calls.append({"params": params, "headers": headers})
+            if params.get("order") == "id.desc":
+                return Response([{"id": 1002}])
+            if headers["Range"] == "0-999":
+                return Response(first_page)
+            if headers["Range"] == "1000-1001":
+                return Response(second_page)
+            raise AssertionError(f"Unexpected range: {headers['Range']}")
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await load_historical_ticks(
+        symbol="R_50",
+        limit=1002,
+        from_epoch=1760000000,
+        to_epoch=1760001001,
+    )
+
+    assert len(result["rows"]) == 1002
+    assert result["snapshot_max_id"] == 1002
+    client = FakeAsyncClient.instance
+    assert len(client.calls) == 3
+    data_call = client.calls[1]
+    assert data_call["params"]["market_symbol"] == "eq.R_50"
+    assert data_call["params"]["id"] == "lte.1002"
+    assert data_call["params"]["order"] == "tick_epoch.asc,id.asc"
+    assert data_call["params"]["and"] == (
+        "(tick_epoch.gte.1760000000,tick_epoch.lte.1760001001)"
+    )
+    assert client.calls[1]["headers"]["Range"] == "0-999"
+    assert client.calls[2]["headers"]["Range"] == "1000-1001"
+
+
+@pytest.mark.asyncio
+async def test_load_historical_ticks_returns_empty_when_database_has_no_ticks(monkeypatch):
+    from app.even_odd.storage import load_historical_ticks
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await load_historical_ticks(symbol="R_50")
+    assert result == {"rows": [], "snapshot_max_id": None}
