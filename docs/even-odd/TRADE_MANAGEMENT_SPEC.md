@@ -91,8 +91,22 @@ keep order execution disabled.
 
 ## Research and execution boundary
 
-The current implementation provides policy validation, sequence-length
-selection from supplied forecasts, persistent session/sequence/trade-result
-records, and database-enforced state transitions. It does not place orders or
-connect this module to Deriv contract execution.
-Those capabilities require separate milestones and tests.
+The backend includes chronological feature generation, candidate-model
+training, calibration, holdout evaluation, expanding walk-forward evaluation,
+baseline comparison, and uncertainty estimation. Research results and model
+artifacts are persisted as candidates. There is no automatic model promotion;
+a model must pass the documented out-of-sample gates before an authorized
+operator can mark it validated.
+
+The entry-check API verifies persisted tick identity and freshness, computes
+probabilities on the server from history preceding each referenced tick,
+retrieves fresh one-tick `DIGITEVEN`/`DIGITODD` proposal prices from Deriv,
+and applies server-owned confirmation, uncertainty, break-even, conservative
+EV, and session-risk thresholds. Caller-supplied probabilities, payouts, data
+ages, and relaxed thresholds are not trusted.
+
+The payout proposal is read-only. The backend records session/sequence state
+and settled outcomes but does not buy proposals or submit Deriv orders. The
+currently verified database sample is too small to establish predictive edge;
+execution remains disabled until adequate out-of-sample evidence and final
+production verification are available.
