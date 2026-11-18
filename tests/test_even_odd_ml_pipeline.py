@@ -1,6 +1,9 @@
 import pytest
 
-from app.even_odd.ml.pipeline import run_research_experiment
+from app.even_odd.ml.pipeline import (
+    run_research_experiment,
+    run_walk_forward_evaluation,
+)
 
 
 def test_research_pipeline_uses_disjoint_periods_and_keeps_execution_disabled():
@@ -30,3 +33,35 @@ def test_research_pipeline_uses_disjoint_periods_and_keeps_execution_disabled():
 def test_research_pipeline_rejects_insufficient_history():
     with pytest.raises(ValueError):
         run_research_experiment([0, 1] * 10, windows=(10,))
+
+
+
+def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
+    digits = [0, 1] * 400
+    result = run_walk_forward_evaluation(
+        digits,
+        windows=(20,),
+        minimum_train_rows=100,
+        test_rows=100,
+        maximum_folds=3,
+        max_epochs=30,
+        patience=8,
+    )
+
+    assert result["fold_count"] == 3
+    assert result["evaluated_rows"] == 300
+    assert [fold["fold"] for fold in result["folds"]] == [1, 2, 3]
+    assert all(fold["training_rows"] >= 80 for fold in result["folds"])
+    assert all(fold["validation_rows"] >= 20 for fold in result["folds"])
+    assert result["aggregate_model_metrics"]["sample_size"] == 300
+    assert result["promotion_status"]["validated"] is False
+
+
+def test_walk_forward_pipeline_rejects_insufficient_rows():
+    with pytest.raises(ValueError):
+        run_walk_forward_evaluation(
+            [0, 1] * 20,
+            windows=(10,),
+            minimum_train_rows=100,
+            test_rows=50,
+        )
