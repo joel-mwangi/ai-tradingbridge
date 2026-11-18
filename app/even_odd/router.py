@@ -646,12 +646,12 @@ async def forecast_next_parity(
 async def get_payout_quotes(
     _: Annotated[None, Depends(require_even_odd_api_token)],
     symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
-    currency: str = Query(min_length=3, max_length=20, pattern=r"^[A-Z0-9]{3,20}$"),
+    currency: str = Query(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$"),
     stake: Decimal = Query(gt=0),
 ) -> dict:
     """Fetch read-only current Deriv DIGITEVEN and DIGITODD proposal prices."""
     try:
-        return await get_even_odd_payout_quotes(
+        return await get_even_odd_payout_quote(
             symbol=symbol,
             currency=currency,
             stake=stake,
@@ -736,6 +736,7 @@ async def check_hybrid_entry(
                 "execution_authorized": False,
                 "order_execution_enabled": False,
             }
+        risk_budget_available = True
 
         artifact = model.get("model_artifact")
         if not isinstance(artifact, dict) or not isinstance(artifact.get("feature_names"), list):
@@ -772,31 +773,6 @@ async def check_hybrid_entry(
         rows_by_id = {row["id"]: row for row in market_rows}
         row_positions = {row["id"]: index for index, row in enumerate(market_rows)}
         now_epoch = datetime.now(timezone.utc).timestamp()
-
-        session_state = await get_even_odd_session_state(str(request.session_id))
-        if session_state is None:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        session = session_state["session"]
-        if session.get("status") != "active":
-            raise HTTPException(status_code=409, detail="Session is not active.")
-        if session.get("market_symbol") != model.get("market_symbol"):
-            raise HTTPException(status_code=409, detail="Session and model markets do not match.")
-
-        payout_quotes = await get_even_odd_payout_quotes(
-            symbol=model["market_symbol"],
-            currency=session["currency"],
-            stake=Decimal(str(session["fixed_stake"])),
-        )
-        even_quote = payout_quotes["quotes"]["even"]
-        odd_quote = payout_quotes["quotes"]["odd"]
-        remaining_loss_budget = (
-            Decimal(str(session["max_session_loss"]))
-            + Decimal(str(session["realized_profit"]))
-        )
-        risk_budget_available = remaining_loss_budget >= max(
-            Decimal(even_quote["loss_if_lose"]),
-            Decimal(odd_quote["loss_if_lose"]),
-        )
 
         metrics = model.get("metrics") or {}
         walk_forward = metrics.get("walk_forward") or {}
