@@ -607,3 +607,81 @@ async def record_even_odd_settlement(
         raise EvenOddStorageError(
             "Could not record the Even/Odd trade settlement."
         ) from exc
+
+
+async def get_even_odd_session_state(session_id: str) -> dict[str, Any] | None:
+    """Read one session and its sequences from the dedicated project."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            session_response = await client.get(
+                f"{url}/rest/v1/even_odd_sessions",
+                params={"select": "*", "id": f"eq.{session_id}", "limit": "1"},
+                headers=_headers(key),
+            )
+            session_response.raise_for_status()
+            sessions = session_response.json()
+            if not isinstance(sessions, list):
+                raise EvenOddStorageError("Session lookup returned an invalid response.")
+            if not sessions:
+                return None
+
+            sequence_response = await client.get(
+                f"{url}/rest/v1/even_odd_sequences",
+                params={
+                    "select": "*",
+                    "session_id": f"eq.{session_id}",
+                    "order": "created_at.desc",
+                    "limit": "100",
+                },
+                headers=_headers(key),
+            )
+            sequence_response.raise_for_status()
+            sequences = sequence_response.json()
+            if not isinstance(sequences, list):
+                raise EvenOddStorageError("Sequence lookup returned an invalid response.")
+            return {"session": sessions[0], "sequences": sequences}
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not load the Even/Odd session state.") from exc
+
+
+async def get_even_odd_sequence_state(sequence_id: str) -> dict[str, Any] | None:
+    """Read one sequence and its settled trade history."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            sequence_response = await client.get(
+                f"{url}/rest/v1/even_odd_sequences",
+                params={"select": "*", "id": f"eq.{sequence_id}", "limit": "1"},
+                headers=_headers(key),
+            )
+            sequence_response.raise_for_status()
+            sequences = sequence_response.json()
+            if not isinstance(sequences, list):
+                raise EvenOddStorageError("Sequence lookup returned an invalid response.")
+            if not sequences:
+                return None
+
+            trade_response = await client.get(
+                f"{url}/rest/v1/even_odd_trade_records",
+                params={
+                    "select": "*",
+                    "sequence_id": f"eq.{sequence_id}",
+                    "order": "trade_number.asc",
+                    "limit": "7",
+                },
+                headers=_headers(key),
+            )
+            trade_response.raise_for_status()
+            trades = trade_response.json()
+            if not isinstance(trades, list):
+                raise EvenOddStorageError("Trade lookup returned an invalid response.")
+            return {"sequence": sequences[0], "trades": trades}
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not load the Even/Odd sequence state.") from exc
