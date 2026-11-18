@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,6 +86,9 @@ def test_even_odd_endpoints_require_authentication():
     assert client.get("/even-odd/sequences/00000000-0000-0000-0000-000000000555").status_code == 401
     assert client.get("/even-odd/models?symbol=R_50").status_code == 401
     assert client.get("/even-odd/research-runs?symbol=R_50").status_code == 401
+    assert client.get(
+        "/even-odd/forecast?symbol=R_50&model_id=00000000-0000-0000-0000-000000000333"
+    ).status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -638,3 +642,129 @@ def test_list_research_runs_endpoint_returns_persisted_experiments(monkeypatch):
     response = client.get("/even-odd/research-runs?symbol=R_50", headers=auth())
     assert response.status_code == 200
     assert response.json()["research_runs"][0]["status"] == "completed"
+
+
+
+def forecast_fixture(*, status="candidate", age_seconds=1, duplicate=False):
+    from app.even_odd.ml.features import build_next_tick_features
+
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    digits = [0, 1, 2, 3]
+    features = build_next_tick_features(digits, windows=(4,))
+    feature_names = sorted(features)
+    rows = []
+    for index, digit in enumerate(digits, start=1):
+        rows.append({
+            "id": index,
+            "collection_id": "collection-1",
+            "sequence_no": index,
+            "market_symbol": "R_50",
+            "tick_epoch": now_epoch - age_seconds - (4 - index),
+            "quote": f"100.{digit}",
+            "pip_size": 1,
+            "last_digit": digit,
+            "parity": "even" if digit % 2 == 0 else "odd",
+            "deriv_stream_id": "stream-1",
+            "received_at": "2026-11-19T00:00:00+00:00",
+        })
+    if duplicate:
+        rows[-1]["sequence_no"] = rows[-2]["sequence_no"]
+    model = {
+        "id": "00000000-0000-0000-0000-000000000333",
+        "market_symbol": "R_50",
+        "model_version": "v1",
+        "status": status,
+        "model_artifact": {
+            "feature_names": feature_names,
+            "means": [0.0] * len(feature_names),
+            "scales": [1.0] * len(feature_names),
+            "weights": [0.0] * len(feature_names),
+            "intercept": 0.4,
+        },
+        "metrics": {
+            "walk_forward": {
+                "calibration_intervals": [{
+                    "validated": True,
+                    "target_probability": 0.6,
+                    "probability_bandwidth": 0.1,
+                    "lower_probability": 0.55,
+                    "upper_probability": 0.65,
+                    "method": "walk_forward_moving_block_bootstrap_local_calibration",
+                    "confidence_level": 0.9,
+                }]
+            }
+        },
+    }
+    return model, rows
+
+
+def test_forecast_endpoint_returns_research_only_probability_and_interval(monkeypatch):
+    model, rows = forecast_fixture()
+
+    async def fake_get_model(model_id):
+        return model
+
+    async def fake_load_history(**kwargs):
+        assert kwargs == {"symbol": "R_50", "limit": 4}
+        return {"rows": rows, "snapshot_max_id": 4}
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.get(
+        "/even-odd/forecast?symbol=R_50&model_id=00000000-0000-0000-0000-000000000333",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert 0 <= payload["probability_even"] <= 1
+    assert payload["model_validated"] is False
+    assert payload["uncertainty_validated"] is True
+    assert payload["entry_gate_prerequisites_passed"] is False
+    assert payload["entry_candidate"] is False
+    assert payload["execution_authorized"] is False
+    assert payload["order_execution_enabled"] is False
+
+
+def test_forecast_endpoint_rejects_stale_or_corrupt_market_data(monkeypatch):
+    model, stale_rows = forecast_fixture(age_seconds=60)
+
+    async def fake_get_model(model_id):
+        return model
+
+    async def fake_stale_history(**kwargs):
+        return {"rows": stale_rows, "snapshot_max_id": 4}
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_stale_history)
+
+    url = "/even-odd/forecast?symbol=R_50&model_id=00000000-0000-0000-0000-000000000333"
+    stale = client.get(url, headers=auth())
+    assert stale.status_code == 409
+
+    model, duplicate_rows = forecast_fixture(duplicate=True)
+
+    async def fake_duplicate_history(**kwargs):
+        return {"rows": duplicate_rows, "snapshot_max_id": 4}
+
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_duplicate_history)
+    duplicate = client.get(url, headers=auth())
+    assert duplicate.status_code == 409
+
+
+def test_forecast_endpoint_rejects_retired_models(monkeypatch):
+    model, _ = forecast_fixture(status="retired")
+
+    async def fake_get_model(model_id):
+        return model
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+
+    response = client.get(
+        "/even-odd/forecast?symbol=R_50&model_id=00000000-0000-0000-0000-000000000333",
+        headers=auth(),
+    )
+    assert response.status_code == 409
