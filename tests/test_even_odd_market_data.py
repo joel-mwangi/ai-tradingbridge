@@ -707,7 +707,7 @@ def test_forecast_endpoint_returns_research_only_probability_and_interval(monkey
 
     async def fake_load_history(**kwargs):
         assert kwargs == {"symbol": "R_50", "limit": 4}
-        return {"rows": rows, "snapshot_max_id": 4}
+        return {"rows": rows, "snapshot_max_id": 24}
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
@@ -775,14 +775,14 @@ def test_forecast_endpoint_rejects_retired_models(monkeypatch):
 def entry_history_fixture():
     now_epoch = int(datetime.now(timezone.utc).timestamp())
     rows = []
-    for index in range(1, 21):
+    for index in range(1, 25):
         digit = index % 10
         rows.append({
             "id": index,
             "collection_id": "entry-collection",
             "sequence_no": index,
             "market_symbol": "R_50",
-            "tick_epoch": now_epoch - (20 - index),
+            "tick_epoch": now_epoch - (24 - index),
             "quote": f"100.{digit}",
             "pip_size": 1,
             "last_digit": digit,
