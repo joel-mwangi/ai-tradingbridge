@@ -122,6 +122,7 @@ def _validate_observation(observation: EntryObservation) -> None:
         raise ValueError("A probability uncertainty method is required.")
     if (
         isinstance(observation.uncertainty_level, bool)
+        or not isinstance(observation.uncertainty_level, (int, float))
         or not isfinite(observation.uncertainty_level)
         or not 0.5 < observation.uncertainty_level < 1
     ):
