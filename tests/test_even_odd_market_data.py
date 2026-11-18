@@ -368,7 +368,7 @@ def test_history_endpoint_returns_bounded_chronological_snapshot(monkeypatch):
     payload = response.json()
     assert payload["returned_ticks"] == 1
     assert payload["snapshot_max_id"] == 42
-    assert payload["truncated"] is False
+    assert payload["limit_reached"] is False
     assert payload["rows"][0]["last_digit"] == 0
     assert captured == {
         "symbol": "R_50",
