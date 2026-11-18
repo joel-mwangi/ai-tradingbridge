@@ -58,6 +58,8 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     assert len(result["out_of_sample_predictions"]) == 300
     assert len(result["calibration_intervals"]) == 9
     assert all(interval["validated"] is False for interval in result["calibration_intervals"])
+    assert "vs_constant_baseline" in result["statistical_comparisons"]
+    assert "vs_rolling_frequency_baseline" in result["statistical_comparisons"]
     assert result["promotion_status"]["validated"] is False
 
 
