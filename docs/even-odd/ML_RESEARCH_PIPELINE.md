@@ -122,12 +122,12 @@ break-even probability and the minimum conservative expected value.
 
 The detector returns either `wait` or a non-executable `candidate`. It never
 submits an order. Thresholds are explicit policy inputs rather than hidden
-hard-coded claims of profitability. Probability intervals must come from a
-separately validated uncertainty method; the current logistic model only
-produces point probabilities plus a calibration mapping, so it cannot yet
-satisfy this entry gate by itself. That uncertainty-estimation component
-remains a prerequisite before entry candidates can be generated from the
-trained model.
+hard-coded claims of profitability. Walk-forward evaluation now produces
+local calibration envelopes using the moving-block bootstrap described above.
+The model itself is still stored as a candidate and is not validated by the
+training runner. Until an independent review approves the model and the
+relevant local interval passes its empirical gates, the entry API must return
+`wait`, not a candidate.
 
 
 ## Forecast and entry-check API
