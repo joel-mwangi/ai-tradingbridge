@@ -51,8 +51,13 @@ The evaluator reports:
 - constant 50% baseline metrics.
 
 Expanding walk-forward splits provide repeated chronological future test
-blocks. Results should be compared against the constant 50% baseline and
-simple rolling-frequency baselines. Performance must be stable across
+blocks. Results are compared against the constant 50% baseline and simple
+rolling-frequency baselines. A moving-block bootstrap estimates the
+baseline-minus-model log-loss improvement interval and an approximate
+one-sided bootstrap tail probability. Statistical support is reported only
+when the lower interval bound is positive and every walk-forward fold has
+positive mean improvement. This is a conservative research gate, not a
+guarantee of future performance. Performance must also be stable across
 multiple markets and time periods, not concentrated in one favourable segment.
 
 ## Statistical cautions
