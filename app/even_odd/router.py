@@ -725,9 +725,10 @@ async def check_hybrid_entry(
             uncertainty_validated = uncertainty.get("validated") is True
             observations.append(
                 EntryObservation(
-                    tick_epoch=item.tick_epoch,
-                    sample_size=item.sample_size,
-                    data_age_seconds=float(item.data_age_seconds),
+                    tick_row_id=persisted_tick["id"],
+                    tick_epoch=persisted_tick["tick_epoch"],
+                    sample_size=len(market_rows),
+                    data_age_seconds=float(data_age_seconds),
                     even_probability=float(item.even_probability),
                     lower_even_probability=(
                         float(uncertainty["lower_probability"])
