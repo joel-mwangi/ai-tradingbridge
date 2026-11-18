@@ -875,7 +875,7 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "candidate"
+    assert payload["status"] == "candidate", payload
     assert payload["side"] == "even"
     assert payload["model_status"] == "validated"
     assert payload["model_probability_even"] == pytest.approx(0.8)
