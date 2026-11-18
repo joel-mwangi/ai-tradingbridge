@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import os
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from app.even_odd.data_quality import inspect_historical_ticks
 from app.even_odd.ml.features import build_next_tick_features
 from app.even_odd.ml.model import predict_even_probability
 from app.even_odd.ml.uncertainty import select_probability_interval
+from app.even_odd.payouts import PayoutQuoteError, get_even_odd_payout_quote
 from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.entry_detector import (
     EntryObservation,
@@ -670,6 +672,51 @@ async def check_hybrid_entry(
         if model.get("status") == "retired":
             raise HTTPException(status_code=409, detail="Retired models cannot authorize entry checks.")
 
+        session_state = await get_even_odd_session_state(str(request.session_id))
+        if session_state is None:
+            raise HTTPException(status_code=404, detail="Even/Odd session not found.")
+        session = session_state["session"]
+        if session.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Entry checks require an active session.")
+        if session.get("market_symbol") != model.get("market_symbol"):
+            raise HTTPException(status_code=409, detail="Session and model markets do not match.")
+        if session.get("max_session_loss") is None:
+            raise HTTPException(status_code=409, detail="Session has no configured monetary loss cap.")
+        if int(session.get("completed_trades") or 0) >= int(session.get("max_trades_per_session") or 10):
+            raise HTTPException(status_code=409, detail="Session trade limit has been reached.")
+        if int(session.get("consecutive_losses") or 0) >= int(session.get("max_consecutive_losses") or 2):
+            raise HTTPException(status_code=409, detail="Session has reached its consecutive-loss stop.")
+
+        fixed_stake = Decimal(str(session["fixed_stake"]))
+        currency = str(session["currency"])
+        payout_quote = await get_even_odd_payout_quote(
+            symbol=model["market_symbol"],
+            currency=currency,
+            stake=fixed_stake,
+        )
+        for side in ("even", "odd"):
+            quoted_stake = Decimal(payout_quote[side]["ask_price"])
+            if abs(quoted_stake - fixed_stake) > Decimal("0.000001"):
+                raise PayoutQuoteError("Deriv quote stake does not match the session fixed stake.")
+
+        remaining_loss_budget = (
+            Decimal(str(session["max_session_loss"]))
+            + Decimal(str(session.get("realized_profit") or "0"))
+        )
+        required_loss_budget = max(
+            Decimal(payout_quote["even"]["loss_if_lose"]),
+            Decimal(payout_quote["odd"]["loss_if_lose"]),
+        )
+        if remaining_loss_budget < required_loss_budget:
+            return {
+                "status": "wait",
+                "reason": "The session monetary loss budget cannot cover the quoted stake.",
+                "session_id": str(request.session_id),
+                "payout_quote": payout_quote,
+                "execution_authorized": False,
+                "order_execution_enabled": False,
+            }
+
         artifact = model.get("model_artifact")
         if not isinstance(artifact, dict) or not isinstance(artifact.get("feature_names"), list):
             raise EvenOddStorageError("Stored model feature schema is invalid.")
@@ -761,10 +808,10 @@ async def check_hybrid_entry(
                         float(uncertainty["upper_probability"])
                         if uncertainty_validated else 1.0
                     ),
-                    even_profit_if_win=float(item.even_profit_if_win),
-                    even_loss_if_lose=float(item.even_loss_if_lose),
-                    odd_profit_if_win=float(item.odd_profit_if_win),
-                    odd_loss_if_lose=float(item.odd_loss_if_lose),
+                    even_profit_if_win=float(payout_quote["even"]["profit_if_win"]),
+                    even_loss_if_lose=float(payout_quote["even"]["loss_if_lose"]),
+                    odd_profit_if_win=float(payout_quote["odd"]["profit_if_win"]),
+                    odd_loss_if_lose=float(payout_quote["odd"]["loss_if_lose"]),
                     model_id=model_id,
                     model_version=model_version,
                     model_validated=model_validated,
@@ -797,16 +844,20 @@ async def check_hybrid_entry(
         raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PayoutQuoteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except EvenOddStorageError as exc:
         raise HTTPException(status_code=502, detail="Could not verify model entry evidence.") from exc
 
     return {
         **result,
+        "session_id": str(request.session_id),
         "model_status": model["status"],
         "model_probability_even": observations[-1].even_probability,
         "latest_observation_sample_size": observations[-1].sample_size,
         "latest_observation_data_age_seconds": observations[-1].data_age_seconds,
-        "payout_terms_source": "caller_supplied_quote",
+        "payout_quote": payout_quote,
+        "payout_terms_source": payout_quote["source"],
         "execution_authorized": False,
         "order_execution_enabled": False,
     }
