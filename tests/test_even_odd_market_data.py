@@ -541,3 +541,18 @@ def test_session_endpoint_rejects_stake_escalation_policy_values():
         },
     )
     assert response.status_code == 422
+
+
+
+def test_session_endpoint_requires_explicit_monetary_loss_cap():
+    response = client.post(
+        "/even-odd/sessions",
+        headers=auth(),
+        json={
+            "symbol": "R_50",
+            "account_mode": "research",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+        },
+    )
+    assert response.status_code == 422
