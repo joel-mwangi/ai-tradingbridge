@@ -41,8 +41,10 @@ class CandidateTradeForecast:
             raise ValueError("profit_if_win must be finite and positive.")
         if not isfinite(self.loss_if_lose) or self.loss_if_lose <= 0:
             raise ValueError("loss_if_lose must be finite and positive.")
-        if not self.model_id.strip() or not self.model_version.strip():
-            raise ValueError("A model ID and version are required.")
+        if not isinstance(self.model_id, str) or not self.model_id.strip():
+            raise ValueError("A model ID is required.")
+        if not isinstance(self.model_version, str) or not self.model_version.strip():
+            raise ValueError("A model version is required.")
 
     @property
     def expected_value(self) -> float:
@@ -80,10 +82,10 @@ def select_sequence_length(
     """Choose the longest positive-EV prefix, capped by policy and session.
 
     Forecasts are conditional forecasts for trade 1, trade 2, etc. The first
-    invalid, unvalidated, non-positive conservative-EV, or out-of-order
-    forecast terminates the candidate sequence. Every subsequent trade still
-    requires a fresh forecast; this initial decision is not authorization to
-    execute all selected trades.
+    invalid, unvalidated, non-positive conservative-EV, mismatched-model, or
+    out-of-order forecast terminates the candidate sequence. Every subsequent
+    trade still requires a fresh forecast; this initial decision is not
+    authorization to execute all selected trades.
     """
     session_cap = (
         policy.max_trades_per_session
@@ -110,6 +112,12 @@ def select_sequence_length(
             break
         if not forecast.model_validated:
             stop_reason = "The forecasting model has not passed validation."
+            break
+        if selected_model and (
+            forecast.model_id != selected_model.model_id
+            or forecast.model_version != selected_model.model_version
+        ):
+            stop_reason = "Forecast model identity/version changed within the sequence."
             break
         if not forecast.signal_valid:
             stop_reason = f"Opportunity is not valid for candidate trade {index}."
