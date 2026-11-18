@@ -23,7 +23,7 @@ class CreateSessionRequest(BaseModel):
     account_mode: Literal["research", "demo", "real"] = "research"
     currency: str = Field(default="USD", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
     fixed_stake: Decimal = Field(gt=0)
-    max_session_loss: Decimal | None = Field(default=None, gt=0)
+    max_session_loss: Decimal = Field(gt=0)
     max_trades_per_session: StrictInt = Field(default=10, ge=1, le=10)
     max_consecutive_losses: StrictInt = Field(default=2, ge=1, le=2)
 
