@@ -665,6 +665,287 @@ async def get_payout_quotes(
         raise HTTPException(status_code=502, detail="Could not retrieve live Deriv payout quotes.") from exc
 
 
+@router.post("/sequence-plan")
+async def plan_adaptive_sequence(
+    request: PlanSequenceRequest,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Plan a 1–7 trade upper bound from server-recomputed recent opportunities."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        model_id = str(request.model_id)
+        model = await get_even_odd_model(model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found.")
+        if model.get("model_version") != request.model_version:
+            raise HTTPException(status_code=409, detail="Model version is no longer current.")
+        if model.get("status") != "validated":
+            return {
+                "status": "wait",
+                "planned_trades": 0,
+                "reason": "Sequence planning requires an independently validated model.",
+                "execution_authorized": False,
+                "order_execution_enabled": False,
+            }
+
+        session_state = await get_even_odd_session_state(str(request.session_id))
+        if session_state is None:
+            raise HTTPException(status_code=404, detail="Even/Odd session not found.")
+        session = session_state["session"]
+        if session.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Sequence planning requires an active session.")
+        if session.get("market_symbol") != model.get("market_symbol"):
+            raise HTTPException(status_code=409, detail="Session and model markets do not match.")
+        if int(session.get("completed_trades") or 0) >= int(session.get("max_trades_per_session") or 10):
+            raise HTTPException(status_code=409, detail="Session trade limit has been reached.")
+        if int(session.get("consecutive_losses") or 0) >= int(session.get("max_consecutive_losses") or 2):
+            raise HTTPException(status_code=409, detail="Session has reached its consecutive-loss stop.")
+
+        fixed_stake = Decimal(str(session["fixed_stake"]))
+        payout_quote = await get_even_odd_payout_quote(
+            symbol=model["market_symbol"],
+            currency=str(session["currency"]),
+            stake=fixed_stake,
+        )
+        for side in ("even", "odd"):
+            if abs(Decimal(payout_quote[side]["ask_price"]) - fixed_stake) > Decimal("0.000001"):
+                raise PayoutQuoteError("Deriv quote stake does not match the session fixed stake.")
+
+        remaining_loss_budget = (
+            Decimal(str(session["max_session_loss"]))
+            + Decimal(str(session.get("realized_profit") or "0"))
+        )
+        required_loss_budget = max(
+            Decimal(payout_quote["even"]["loss_if_lose"]),
+            Decimal(payout_quote["odd"]["loss_if_lose"]),
+        )
+        risk_budget_available = remaining_loss_budget >= required_loss_budget
+        if not risk_budget_available:
+            return {
+                "status": "wait",
+                "planned_trades": 0,
+                "reason": "The remaining session loss budget cannot cover the quoted stake.",
+                "payout_quote": payout_quote,
+                "execution_authorized": False,
+                "order_execution_enabled": False,
+            }
+
+        artifact = model.get("model_artifact")
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("feature_names"), list):
+            raise EvenOddStorageError("Stored model feature schema is invalid.")
+        windows = sorted({
+            int(name.split("_", 1)[0][1:])
+            for name in artifact["feature_names"]
+            if isinstance(name, str)
+            and name.startswith("w")
+            and name.endswith("_even_rate")
+            and name.split("_", 1)[0][1:].isdigit()
+        })
+        if not windows:
+            raise EvenOddStorageError("Stored model does not declare valid feature windows.")
+
+        snapshot = await load_historical_ticks(symbol=model["market_symbol"], limit=5000)
+        market_rows = snapshot["rows"]
+        quality = inspect_historical_ticks(market_rows, expected_symbol=model["market_symbol"])
+        if (
+            not quality["quality_passed"]
+            or quality["exact_market_observation_duplicates"] > 0
+            or len(market_rows) < max(windows)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Persisted market history is insufficient or failed quality checks.",
+            )
+        rows_by_id = {row["id"]: row for row in market_rows}
+        row_positions = {row["id"]: index for index, row in enumerate(market_rows)}
+        now_epoch = datetime.now(timezone.utc).timestamp()
+        metrics = model.get("metrics") or {}
+        walk_forward = metrics.get("walk_forward") or {}
+        calibration_intervals = walk_forward.get("calibration_intervals") or []
+
+        observations: list[EntryObservation] = []
+        forecasts: list[CandidateTradeForecast] = []
+        forecast_details = []
+        previous_id = 0
+        previous_epoch = 0
+        even_quote = payout_quote["even"]
+        odd_quote = payout_quote["odd"]
+
+        for trade_number, item in enumerate(request.observations, start=1):
+            persisted_tick = rows_by_id.get(item.tick_row_id)
+            if (
+                persisted_tick is None
+                or persisted_tick["tick_epoch"] != item.tick_epoch
+            ):
+                raise HTTPException(status_code=409, detail="Sequence observation is not a persisted market tick.")
+            if item.tick_row_id <= previous_id or item.tick_epoch < previous_epoch:
+                raise HTTPException(status_code=409, detail="Sequence observations are not chronologically ordered.")
+            if item.tick_epoch > now_epoch + 2:
+                raise HTTPException(status_code=409, detail="Sequence observation is future-dated.")
+            previous_id = item.tick_row_id
+            previous_epoch = item.tick_epoch
+
+            data_age_seconds = max(0.0, now_epoch - item.tick_epoch)
+            target_index = row_positions[item.tick_row_id]
+            prior_rows = market_rows[:target_index]
+            if len(prior_rows) < max(windows):
+                raise HTTPException(status_code=409, detail="Not enough history precedes a sequence observation.")
+            features = build_next_tick_features(
+                [row["last_digit"] for row in prior_rows],
+                windows=tuple(windows),
+            )
+            probability_even = predict_even_probability(artifact, features)
+            uncertainty = select_probability_interval(
+                calibration_intervals,
+                target_probability=probability_even,
+            )
+            uncertainty_validated = uncertainty.get("validated") is True
+            lower_even = float(uncertainty["lower_probability"]) if uncertainty_validated else 0.0
+            upper_even = float(uncertainty["upper_probability"]) if uncertainty_validated else 1.0
+            lower_odd = 1.0 - upper_even
+
+            side_candidates = []
+            for side, quote, probability, lower_probability in (
+                ("even", even_quote, probability_even, lower_even),
+                ("odd", odd_quote, 1.0 - probability_even, lower_odd),
+            ):
+                profit = float(quote["profit_if_win"])
+                loss = float(quote["loss_if_lose"])
+                break_even = loss / (profit + loss)
+                conservative_ev = lower_probability * profit - (1 - lower_probability) * loss
+                edge = lower_probability - break_even
+                side_candidates.append({
+                    "side": side,
+                    "win_probability": probability,
+                    "lower_bound_win_probability": lower_probability,
+                    "profit_if_win": profit,
+                    "loss_if_lose": loss,
+                    "break_even_probability": break_even,
+                    "conservative_expected_value": conservative_ev,
+                    "edge_over_break_even": edge,
+                })
+
+            selected_side = max(
+                side_candidates,
+                key=lambda candidate: candidate["conservative_expected_value"],
+            )
+            signal_valid = (
+                uncertainty_validated
+                and data_age_seconds <= 10.0
+                and selected_side["edge_over_break_even"] >= 0.05
+                and selected_side["conservative_expected_value"] > 0.10
+            )
+            forecasts.append(CandidateTradeForecast(
+                trade_number=trade_number,
+                win_probability=selected_side["win_probability"],
+                lower_bound_win_probability=selected_side["lower_bound_win_probability"],
+                profit_if_win=selected_side["profit_if_win"],
+                loss_if_lose=selected_side["loss_if_lose"],
+                signal_valid=signal_valid,
+                model_validated=True,
+                uncertainty_validated=uncertainty_validated,
+                risk_budget_available=risk_budget_available,
+                model_id=model_id,
+                model_version=request.model_version,
+            ))
+            observations.append(EntryObservation(
+                tick_row_id=persisted_tick["id"],
+                tick_epoch=persisted_tick["tick_epoch"],
+                sample_size=max(windows),
+                data_age_seconds=data_age_seconds,
+                even_probability=probability_even,
+                lower_even_probability=lower_even,
+                upper_even_probability=upper_even,
+                even_profit_if_win=float(even_quote["profit_if_win"]),
+                even_loss_if_lose=float(even_quote["loss_if_lose"]),
+                odd_profit_if_win=float(odd_quote["profit_if_win"]),
+                odd_loss_if_lose=float(odd_quote["loss_if_lose"]),
+                model_id=model_id,
+                model_version=request.model_version,
+                model_validated=True,
+                uncertainty_method=uncertainty.get("method") or "unavailable",
+                uncertainty_level=float(uncertainty.get("confidence_level") or 0.9),
+                uncertainty_validated=uncertainty_validated,
+                risk_budget_available=risk_budget_available,
+            ))
+            forecast_details.append({
+                "trade_number": trade_number,
+                "tick_row_id": persisted_tick["id"],
+                "tick_epoch": persisted_tick["tick_epoch"],
+                "data_age_seconds": data_age_seconds,
+                "side": selected_side["side"],
+                "win_probability": selected_side["win_probability"],
+                "lower_bound_win_probability": selected_side["lower_bound_win_probability"],
+                "break_even_probability": selected_side["break_even_probability"],
+                "conservative_expected_value": selected_side["conservative_expected_value"],
+                "edge_over_break_even": selected_side["edge_over_break_even"],
+                "uncertainty_validated": uncertainty_validated,
+                "signal_valid": signal_valid,
+            })
+
+        if len(observations) < 3:
+            raise HTTPException(status_code=422, detail="At least three recent observations are required for entry confirmation.")
+        entry_result = evaluate_hybrid_entry(
+            observations[-3:],
+            policy=EntryPolicy(minimum_sample_size=max(windows)),
+        )
+        if entry_result["status"] != "candidate":
+            return {
+                "status": "wait",
+                "planned_trades": 0,
+                "reason": entry_result["reason"],
+                "entry_check": entry_result,
+                "forecasts": forecast_details,
+                "payout_quote": payout_quote,
+                "execution_authorized": False,
+                "order_execution_enabled": False,
+            }
+
+        remaining_session_trades = (
+            int(session.get("max_trades_per_session") or 10)
+            - int(session.get("completed_trades") or 0)
+        )
+        decision = select_sequence_length(
+            forecasts,
+            policy=EvenOddPolicy(),
+            session_trades_remaining=remaining_session_trades,
+        )
+        return {
+            "status": "plan" if decision.approved else "wait",
+            "planned_trades": decision.selected_trades,
+            "max_allowed_trades": decision.max_allowed_trades,
+            "expected_value_by_trade": list(decision.expected_value_by_trade),
+            "conservative_ev_by_trade": list(decision.conservative_ev_by_trade),
+            "model_id": model_id,
+            "model_version": request.model_version,
+            "session_id": str(request.session_id),
+            "plan_basis": "recent_persisted_opportunity_persistence_proxy",
+            "plan_reason": decision.reason,
+            "forecasts": forecast_details,
+            "entry_check": entry_result,
+            "payout_quote": payout_quote,
+            "warning": (
+                "This plan uses recent persisted opportunities as a persistence proxy, "
+                "not a trained forward sequence-survival forecast. It is an upper bound; "
+                "revalidate after every completed trade. No order was placed."
+            ),
+            "execution_authorized": False,
+            "order_execution_enabled": False,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PayoutQuoteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not verify sequence planning evidence.") from exc
+
+
 @router.post("/entry-check")
 async def check_hybrid_entry(
     request: EvaluateEntryRequest,
