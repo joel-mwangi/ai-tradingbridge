@@ -465,7 +465,7 @@ async def create_even_odd_session(
     account_mode: str,
     currency: str,
     fixed_stake: str,
-    max_session_loss: str | None,
+    max_session_loss: str,
     max_trades_per_session: int = 10,
     max_consecutive_losses: int = 2,
 ) -> dict[str, Any]:
