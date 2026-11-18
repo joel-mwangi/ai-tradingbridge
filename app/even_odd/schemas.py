@@ -84,4 +84,3 @@ class EntryPolicyRequest(BaseModel):
 class EvaluateEntryRequest(BaseModel):
     session_id: UUID
     observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
-    policy: EntryPolicyRequest
