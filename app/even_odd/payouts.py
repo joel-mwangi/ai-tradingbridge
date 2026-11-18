@@ -10,6 +10,7 @@ import json
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from math import isfinite
 from typing import Any
 
 import websockets
@@ -57,8 +58,13 @@ async def get_even_odd_payout_quote(
         raise ValueError("Stake must be a finite positive amount.") from None
     if not amount.is_finite() or amount <= 0:
         raise ValueError("Stake must be a finite positive amount.")
-    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive.")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("timeout_seconds must be finite and positive.")
 
     requests = [
         {
@@ -128,6 +134,7 @@ async def get_even_odd_payout_quote(
                     or echo.get("basis") != "stake"
                     or echo.get("duration") != 1
                     or echo.get("duration_unit") != "t"
+                    or Decimal(str(echo.get("amount"))) != amount
                 ):
                     raise PayoutQuoteError("Deriv proposal does not match the requested contract.")
 
