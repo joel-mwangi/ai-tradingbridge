@@ -92,7 +92,8 @@ async def test_failed_collection_update_sets_terminal_status_without_sensitive_d
     assert client.call["json"]["status"] == "failed"
     assert client.call["json"]["completed_at"]
     assert "Inspect backend logs" in client.call["json"]["error_message"]
-    assert "sb_secret_example" not in str(client.call)
+    assert client.call["headers"]["apikey"] == "sb_secret_example"
+    assert "sb_secret_example" not in str(client.call["json"])
 
 
 @pytest.mark.asyncio
