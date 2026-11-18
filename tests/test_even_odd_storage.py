@@ -12,6 +12,9 @@ from app.even_odd.storage import (
     start_research_run,
     complete_research_run,
     fail_research_run,
+    create_even_odd_session,
+    start_even_odd_sequence,
+    record_even_odd_settlement,
     storage_is_configured,
 )
 
@@ -454,3 +457,154 @@ async def test_fail_research_run_is_best_effort_without_configuration(monkeypatc
     await fail_research_run(
         research_run_id="00000000-0000-0000-0000-000000000222"
     )
+
+
+
+@pytest.mark.asyncio
+async def test_create_even_odd_session_uses_dedicated_storage(monkeypatch):
+    session_id = "00000000-0000-0000-0000-000000000444"
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"id": session_id, "market_symbol": "R_50"}]
+
+    class FakeAsyncClient:
+        payload = None
+        url = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            FakeAsyncClient.url = url
+            FakeAsyncClient.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await create_even_odd_session(
+        symbol="R_50",
+        account_mode="research",
+        currency="USD",
+        fixed_stake="1.00",
+        max_session_loss="10.00",
+    )
+    assert result["id"] == session_id
+    assert FakeAsyncClient.url.endswith("/rest/v1/even_odd_sessions")
+    assert FakeAsyncClient.payload["fixed_stake"] == "1.00"
+    assert FakeAsyncClient.payload["max_trades_per_session"] == 10
+
+
+@pytest.mark.asyncio
+async def test_start_sequence_calls_atomic_database_function(monkeypatch):
+    sequence_id = "00000000-0000-0000-0000-000000000555"
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"sequence_id": sequence_id, "execution_authorized": False}
+
+    class FakeAsyncClient:
+        payload = None
+        url = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            FakeAsyncClient.url = url
+            FakeAsyncClient.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await start_even_odd_sequence(
+        session_id="00000000-0000-0000-0000-000000000444",
+        model_id="00000000-0000-0000-0000-000000000333",
+        model_version="v1",
+        planned_trades=4,
+        expected_value_snapshot={"trade_1": 0.2},
+    )
+    assert result["sequence_id"] == sequence_id
+    assert FakeAsyncClient.url.endswith("/rest/v1/rpc/even_odd_start_sequence")
+    assert FakeAsyncClient.payload["p_planned_trades"] == 4
+
+
+@pytest.mark.asyncio
+async def test_settlement_calls_atomic_database_function(monkeypatch):
+    trade_id = "00000000-0000-0000-0000-000000000666"
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"trade_id": trade_id, "sequence_status": "completed"}
+
+    class FakeAsyncClient:
+        payload = None
+        url = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            FakeAsyncClient.url = url
+            FakeAsyncClient.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await record_even_odd_settlement(
+        sequence_id="00000000-0000-0000-0000-000000000555",
+        trade_number=1,
+        side="even",
+        stake="1",
+        profit_if_win="0.8",
+        loss_if_lose="1",
+        even_probability="0.8",
+        lower_even_probability="0.75",
+        upper_even_probability="0.85",
+        conservative_expected_value="0.35",
+        revalidation={
+            "model_validated": True,
+            "uncertainty_validated": True,
+            "signal_valid": True,
+            "data_fresh": True,
+            "risk_budget_available": True,
+        },
+        outcome="win",
+        realized_profit="0.8",
+    )
+    assert result["trade_id"] == trade_id
+    assert FakeAsyncClient.url.endswith("/rest/v1/rpc/even_odd_record_trade_settlement")
+    assert FakeAsyncClient.payload["p_conservative_expected_value"] == "0.35"
