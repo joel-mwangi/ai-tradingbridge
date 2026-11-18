@@ -165,3 +165,17 @@ def test_hybrid_entry_waits_for_unvalidated_probability_uncertainty():
     result = evaluate_hybrid_entry(observations, policy=policy())
     assert result["status"] == "wait"
     assert "uncertainty bounds" in result["reason"]
+
+
+
+def test_every_confirmation_must_pass_conservative_edge_and_ev():
+    result = evaluate_hybrid_entry(
+        [
+            observation(100, p_even=0.6, lower=0.56, upper=0.64),
+            observation(105),
+            observation(110),
+        ],
+        policy=policy(),
+    )
+    assert result["status"] == "wait"
+    assert "at least one confirmation" in result["reason"].lower()
