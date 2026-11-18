@@ -14,6 +14,7 @@ All endpoints require the existing server-to-server bearer token.
 
 - `GET /even-odd/status`: reports module availability and research-only state.
 - `POST /even-odd/analyze`: analyzes a supplied last-digit sample.
+- `GET /even-odd/history`: returns a bounded historical tick snapshot, optionally filtered by epoch range or collection ID.
 - `POST /even-odd/collect`: creates a durable collection-run record, collects
   a bounded live tick sample from the selected Deriv symbol, persists normalized
   ticks to the dedicated Even/Odd Supabase project, and returns descriptive
@@ -59,8 +60,14 @@ best-effort if the database itself becomes unavailable.
 Storage uses only `EVEN_ODD_SUPABASE_URL` and the dedicated secret/service-role
 key environment variables. It never falls back to the primary application's
 Supabase credentials. The collector is request-scoped and bounded; it is not
-a continuously running background worker. Historical aggregation and durable
-dataset management remain subsequent research-platform work.
+a continuously running background worker. The authenticated `/even-odd/history` endpoint reads up to 5,000 rows per
+request in chronological order. It captures the maximum row ID before paging
+and applies that boundary to every page, so concurrent inserts do not shift
+the result set mid-read. When both epoch bounds are supplied, both are applied.
+Overlapping collection windows can still contain duplicate observations; the
+raw history endpoint deliberately preserves source rows rather than silently
+deduplicating them. Dataset-level deduplication and quality diagnostics remain
+subsequent research-platform work.
 
 ## Execution boundary
 
