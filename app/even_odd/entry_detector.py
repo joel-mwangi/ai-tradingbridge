@@ -58,6 +58,9 @@ class EntryObservation:
     model_id: str
     model_version: str
     model_validated: bool
+    uncertainty_method: str
+    uncertainty_level: float
+    uncertainty_validated: bool
 
 
 def _validate_observation(observation: EntryObservation) -> None:
@@ -96,6 +99,16 @@ def _validate_observation(observation: EntryObservation) -> None:
         raise ValueError("Model identity and version are required.")
     if type(observation.model_validated) is not bool:
         raise ValueError("model_validated must be boolean.")
+    if not isinstance(observation.uncertainty_method, str) or not observation.uncertainty_method.strip():
+        raise ValueError("A probability uncertainty method is required.")
+    if (
+        isinstance(observation.uncertainty_level, bool)
+        or not isfinite(observation.uncertainty_level)
+        or not 0.5 < observation.uncertainty_level < 1
+    ):
+        raise ValueError("uncertainty_level must be a finite confidence level in (0.5, 1).")
+    if type(observation.uncertainty_validated) is not bool:
+        raise ValueError("uncertainty_validated must be boolean.")
 
 
 def _conservative_side(observation: EntryObservation) -> dict:
@@ -159,6 +172,12 @@ def evaluate_hybrid_entry(
             return {
                 "status": "wait",
                 "reason": "Forecasting model has not passed independent validation.",
+                "execution_authorized": False,
+            }
+        if not observation.uncertainty_validated:
+            return {
+                "status": "wait",
+                "reason": "Probability uncertainty bounds have not been independently validated.",
                 "execution_authorized": False,
             }
         if observation.sample_size < policy.minimum_sample_size:
@@ -228,6 +247,8 @@ def evaluate_hybrid_entry(
         "side": latest["side"],
         "model_id": recent[-1].model_id,
         "model_version": recent[-1].model_version,
+        "uncertainty_method": recent[-1].uncertainty_method,
+        "uncertainty_level": recent[-1].uncertainty_level,
         "confirmations": required,
         "lower_probability": latest["lower_probability"],
         "break_even_probability": latest["break_even_probability"],
