@@ -16,10 +16,16 @@ from app.even_odd.ml.features import build_next_tick_features
 from app.even_odd.ml.model import predict_even_probability
 from app.even_odd.ml.uncertainty import select_probability_interval
 from app.even_odd.digit_engine import analyze_digits
+from app.even_odd.entry_detector import (
+    EntryObservation,
+    EntryPolicy,
+    evaluate_hybrid_entry,
+)
 from app.even_odd.schemas import (
     AnalyzeDigitsRequest,
     CollectTicksRequest,
     CreateSessionRequest,
+    EvaluateEntryRequest,
     RecordTradeSettlementRequest,
     StartSequenceRequest,
 )
@@ -623,3 +629,57 @@ async def forecast_next_parity(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except EvenOddStorageError as exc:
         raise HTTPException(status_code=502, detail="Could not produce research forecast.") from exc
+
+
+
+@router.post("/entry-check")
+def check_hybrid_entry(
+    request: EvaluateEntryRequest,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Evaluate consecutive model/payout/freshness evidence; never submit an order."""
+    try:
+        policy = EntryPolicy(
+            minimum_sample_size=request.policy.minimum_sample_size,
+            maximum_data_age_seconds=float(request.policy.maximum_data_age_seconds),
+            required_confirmations=request.policy.required_confirmations,
+            maximum_confirmation_gap_seconds=float(
+                request.policy.maximum_confirmation_gap_seconds
+            ),
+            minimum_edge_over_break_even=float(
+                request.policy.minimum_edge_over_break_even
+            ),
+            minimum_conservative_expected_value=float(
+                request.policy.minimum_conservative_expected_value
+            ),
+        )
+        observations = [
+            EntryObservation(
+                tick_epoch=item.tick_epoch,
+                sample_size=item.sample_size,
+                data_age_seconds=float(item.data_age_seconds),
+                even_probability=float(item.even_probability),
+                lower_even_probability=float(item.lower_even_probability),
+                upper_even_probability=float(item.upper_even_probability),
+                even_profit_if_win=float(item.even_profit_if_win),
+                even_loss_if_lose=float(item.even_loss_if_lose),
+                odd_profit_if_win=float(item.odd_profit_if_win),
+                odd_loss_if_lose=float(item.odd_loss_if_lose),
+                model_id=item.model_id,
+                model_version=item.model_version,
+                model_validated=item.model_validated,
+                uncertainty_method=item.uncertainty_method,
+                uncertainty_level=float(item.uncertainty_level),
+                uncertainty_validated=item.uncertainty_validated,
+            )
+            for item in request.observations
+        ]
+        result = evaluate_hybrid_entry(observations, policy=policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        **result,
+        "execution_authorized": False,
+        "order_execution_enabled": False,
+    }
