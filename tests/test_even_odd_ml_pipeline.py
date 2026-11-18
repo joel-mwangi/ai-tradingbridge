@@ -41,7 +41,7 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     result = run_walk_forward_evaluation(
         digits,
         windows=(20,),
-        minimum_train_rows=100,
+        minimum_train_rows=400,
         test_rows=100,
         maximum_folds=3,
         max_epochs=30,
@@ -53,6 +53,7 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     assert [fold["fold"] for fold in result["folds"]] == [1, 2, 3]
     assert all(fold["training_rows"] >= 80 for fold in result["folds"])
     assert all(fold["validation_rows"] >= 20 for fold in result["folds"])
+    assert all(fold["calibration_rows"] >= 50 for fold in result["folds"])
     assert result["aggregate_model_metrics"]["sample_size"] == 300
     assert result["promotion_status"]["validated"] is False
 
