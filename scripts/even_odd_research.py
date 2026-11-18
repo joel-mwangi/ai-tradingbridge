@@ -114,6 +114,8 @@ async def _run(args: argparse.Namespace) -> int:
                 maximum_folds=args.maximum_folds,
                 max_epochs=args.max_epochs,
             )
+            # Persist compact metrics and calibrated intervals, not every raw OOS row.
+            walk_forward.pop("out_of_sample_predictions", None)
 
         model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
