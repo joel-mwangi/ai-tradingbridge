@@ -96,7 +96,7 @@ def run_walk_forward_evaluation(
     digits: Sequence[int],
     *,
     windows: Sequence[int] = DEFAULT_WINDOWS,
-    minimum_train_rows: int = 200,
+    minimum_train_rows: int = 400,
     test_rows: int = 200,
     maximum_folds: int = 5,
     learning_rate: float = 0.1,
