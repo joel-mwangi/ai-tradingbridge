@@ -12,6 +12,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
 from app.even_odd.data_quality import inspect_historical_ticks
+from app.even_odd.ml.features import build_next_tick_features
+from app.even_odd.ml.model import predict_even_probability
+from app.even_odd.ml.uncertainty import select_probability_interval
 from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.schemas import (
     AnalyzeDigitsRequest,
@@ -26,6 +29,7 @@ from app.even_odd.storage import (
     create_even_odd_session,
     fail_collection_run,
     finish_collection_run,
+    get_even_odd_model,
     get_even_odd_sequence_state,
     get_even_odd_session_state,
     load_historical_ticks,
@@ -506,3 +510,115 @@ async def list_research_runs(
     except EvenOddStorageError as exc:
         raise HTTPException(status_code=502, detail="Could not list research runs.") from exc
     return {"symbol": symbol, "count": len(runs), "research_runs": runs}
+
+
+
+@router.get("/forecast")
+async def forecast_next_parity(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
+    model_id: UUID = Query(),
+    max_data_age_seconds: float = Query(default=5.0, ge=0.1, le=60.0),
+) -> dict:
+    """Produce a research-only next-parity forecast from the latest persisted ticks."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        model = await get_even_odd_model(str(model_id))
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found.")
+        if model["market_symbol"] != symbol:
+            raise HTTPException(status_code=422, detail="Model market does not match the requested symbol.")
+        if model["status"] == "retired":
+            raise HTTPException(status_code=409, detail="Retired models cannot produce forecasts.")
+
+        artifact = model.get("model_artifact")
+        if not isinstance(artifact, dict):
+            raise EvenOddStorageError("Stored model artifact is invalid.")
+        feature_names = artifact.get("feature_names")
+        if not isinstance(feature_names, list):
+            raise EvenOddStorageError("Stored model feature schema is invalid.")
+        windows = sorted({
+            int(name.split("_", 1)[0][1:])
+            for name in feature_names
+            if isinstance(name, str)
+            and name.startswith("w")
+            and name.endswith("_even_rate")
+            and name.split("_", 1)[0][1:].isdigit()
+        })
+        if not windows:
+            raise EvenOddStorageError("Stored model does not declare valid feature windows.")
+
+        snapshot = await load_historical_ticks(
+            symbol=symbol,
+            limit=max(windows),
+        )
+        rows = snapshot["rows"]
+        quality = inspect_historical_ticks(rows, expected_symbol=symbol)
+        if not quality["quality_passed"] or quality["exact_market_observation_duplicates"] > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Latest market-data snapshot failed quality or duplicate-observation checks.",
+            )
+        digits = [row["last_digit"] for row in rows]
+        features = build_next_tick_features(digits, windows=tuple(windows))
+        probability_even = predict_even_probability(artifact, features)
+
+        latest_epoch = rows[-1]["tick_epoch"] if rows else 0
+        data_age_seconds = max(
+            0.0,
+            datetime.now(timezone.utc).timestamp() - latest_epoch,
+        )
+        if not rows or data_age_seconds > max_data_age_seconds:
+            raise HTTPException(
+                status_code=409,
+                detail="Latest market data is stale or unavailable.",
+            )
+
+        metrics = model.get("metrics") or {}
+        walk_forward = metrics.get("walk_forward") or {}
+        intervals = walk_forward.get("calibration_intervals") or []
+        uncertainty = select_probability_interval(
+            intervals,
+            target_probability=probability_even,
+        )
+        model_validated = model.get("status") == "validated"
+        uncertainty_validated = uncertainty.get("validated") is True
+        return {
+            "symbol": symbol,
+            "model_id": model["id"],
+            "model_version": model["model_version"],
+            "model_status": model["status"],
+            "model_validated": model_validated,
+            "probability_even": probability_even,
+            "probability_odd": 1 - probability_even,
+            "lower_even_probability": uncertainty.get("lower_probability"),
+            "upper_even_probability": uncertainty.get("upper_probability"),
+            "uncertainty_method": uncertainty.get("method"),
+            "uncertainty_level": uncertainty.get("confidence_level"),
+            "uncertainty_validated": uncertainty_validated,
+            "sample_size": len(rows),
+            "latest_tick_epoch": latest_epoch,
+            "data_age_seconds": data_age_seconds,
+            "data_quality": quality,
+            "snapshot_max_id": snapshot["snapshot_max_id"],
+            "entry_eligible": (
+                model_validated and uncertainty_validated
+                and data_age_seconds <= max_data_age_seconds
+            ),
+            "execution_authorized": False,
+            "order_execution_enabled": False,
+            "warning": (
+                "Research forecast only. A point probability is not a trade signal; "
+                "entry confirmation and independent validation gates still apply."
+            ),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not produce research forecast.") from exc
