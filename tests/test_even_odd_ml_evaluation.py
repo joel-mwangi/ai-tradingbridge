@@ -3,7 +3,10 @@ import math
 import pytest
 
 from app.even_odd.ml.evaluation import evaluate_even_probabilities
-from app.even_odd.ml.walk_forward import expanding_walk_forward_splits
+from app.even_odd.ml.walk_forward import (
+    chronological_research_split,
+    expanding_walk_forward_splits,
+)
 
 
 def test_evaluation_reports_probability_and_calibration_metrics():
@@ -65,3 +68,28 @@ def test_walk_forward_rejects_shuffled_rows_and_invalid_sizes():
         expanding_walk_forward_splits(rows, minimum_train_rows=10, test_rows=5)
     with pytest.raises(ValueError, match="at least 5"):
         expanding_walk_forward_splits(rows, minimum_train_rows=4, test_rows=5)
+
+
+
+def test_chronological_research_split_reserves_independent_calibration_and_test():
+    rows = [{"target_index": index} for index in range(100)]
+    splits = chronological_research_split(rows)
+
+    assert len(splits["train"]) == 50
+    assert len(splits["validation"]) == 15
+    assert len(splits["calibration"]) == 15
+    assert len(splits["test"]) == 20
+    assert splits["train"][-1]["target_index"] < splits["validation"][0]["target_index"]
+    assert splits["validation"][-1]["target_index"] < splits["calibration"][0]["target_index"]
+    assert splits["calibration"][-1]["target_index"] < splits["test"][0]["target_index"]
+
+
+def test_chronological_research_split_rejects_missing_test_partition():
+    rows = [{"target_index": index} for index in range(100)]
+    with pytest.raises(ValueError, match="untouched test"):
+        chronological_research_split(
+            rows,
+            train_fraction=0.6,
+            validation_fraction=0.2,
+            calibration_fraction=0.2,
+        )
