@@ -120,7 +120,6 @@ def test_win_resets_consecutive_loss_counter():
         ({"data_fresh": False}, "stale"),
         ({"signal_valid": False}, "no longer valid"),
         ({"conservative_expected_value": 0.0}, "not positive"),
-        ({"conservative_expected_value": float("nan")}, "not positive"),
         ({"risk_budget_available": False}, "exhausted"),
     ],
 )
@@ -183,3 +182,9 @@ def test_sequence_policy_and_revalidation_reject_boolean_coercion():
             conservative_expected_value=0.2,
             risk_budget_available=True,
         )
+
+
+
+def test_revalidation_rejects_non_finite_expected_value_at_construction():
+    with pytest.raises(ValueError, match="finite and numeric"):
+        valid_revalidation(conservative_expected_value=float("nan"))
