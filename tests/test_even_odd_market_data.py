@@ -1311,7 +1311,11 @@ def test_sequence_plan_rejects_a_session_with_an_active_sequence(monkeypatch):
 def test_payouts_endpoint_returns_read_only_even_and_odd_quotes(monkeypatch):
     async def fake_quote(**kwargs):
         assert kwargs == {"symbol": "R_50", "currency": "USD", "stake": Decimal("1")}
-        return fake_entry_payout_quote()
+        return {
+            "even": {"contract_type": "DIGITEVEN", "proposal_id": "even"},
+            "odd": {"contract_type": "DIGITODD", "proposal_id": "odd"},
+            "execution_authorized": False,
+        }
 
     monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_quote)
     response = client.get(
@@ -1322,4 +1326,4 @@ def test_payouts_endpoint_returns_read_only_even_and_odd_quotes(monkeypatch):
     payload = response.json()
     assert payload["even"]["contract_type"] == "DIGITEVEN"
     assert payload["odd"]["contract_type"] == "DIGITODD"
-    assert payload["execution_enabled"] is False
+    assert payload["execution_authorized"] is False
