@@ -1,6 +1,6 @@
 import pytest
 
-from app.even_odd.ml.features import build_supervised_rows
+from app.even_odd.ml.features import build_supervised_rows, chronological_split
 
 
 def test_feature_rows_use_only_ticks_before_target():
@@ -56,3 +56,27 @@ def test_target_digit_is_not_encoded_in_features():
     rows = build_supervised_rows(digits, windows=(5,))
     assert rows[0]["target_parity"] == "odd"
     assert all(not key.endswith("_target_digit") for key in rows[0]["features"])
+
+
+
+def test_chronological_split_preserves_order_and_untouched_test_tail():
+    rows = [{"target_index": i, "features": {}, "target_parity": "even"} for i in range(100)]
+    splits = chronological_split(rows)
+    assert len(splits["train"]) == 60
+    assert len(splits["validation"]) == 20
+    assert len(splits["test"]) == 20
+    assert splits["train"][-1]["target_index"] < splits["validation"][0]["target_index"]
+    assert splits["validation"][-1]["target_index"] < splits["test"][0]["target_index"]
+
+
+def test_chronological_split_rejects_shuffled_or_overlapping_rows():
+    rows = [{"target_index": i, "features": {}, "target_parity": "even"} for i in range(10)]
+    rows[3], rows[4] = rows[4], rows[3]
+    with pytest.raises(ValueError, match="ordered"):
+        chronological_split(rows)
+
+
+def test_chronological_split_requires_untouched_test_fraction():
+    rows = [{"target_index": i} for i in range(10)]
+    with pytest.raises(ValueError, match="leave a test set"):
+        chronological_split(rows, train_fraction=0.8, validation_fraction=0.2)
