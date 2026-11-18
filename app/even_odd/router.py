@@ -336,11 +336,7 @@ async def create_session(
             account_mode=request.account_mode,
             currency=request.currency,
             fixed_stake=str(request.fixed_stake),
-            max_session_loss=(
-                str(request.max_session_loss)
-                if request.max_session_loss is not None
-                else None
-            ),
+            max_session_loss=str(request.max_session_loss),
             max_trades_per_session=request.max_trades_per_session,
             max_consecutive_losses=request.max_consecutive_losses,
         )
