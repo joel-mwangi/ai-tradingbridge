@@ -48,6 +48,7 @@ def observation(
         uncertainty_method="block_bootstrap",
         uncertainty_level=0.9,
         uncertainty_validated=True,
+        risk_budget_available=True,
     )
 
 
