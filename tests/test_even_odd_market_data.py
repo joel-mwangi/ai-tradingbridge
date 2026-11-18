@@ -459,19 +459,35 @@ def test_create_session_endpoint_validates_and_persists_fixed_stake(monkeypatch)
     assert captured["max_trades_per_session"] == 10
 
 
-def test_start_sequence_endpoint_uses_validated_model_gate(monkeypatch):
+def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
     captured = {}
+
+    async def fake_plan(request, _):
+        assert request.session_id == "00000000-0000-0000-0000-000000000444"
+        assert len(request.observations) == 1
+        return {
+            "status": "plan",
+            "planned_trades": 3,
+            "plan_basis": "test_proxy",
+            "plan_reason": "Three candidates passed.",
+            "expected_value_by_trade": [0.2, 0.18, 0.15],
+            "conservative_ev_by_trade": [0.1, 0.09, 0.08],
+            "forecasts": [{"trade_number": 1}],
+            "payout_quote": {"source": "deriv_public_websocket"},
+            "execution_authorized": False,
+        }
 
     async def fake_start_sequence(**kwargs):
         captured.update(kwargs)
         return {
             "sequence_id": "sequence-1",
-            "planned_trades": 3,
+            "planned_trades": kwargs["planned_trades"],
             "status": "active",
             "execution_authorized": False,
         }
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.plan_adaptive_sequence", fake_plan)
     monkeypatch.setattr("app.even_odd.router.start_even_odd_sequence", fake_start_sequence)
 
     response = client.post(
@@ -481,13 +497,18 @@ def test_start_sequence_endpoint_uses_validated_model_gate(monkeypatch):
             "session_id": "00000000-0000-0000-0000-000000000444",
             "model_id": "00000000-0000-0000-0000-000000000333",
             "model_version": "v1",
-            "planned_trades": 3,
-            "expected_value_snapshot": {"trade_1": 0.25},
+            "observations": [{"tick_row_id": 24, "tick_epoch": 1_800_000_000}],
+            # These legacy fields must not control the server's plan.
+            "planned_trades": 7,
+            "expected_value_snapshot": {"trade_1": 999},
         },
     )
     assert response.status_code == 200
     assert response.json()["order_execution_enabled"] is False
+    assert response.json()["sequence_started"] is True
+    assert response.json()["sequence_plan"]["planned_trades"] == 3
     assert captured["planned_trades"] == 3
+    assert captured["expected_value_snapshot"]["plan_basis"] == "test_proxy"
     assert captured["model_version"] == "v1"
 
 
