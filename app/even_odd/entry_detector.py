@@ -13,11 +13,11 @@ from typing import Sequence
 @dataclass(frozen=True, slots=True)
 class EntryPolicy:
     minimum_sample_size: int
-    maximum_data_age_seconds: float
-    required_confirmations: int
-    maximum_confirmation_gap_seconds: float
-    minimum_edge_over_break_even: float
-    minimum_conservative_expected_value: float
+    maximum_data_age_seconds: float = 10.0
+    required_confirmations: int = 3
+    maximum_confirmation_gap_seconds: float = 10.0
+    minimum_edge_over_break_even: float = 0.05
+    minimum_conservative_expected_value: float = 0.10
 
     def __post_init__(self) -> None:
         if type(self.minimum_sample_size) is not int or self.minimum_sample_size < 20:
