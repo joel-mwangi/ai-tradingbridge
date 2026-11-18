@@ -85,7 +85,6 @@ async def get_even_odd_payout_quote(
     ]
 
     quotes: dict[str, dict] = {}
-    now_epoch = datetime.now(timezone.utc).timestamp()
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     try:
         async with websockets.connect(
@@ -153,10 +152,6 @@ async def get_even_odd_payout_quote(
                 spot_time = proposal.get("spot_time")
                 if type(spot_time) is not int or spot_time <= 0:
                     raise PayoutQuoteError("Deriv proposal has no valid spot_time.")
-                quote_age = now_epoch - spot_time
-                if quote_age < -2 or quote_age > max_quote_age_seconds:
-                    raise PayoutQuoteError("Deriv proposal spot quote is stale or future-dated.")
-
                 quotes[side] = {
                     "contract_type": contract_type,
                     "proposal_id": proposal_id,
@@ -166,8 +161,14 @@ async def get_even_odd_payout_quote(
                     "loss_if_lose": str(ask_price),
                     "spot": proposal.get("spot"),
                     "spot_time": spot_time,
-                    "quote_age_seconds": max(0.0, quote_age),
                 }
+        quoted_at = datetime.now(timezone.utc)
+        final_epoch = quoted_at.timestamp()
+        for quote in quotes.values():
+            quote_age = final_epoch - quote["spot_time"]
+            if quote_age < -2 or quote_age > max_quote_age_seconds:
+                raise PayoutQuoteError("Deriv proposal spot quote is stale or future-dated.")
+            quote["quote_age_seconds"] = max(0.0, quote_age)
     except PayoutQuoteError:
         raise
     except asyncio.TimeoutError as exc:
@@ -182,7 +183,7 @@ async def get_even_odd_payout_quote(
         "requested_stake": str(amount),
         "duration": 1,
         "duration_unit": "t",
-        "quoted_at": datetime.now(timezone.utc).isoformat(),
+        "quoted_at": quoted_at.isoformat(),
         "even": quotes["even"],
         "odd": quotes["odd"],
         "execution_authorized": False,
