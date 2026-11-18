@@ -42,7 +42,7 @@ def test_block_bootstrap_interval_passes_sample_block_and_fold_stability_gates()
     )
 
     assert result["validated"] is True
-    assert result["method"] == "walk_forward_moving_block_bootstrap_local_calibration"
+    assert result["method"] == "walk_forward_non_overlapping_block_bootstrap_local_calibration"
     assert result["local_sample_size"] == 1500
     assert result["local_fold_count"] == 5
     assert result["local_block_count"] >= 10
