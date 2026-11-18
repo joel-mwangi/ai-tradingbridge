@@ -703,6 +703,7 @@ async def check_hybrid_entry(
                 detail="Persisted market history is insufficient or failed quality checks.",
             )
         rows_by_id = {row["id"]: row for row in market_rows}
+        row_positions = {row["id"]: index for index, row in enumerate(market_rows)}
         now_epoch = datetime.now(timezone.utc).timestamp()
 
         metrics = model.get("metrics") or {}
@@ -730,18 +731,28 @@ async def check_hybrid_entry(
                 0.0,
                 now_epoch - persisted_tick["tick_epoch"],
             )
+            target_index = row_positions[item.tick_row_id]
+            prior_rows = market_rows[:target_index]
+            if len(prior_rows) < max(windows):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Not enough persisted ticks precede an entry observation.",
+                )
+            prior_digits = [row["last_digit"] for row in prior_rows]
+            features = build_next_tick_features(prior_digits, windows=tuple(windows))
+            probability_even = predict_even_probability(artifact, features)
             uncertainty = select_probability_interval(
                 calibration_intervals,
-                target_probability=float(item.even_probability),
+                target_probability=probability_even,
             )
             uncertainty_validated = uncertainty.get("validated") is True
             observations.append(
                 EntryObservation(
                     tick_row_id=persisted_tick["id"],
                     tick_epoch=persisted_tick["tick_epoch"],
-                    sample_size=len(market_rows),
+                    sample_size=len(prior_rows),
                     data_age_seconds=float(data_age_seconds),
-                    even_probability=float(item.even_probability),
+                    even_probability=probability_even,
                     lower_even_probability=(
                         float(uncertainty["lower_probability"])
                         if uncertainty_validated else 0.0
@@ -792,6 +803,10 @@ async def check_hybrid_entry(
     return {
         **result,
         "model_status": model["status"],
+        "model_probability_even": observations[-1].even_probability,
+        "latest_observation_sample_size": observations[-1].sample_size,
+        "latest_observation_data_age_seconds": observations[-1].data_age_seconds,
+        "payout_terms_source": "caller_supplied_quote",
         "execution_authorized": False,
         "order_execution_enabled": False,
     }
