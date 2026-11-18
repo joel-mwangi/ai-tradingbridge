@@ -1051,3 +1051,92 @@ def test_settlement_revalidation_flags_reject_string_boolean_coercion():
         },
     )
     assert response.status_code == 422
+
+
+def test_entry_check_waits_when_session_loss_budget_is_exhausted(monkeypatch):
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_session(session_id):
+        state = entry_session_state()
+        state["session"]["realized_profit"] = "-10.00"
+        return state
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_session)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(entry_history_fixture()),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+    assert "loss budget" in response.json()["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("completed_trades", 10), ("consecutive_losses", 2)],
+)
+def test_entry_check_blocks_exhausted_session_trade_limits(monkeypatch, field, value):
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_session(session_id):
+        state = entry_session_state()
+        state["session"][field] = value
+        return state
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_session)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(entry_history_fixture()),
+    )
+    assert response.status_code == 409
+
+
+def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch):
+    rows = entry_history_fixture()
+    for row in rows[-3:]:
+        row["tick_epoch"] -= 100
+
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_session(session_id):
+        return entry_session_state()
+
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 24}
+
+    payload = entry_check_payload(rows)
+    payload["policy"] = {
+        "minimum_sample_size": 1,
+        "maximum_data_age_seconds": 1000,
+        "required_confirmations": 2,
+        "maximum_confirmation_gap_seconds": 1000,
+        "minimum_edge_over_break_even": 0,
+        "minimum_conservative_expected_value": 0,
+    }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_session)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=payload,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+    assert "stale" in response.json()["reason"].lower()
