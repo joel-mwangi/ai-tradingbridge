@@ -244,3 +244,56 @@ def estimate_local_probability_interval(
             else "Local calibration interval failed fold-stability or maximum-width gates."
         ),
     }
+
+
+def select_probability_interval(
+    calibration_intervals: Sequence[dict],
+    *,
+    target_probability: float,
+) -> dict:
+    """Select the nearest validated local-calibration interval without extrapolation."""
+    if (
+        isinstance(target_probability, bool)
+        or not isinstance(target_probability, (int, float))
+        or not isfinite(target_probability)
+        or not 0 <= target_probability <= 1
+    ):
+        raise ValueError("target_probability must be finite and between 0 and 1.")
+    eligible = [
+        item for item in calibration_intervals
+        if isinstance(item, dict)
+        and item.get("validated") is True
+        and isinstance(item.get("lower_probability"), (int, float))
+        and isinstance(item.get("upper_probability"), (int, float))
+        and isinstance(item.get("target_probability"), (int, float))
+    ]
+    if not eligible:
+        return {
+            "validated": False,
+            "lower_probability": None,
+            "upper_probability": None,
+            "reason": "No validated local-calibration interval is available.",
+        }
+    selected = min(
+        eligible,
+        key=lambda item: abs(item["target_probability"] - target_probability),
+    )
+    if abs(selected["target_probability"] - target_probability) > selected.get(
+        "probability_bandwidth", 0
+    ):
+        return {
+            "validated": False,
+            "lower_probability": None,
+            "upper_probability": None,
+            "reason": "Forecast is outside the validated calibration interval bandwidth.",
+        }
+    return {
+        "validated": True,
+        "method": selected["method"],
+        "confidence_level": selected["confidence_level"],
+        "target_probability": float(target_probability),
+        "calibration_center": selected["target_probability"],
+        "lower_probability": selected["lower_probability"],
+        "upper_probability": selected["upper_probability"],
+        "reason": "Nearest validated local-calibration interval selected without extrapolation.",
+    }
