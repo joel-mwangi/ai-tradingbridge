@@ -799,7 +799,6 @@ def entry_check_payload(rows):
             {
                 "tick_row_id": row["id"],
                 "tick_epoch": row["tick_epoch"],
-                "even_probability": "0.80",
                 "even_profit_if_win": "0.80",
                 "even_loss_if_lose": "1.00",
                 "odd_profit_if_win": "0.90",
@@ -821,12 +820,21 @@ def entry_check_payload(rows):
 
 
 def entry_model(*, status="validated", interval_validated=True, version="v1"):
+    from app.even_odd.ml.features import build_next_tick_features
+
+    feature_names = sorted(build_next_tick_features([0, 1, 2, 3], windows=(4,)))
     return {
         "id": "00000000-0000-0000-0000-000000000333",
         "market_symbol": "R_50",
         "model_version": version,
         "status": status,
-        "model_artifact": {"feature_names": ["w4_even_rate"]},
+        "model_artifact": {
+            "feature_names": feature_names,
+            "means": [0.0] * len(feature_names),
+            "scales": [1.0] * len(feature_names),
+            "weights": [0.0] * len(feature_names),
+            "intercept": 1.3862943611198906,
+        },
         "metrics": {
             "walk_forward": {
                 "calibration_intervals": [{
@@ -868,6 +876,8 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
     assert payload["status"] == "candidate"
     assert payload["side"] == "even"
     assert payload["model_status"] == "validated"
+    assert payload["model_probability_even"] == pytest.approx(0.8)
+    assert payload["latest_observation_sample_size"] >= 20
     assert payload["execution_authorized"] is False
     assert payload["order_execution_enabled"] is False
 
