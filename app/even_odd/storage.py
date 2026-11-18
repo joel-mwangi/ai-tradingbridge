@@ -285,14 +285,16 @@ async def load_historical_ticks(
                 base_params["collection_id"] = f"eq.{collection_id}"
 
             while len(rows) < limit:
-                page_end = min(len(rows) + page_size, limit) - 1
+                page_start = len(rows)
+                page_end = min(page_start + page_size, limit) - 1
+                expected_page_size = page_end - page_start + 1
                 response = await client.get(
                     f"{url}/rest/v1/even_odd_ticks",
                     params=base_params,
                     headers={
                         **headers,
                         "Range-Unit": "items",
-                        "Range": f"{len(rows)}-{page_end}",
+                        "Range": f"{page_start}-{page_end}",
                     },
                 )
                 response.raise_for_status()
@@ -302,9 +304,7 @@ async def load_historical_ticks(
                         "Historical tick query returned an invalid response."
                     )
                 rows.extend(page)
-                if len(page) < page_end - len(rows) + len(page) + 1:
-                    break
-                if not page:
+                if len(page) < expected_page_size:
                     break
             return {
                 "rows": rows[:limit],
