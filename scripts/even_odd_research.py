@@ -1,7 +1,7 @@
-"""Run Even/Odd research locally against the dedicated Supabase dataset.
+"""Run Even/Odd research locally and persist the run/model to dedicated Supabase.
 
 Example:
-    python -m scripts.even_odd_research --symbol R_50 --limit 5000
+    python -m scripts.even_odd_research --symbol R_50 --limit 5000 --walk-forward
 
 Set EVEN_ODD_SUPABASE_URL and EVEN_ODD_SUPABASE_SECRET_KEY in the local
 environment first. Never commit these credentials or place them in source.
@@ -12,13 +12,21 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 
 from app.even_odd.data_quality import inspect_historical_ticks
 from app.even_odd.ml.pipeline import (
     run_research_experiment,
     run_walk_forward_evaluation,
 )
-from app.even_odd.storage import EvenOddStorageError, load_historical_ticks
+from app.even_odd.storage import (
+    EvenOddStorageError,
+    complete_research_run,
+    fail_research_run,
+    load_historical_ticks,
+    save_candidate_model,
+    start_research_run,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,24 +47,33 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _load(symbol: str, limit: int) -> dict:
-    return await load_historical_ticks(symbol=symbol, limit=limit)
-
-
-def main() -> int:
-    args = _parser().parse_args()
+async def _run(args: argparse.Namespace) -> int:
+    research_run_id: str | None = None
     try:
-        snapshot = asyncio.run(_load(args.symbol, args.limit))
+        snapshot = await load_historical_ticks(
+            symbol=args.symbol,
+            limit=args.limit,
+        )
         rows = snapshot["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=args.symbol)
+        research_run_id = await start_research_run(
+            symbol=args.symbol,
+            snapshot_max_id=snapshot["snapshot_max_id"],
+            dataset_rows=len(rows),
+            quality_report=quality,
+        )
+
         if not quality["quality_passed"]:
+            await fail_research_run(research_run_id=research_run_id)
             print(json.dumps({
                 "status": "blocked",
+                "research_run_id": research_run_id,
                 "reason": "Historical dataset failed structural quality checks.",
                 "snapshot_max_id": snapshot["snapshot_max_id"],
                 "quality": quality,
             }, indent=2))
             return 2
+
         if quality["exact_market_observation_duplicates"]:
             print(
                 "WARNING: repeated observation fingerprints detected; raw rows "
@@ -70,17 +87,9 @@ def main() -> int:
             windows=tuple(args.windows),
             max_epochs=args.max_epochs,
         )
-        result = {
-            "status": "research_complete",
-            "symbol": args.symbol,
-            "snapshot_max_id": snapshot["snapshot_max_id"],
-            "limit": args.limit,
-            "limit_reached": len(rows) == args.limit,
-            "quality": quality,
-            "experiment": experiment,
-        }
+        walk_forward = None
         if args.walk_forward:
-            result["walk_forward"] = run_walk_forward_evaluation(
+            walk_forward = run_walk_forward_evaluation(
                 digits,
                 windows=tuple(args.windows),
                 minimum_train_rows=args.minimum_train_rows,
@@ -88,14 +97,62 @@ def main() -> int:
                 maximum_folds=args.maximum_folds,
                 max_epochs=args.max_epochs,
             )
-        print(json.dumps(result, indent=2, allow_nan=False))
+
+        model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        evaluation = {
+            "test_metrics": experiment["test_metrics"],
+            "constant_baseline_metrics": experiment["constant_baseline_metrics"],
+            "rolling_frequency_baseline_metrics": experiment[
+                "rolling_frequency_baseline_metrics"
+            ],
+            "promotion_status": experiment["promotion_status"],
+            "walk_forward": walk_forward,
+        }
+        model_id = await save_candidate_model(
+            symbol=args.symbol,
+            model_version=model_version,
+            model_artifact=experiment["model"],
+            metrics=evaluation,
+            snapshot_max_id=snapshot["snapshot_max_id"],
+            partition_sizes=experiment["partitions"],
+        )
+        await complete_research_run(
+            research_run_id=research_run_id,
+            model_id=model_id,
+            partition_sizes=experiment["partitions"],
+            evaluation=evaluation,
+        )
+
+        print(json.dumps({
+            "status": "research_complete",
+            "research_run_id": research_run_id,
+            "model_id": model_id,
+            "model_version": model_version,
+            "symbol": args.symbol,
+            "snapshot_max_id": snapshot["snapshot_max_id"],
+            "limit": args.limit,
+            "limit_reached": len(rows) == args.limit,
+            "quality": quality,
+            "experiment": experiment,
+            "walk_forward": walk_forward,
+            "model_persisted_as": "candidate",
+            "execution_authorized": False,
+        }, indent=2, allow_nan=False))
         return 0
     except (ValueError, EvenOddStorageError) as exc:
+        if research_run_id is not None:
+            await fail_research_run(research_run_id=research_run_id)
         print(json.dumps({
             "status": "error",
+            "research_run_id": research_run_id,
             "message": str(exc),
         }, indent=2))
         return 2
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    return asyncio.run(_run(args))
 
 
 if __name__ == "__main__":
