@@ -1,0 +1,35 @@
+name: Even/Odd backend tests
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "app/even_odd/**"
+      - "tests/test_even_odd_*.py"
+      - ".github/workflows/even-odd-tests.yml"
+  push:
+    branches: ["feat/even-odd-backend-foundation"]
+    paths:
+      - "app/even_odd/**"
+      - "tests/test_even_odd_*.py"
+      - ".github/workflows/even-odd-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  even-odd-domain-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test runner
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run isolated Even/Odd tests
+        run: python -m pytest tests/test_even_odd_*.py -q

@@ -15,6 +15,7 @@ from app.mt5_bridge import router as mt5_router
 from app.mt5_trade_orders import router as mt5_trade_router
 from app.mt5_position_commands import router as mt5_position_router
 from app.mt5_positions import router as mt5_positions_router
+from app.even_odd.router import router as even_odd_router
 
 
 app = FastAPI(
@@ -28,6 +29,7 @@ app.include_router(mt5_router)
 app.include_router(mt5_trade_router)
 app.include_router(mt5_position_router)
 app.include_router(mt5_positions_router)
+app.include_router(even_odd_router)
 
 # Explicitly allow only configured frontend origins for browser HTTP calls.
 # Set TRADEBRIDGE_ALLOWED_ORIGINS to comma-separated exact origins, e.g.
