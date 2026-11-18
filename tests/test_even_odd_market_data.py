@@ -790,7 +790,7 @@ def entry_check_payload(rows):
         ],
         "policy": {
             "minimum_sample_size": 4,
-            "maximum_data_age_seconds": "3.0",
+            "maximum_data_age_seconds": "10.0",
             "required_confirmations": 3,
             "maximum_confirmation_gap_seconds": "10.0",
             "minimum_edge_over_break_even": "0.05",
