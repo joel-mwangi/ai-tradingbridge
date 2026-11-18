@@ -60,15 +60,37 @@ reset session exposure or session trade count.
 
 ## Risk boundary
 
-Risk controls are hard constraints and can veto ML recommendations. Monetary
-stake and session-loss caps must be configured from the account balance and
-user-approved risk tolerance before execution. No monetary default is silently
-assumed. If the minimum permitted contract stake exceeds the configured risk
-cap, reject the trade.
+Risk controls are hard constraints and can veto ML recommendations. Every
+persistent session requires a fixed stake, currency, and explicit user-approved
+maximum session loss. No monetary risk cap is silently assumed. The database
+rejects any settlement whose stake differs from the session's fixed stake.
+The session closes when its completed-trade cap or realized-loss cap is reached.
+If the minimum permitted contract stake exceeds the configured risk cap, reject
+the trade.
+
+## Persistent state and atomic transitions
+
+Session, sequence, and settled-trade records are stored in the dedicated
+Even/Odd Supabase project. A database transaction locks the session and
+sequence rows while recording each settlement, then updates the counters and
+terminal state atomically. This prevents concurrent requests from bypassing
+the seven-trade sequence limit, ten-trade session limit, fixed-stake rule, or
+two-consecutive-loss stop. Only one active sequence is permitted per session.
+
+Starting a sequence requires a model registry entry marked validated with the
+same market and version as the session. Recording a settlement rechecks the
+model status, probability interval, payout-derived conservative expected
+value, fixed stake, fresh-data/signal/risk revalidation flags, and trade order.
+A new sequence is an explicit restart and resets the sequence-level loss streak.
+
+These APIs only create session records, start research sequences, and record
+settled outcomes. They do not submit Deriv orders. All responses explicitly
+keep order execution disabled.
 
 ## Research and execution boundary
 
 The current implementation provides policy validation, sequence-length
-selection from supplied forecasts, and in-memory sequence/session guardrails.
-It does not connect to Deriv, persist sessions, train models, or place orders.
+selection from supplied forecasts, persistent session/sequence/trade-result
+records, and database-enforced state transitions. It does not place orders or
+connect this module to Deriv contract execution.
 Those capabilities require separate milestones and tests.
