@@ -73,6 +73,7 @@ class EntryObservation:
     uncertainty_method: str
     uncertainty_level: float
     uncertainty_validated: bool
+    risk_budget_available: bool
 
 
 def _validate_observation(observation: EntryObservation) -> None:
