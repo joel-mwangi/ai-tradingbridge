@@ -71,3 +71,18 @@ def test_walk_forward_pipeline_rejects_insufficient_rows():
             minimum_train_rows=100,
             test_rows=50,
         )
+
+
+def test_walk_forward_default_training_rows_provide_calibration_minimum():
+    result = run_walk_forward_evaluation(
+        [0, 1] * 500,
+        windows=(20,),
+        test_rows=50,
+        maximum_folds=1,
+        max_epochs=20,
+        patience=5,
+    )
+
+    first_fold = result["folds"][0]
+    assert first_fold["calibration_rows"] >= 50
+    assert first_fold["validation_rows"] >= 20
