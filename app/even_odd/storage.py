@@ -436,9 +436,9 @@ async def complete_research_run(
 
 async def fail_research_run(*, research_run_id: str) -> None:
     """Best-effort failure transition; never stores raw exception or credential data."""
-    url, key = _configuration()
-    timeout = httpx.Timeout(10.0, connect=5.0)
     try:
+        url, key = _configuration()
+        timeout = httpx.Timeout(10.0, connect=5.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.patch(
                 f"{url}/rest/v1/even_odd_research_runs",
