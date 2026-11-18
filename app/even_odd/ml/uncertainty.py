@@ -218,7 +218,7 @@ def estimate_local_probability_interval(
     if len(bootstrap_rates) < max(100, policy.bootstrap_replicates // 2):
         return {
             **base_result,
-            "reason": "Too few valid moving-block bootstrap replicates were produced.",
+            "reason": "Too few valid non-overlapping block bootstrap replicates were produced.",
         }
 
     tail = (1 - policy.confidence_level) / 2
