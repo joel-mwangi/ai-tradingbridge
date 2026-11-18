@@ -169,6 +169,8 @@ async def get_even_odd_payout_quote(
             if quote_age < -2 or quote_age > max_quote_age_seconds:
                 raise PayoutQuoteError("Deriv proposal spot quote is stale or future-dated.")
             quote["quote_age_seconds"] = max(0.0, quote_age)
+        if abs(quotes["even"]["spot_time"] - quotes["odd"]["spot_time"]) > 2:
+            raise PayoutQuoteError("Even and Odd payout quotes do not share a sufficiently close market snapshot.")
     except PayoutQuoteError:
         raise
     except asyncio.TimeoutError as exc:
