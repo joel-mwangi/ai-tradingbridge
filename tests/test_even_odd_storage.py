@@ -8,6 +8,10 @@ from app.even_odd.storage import (
     _headers,
     _mark_collection_failed,
     persist_collection,
+    save_candidate_model,
+    start_research_run,
+    complete_research_run,
+    fail_research_run,
     storage_is_configured,
 )
 
@@ -304,3 +308,149 @@ async def test_load_historical_ticks_returns_empty_when_database_has_no_ticks(mo
 
     result = await load_historical_ticks(symbol="R_50")
     assert result == {"rows": [], "snapshot_max_id": None}
+
+
+
+@pytest.mark.asyncio
+async def test_start_research_run_persists_snapshot_and_quality(monkeypatch):
+    run_id = "00000000-0000-0000-0000-000000000222"
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"id": run_id}]
+
+    class FakeAsyncClient:
+        payload = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            FakeAsyncClient.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await start_research_run(
+        symbol="R_50",
+        snapshot_max_id=100,
+        dataset_rows=90,
+        quality_report={"quality_passed": True},
+    )
+    assert result == run_id
+    assert FakeAsyncClient.payload["snapshot_max_id"] == 100
+    assert FakeAsyncClient.payload["dataset_rows"] == 90
+    assert FakeAsyncClient.payload["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_candidate_model_is_persisted_with_execution_disabled(monkeypatch):
+    model_id = "00000000-0000-0000-0000-000000000333"
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"id": model_id}]
+
+    class FakeAsyncClient:
+        payload = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            FakeAsyncClient.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await save_candidate_model(
+        symbol="R_50",
+        model_version="20261119T000000000000Z",
+        model_artifact={"model_type": "standardized_logistic_regression"},
+        metrics={"test": {"log_loss": 0.69}},
+        snapshot_max_id=100,
+        partition_sizes={
+            "train": 50,
+            "validation": 20,
+            "calibration": 20,
+            "test": 20,
+        },
+    )
+    payload = FakeAsyncClient.payload
+    assert result == model_id
+    assert payload["status"] == "candidate"
+    assert payload["execution_authorized"] is False
+    assert payload["model_artifact"]["model_type"] == "standardized_logistic_regression"
+
+
+@pytest.mark.asyncio
+async def test_complete_research_run_links_candidate_model_and_stores_metrics(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"id": "00000000-0000-0000-0000-000000000222"}]
+
+    class FakeAsyncClient:
+        call = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def patch(self, url, *, params, headers, json):
+            FakeAsyncClient.call = {"params": params, "headers": headers, "json": json}
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    await complete_research_run(
+        research_run_id="00000000-0000-0000-0000-000000000222",
+        model_id="00000000-0000-0000-0000-000000000333",
+        partition_sizes={"train": 50, "validation": 20, "calibration": 20, "test": 20},
+        evaluation={"test_log_loss": 0.69},
+    )
+    assert FakeAsyncClient.call["params"]["id"] == "eq.00000000-0000-0000-0000-000000000222"
+    assert FakeAsyncClient.call["json"]["status"] == "completed"
+    assert FakeAsyncClient.call["json"]["model_id"] == "00000000-0000-0000-0000-000000000333"
+    assert FakeAsyncClient.call["json"]["evaluation"]["test_log_loss"] == 0.69
+
+
+@pytest.mark.asyncio
+async def test_fail_research_run_is_best_effort_without_configuration(monkeypatch):
+    monkeypatch.delenv("EVEN_ODD_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("EVEN_ODD_SUPABASE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("EVEN_ODD_SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    await fail_research_run(
+        research_run_id="00000000-0000-0000-0000-000000000222"
+    )
