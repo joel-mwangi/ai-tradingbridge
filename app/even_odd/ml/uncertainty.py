@@ -125,7 +125,7 @@ def estimate_local_probability_interval(
 
     if not records:
         return {
-            "method": "walk_forward_moving_block_bootstrap_local_calibration",
+            "method": "walk_forward_non_overlapping_block_bootstrap_local_calibration",
             "target_probability": float(target_probability),
             "validated": False,
             "lower_probability": None,
@@ -162,7 +162,7 @@ def estimate_local_probability_interval(
         item["target_index"] // policy.block_size for item in local
     })
     base_result = {
-        "method": "walk_forward_moving_block_bootstrap_local_calibration",
+        "method": "walk_forward_non_overlapping_block_bootstrap_local_calibration",
         "confidence_level": policy.confidence_level,
         "target_probability": float(target_probability),
         "probability_bandwidth": policy.probability_bandwidth,
@@ -390,7 +390,7 @@ def bootstrap_log_loss_improvement(
 
     if not records:
         return {
-            "method": "moving_block_bootstrap_log_loss_difference",
+            "method": "non_overlapping_block_bootstrap_log_loss_difference",
             "baseline": baseline_key,
             "statistically_supported": False,
             "reason": "No out-of-sample forecasts are available.",
@@ -416,7 +416,7 @@ def bootstrap_log_loss_improvement(
     ]
     point_improvement = sum(item["improvement"] for item in records) / len(records)
     base_result = {
-        "method": "moving_block_bootstrap_log_loss_difference",
+        "method": "non_overlapping_block_bootstrap_log_loss_difference",
         "baseline": baseline_key,
         "sample_size": len(records),
         "block_count": len(blocks),
