@@ -942,9 +942,10 @@ async def plan_adaptive_sequence(
             "entry_check": entry_result,
             "payout_quote": payout_quote,
             "warning": (
-                "This plan uses recent persisted opportunities as a persistence proxy, "
-                "not a trained forward sequence-survival forecast. It is an upper bound; "
-                "revalidate after every completed trade. No order was placed."
+                "This plan applies the current payout quote to recent persisted "
+                "opportunities as a persistence proxy; it is not a historical payout "
+                "replay or a trained forward sequence-survival forecast. It is an "
+                "upper bound; revalidate after every completed trade. No order was placed."
             ),
             "execution_authorized": False,
             "order_execution_enabled": False,
