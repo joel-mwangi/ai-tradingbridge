@@ -273,17 +273,14 @@ async def load_historical_ticks(
                 "id": f"lte.{snapshot_max_id}",
                 "order": "tick_epoch.asc,id.asc",
             }
-            if from_epoch is not None:
-                base_params["tick_epoch"] = f"gte.{from_epoch}"
-            if to_epoch is not None:
-                base_params["tick_epoch"] = (
-                    f"lte.{to_epoch}" if from_epoch is None
-                    else f"gte.{from_epoch}"  # lower bound is applied below with and=
+            if from_epoch is not None and to_epoch is not None:
+                base_params["and"] = (
+                    f"(tick_epoch.gte.{from_epoch},tick_epoch.lte.{to_epoch})"
                 )
-                if from_epoch is not None:
-                    base_params["and"] = (
-                        f"(tick_epoch.gte.{from_epoch},tick_epoch.lte.{to_epoch})"
-                    )
+            elif from_epoch is not None:
+                base_params["tick_epoch"] = f"gte.{from_epoch}"
+            elif to_epoch is not None:
+                base_params["tick_epoch"] = f"lte.{to_epoch}"
             if collection_id is not None:
                 base_params["collection_id"] = f"eq.{collection_id}"
 
