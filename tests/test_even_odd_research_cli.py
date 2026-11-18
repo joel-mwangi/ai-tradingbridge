@@ -11,6 +11,7 @@ async def test_research_cli_blocks_duplicate_samples_without_explicit_opt_in(mon
     row = {
         "id": 1,
         "collection_id": "run-1",
+        "sequence_no": 1,
         "market_symbol": "R_50",
         "tick_epoch": 1760000000,
         "quote": "123.452",
