@@ -111,10 +111,10 @@ def test_collect_endpoint_uses_dedicated_collector_and_persists(monkeypatch):
         for i in range(10)
     ]
 
-    collector_called_at = []
+    collection_started_at = []
 
     async def fake_collect(symbol, tick_count, timeout_seconds):
-        collector_called_at.append(datetime.now(timezone.utc))
+        assert collection_started_at[0] <= datetime.now(timezone.utc)
         assert symbol == "R_50"
         assert tick_count == 10
         return sample
@@ -124,7 +124,7 @@ def test_collect_endpoint_uses_dedicated_collector_and_persists(monkeypatch):
         assert requested_ticks == 10
         assert isinstance(started_at, datetime)
         assert started_at.tzinfo == timezone.utc
-        assert started_at <= collector_called_at[0]
+        collection_started_at.append(started_at)
         return "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
 
     async def fake_finish_collection_run(**kwargs):
