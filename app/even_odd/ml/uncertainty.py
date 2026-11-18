@@ -222,8 +222,12 @@ def estimate_local_probability_interval(
         }
 
     tail = (1 - policy.confidence_level) / 2
-    lower = max(0.0, _quantile(bootstrap_rates, tail))
-    upper = min(1.0, _quantile(bootstrap_rates, 1 - tail))
+    bootstrap_lower = max(0.0, _quantile(bootstrap_rates, tail))
+    bootstrap_upper = min(1.0, _quantile(bootstrap_rates, 1 - tail))
+    # The final conservative envelope contains both the model point forecast
+    # and the bootstrap interval for observed local calibration outcomes.
+    lower = min(float(target_probability), bootstrap_lower)
+    upper = max(float(target_probability), bootstrap_upper)
     interval_width = upper - lower
     validated = (
         fold_spread is not None
@@ -234,6 +238,8 @@ def estimate_local_probability_interval(
         **base_result,
         "lower_probability": lower,
         "upper_probability": upper,
+        "bootstrap_lower_probability": bootstrap_lower,
+        "bootstrap_upper_probability": bootstrap_upper,
         "interval_width": interval_width,
         "bootstrap_replicates_used": len(bootstrap_rates),
         "validated": validated,
