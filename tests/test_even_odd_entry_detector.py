@@ -1,4 +1,5 @@
 import pytest
+from dataclasses import replace
 
 from app.even_odd.entry_detector import (
     EntryObservation,
@@ -157,11 +158,9 @@ def test_hybrid_entry_waits_for_unvalidated_probability_uncertainty():
         observation(105),
         observation(110),
     ]
-    observations[1] = EntryObservation(
-        **{
-            **observations[1].__dict__,
-            "uncertainty_validated": False,
-        }
+    observations[1] = replace(
+        observations[1],
+        uncertainty_validated=False,
     )
     result = evaluate_hybrid_entry(observations, policy=policy())
     assert result["status"] == "wait"
