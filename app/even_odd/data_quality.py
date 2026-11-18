@@ -13,6 +13,7 @@ from typing import Any, Sequence
 REQUIRED_FIELDS = (
     "id",
     "collection_id",
+    "sequence_no",
     "market_symbol",
     "tick_epoch",
     "quote",
@@ -41,6 +42,10 @@ def inspect_historical_ticks(
     collection_ids: set[str] = set()
     valid_epochs: list[int] = []
     previous_order: tuple[int, int] | None = None
+    previous_sequence_by_collection: dict[str, int] = {}
+    seen_sequences: set[tuple[str, int]] = set()
+    duplicate_sequence_numbers = 0
+    sequence_order_violations = 0
 
     for row in rows:
         if not isinstance(row, dict):
@@ -54,9 +59,13 @@ def inspect_historical_ticks(
             continue
 
         try:
-            if any(type(row[field]) is not int for field in ("id", "tick_epoch", "pip_size", "last_digit")):
+            if any(
+                type(row[field]) is not int
+                for field in ("id", "sequence_no", "tick_epoch", "pip_size", "last_digit")
+            ):
                 raise ValueError
             row_id = row["id"]
+            sequence_no = row["sequence_no"]
             epoch = row["tick_epoch"]
             pip_size = row["pip_size"]
             digit = row["last_digit"]
@@ -64,7 +73,7 @@ def inspect_historical_ticks(
             quote = Decimal(str(row["quote"]))
             parity = row["parity"]
             collection_id = str(row["collection_id"])
-            if row_id <= 0 or epoch <= 0 or not 0 <= pip_size <= 10:
+            if row_id <= 0 or sequence_no <= 0 or epoch <= 0 or not 0 <= pip_size <= 10:
                 raise ValueError
             if not quote.is_finite() or quote <= 0 or not 0 <= digit <= 9:
                 raise ValueError
@@ -92,6 +101,15 @@ def inspect_historical_ticks(
             ordering_violations += 1
         previous_order = order_key
 
+        sequence_key = (collection_id, sequence_no)
+        if sequence_key in seen_sequences:
+            duplicate_sequence_numbers += 1
+        seen_sequences.add(sequence_key)
+        previous_sequence = previous_sequence_by_collection.get(collection_id)
+        if previous_sequence is not None and sequence_no <= previous_sequence:
+            sequence_order_violations += 1
+        previous_sequence_by_collection[collection_id] = sequence_no
+
         fingerprints[(symbol, epoch, formatted_quote, pip_size)] += 1
         collection_ids.add(collection_id)
         valid_epochs.append(epoch)
@@ -107,6 +125,8 @@ def inspect_historical_ticks(
         "parity_mismatches": parity_mismatches,
         "quote_digit_mismatches": quote_digit_mismatches,
         "chronological_order_violations": ordering_violations,
+        "duplicate_sequence_numbers": duplicate_sequence_numbers,
+        "sequence_order_violations": sequence_order_violations,
         "exact_market_observation_duplicates": duplicate_rows,
         "collection_count": len(collection_ids),
         "first_tick_epoch": min(valid_epochs) if valid_epochs else None,
@@ -117,6 +137,8 @@ def inspect_historical_ticks(
             and parity_mismatches == 0
             and quote_digit_mismatches == 0
             and ordering_violations == 0
+            and duplicate_sequence_numbers == 0
+            and sequence_order_violations == 0
         ),
         "duplicate_policy": (
             "Duplicates are reported but retained. Identical quote and epoch "
