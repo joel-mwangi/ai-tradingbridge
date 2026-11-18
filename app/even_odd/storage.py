@@ -40,13 +40,7 @@ def storage_is_configured() -> bool:
 
 
 def _headers(key: str, prefer: str | None = None) -> dict[str, str]:
-    # Modern sb_secret_* keys are opaque, not JWTs. Sending one as a Bearer
-    # token causes Supabase to reject it as an invalid JWT. Legacy service-role
-    # keys are JWTs and continue to use both headers.
-    headers = {
-        "apikey": key,
-        "Content-Type": "application/json",
-    }
+    headers = {"apikey": key, "Content-Type": "application/json"}
     if not key.startswith("sb_secret_"):
         headers["Authorization"] = f"Bearer {key}"
     if prefer:
@@ -60,8 +54,10 @@ async def _mark_collection_failed(
     url: str,
     key: str,
     collection_id: str,
+    received_ticks: int = 0,
+    error_message: str = "Collection failed. Inspect backend logs for details.",
 ) -> None:
-    """Best-effort terminal status update; never mask the original failure."""
+    """Best-effort terminal update that never masks the original failure."""
     try:
         response = await client.patch(
             f"{url}/rest/v1/even_odd_collection_runs",
@@ -69,39 +65,25 @@ async def _mark_collection_failed(
             headers=_headers(key, "return=minimal"),
             json={
                 "status": "failed",
+                "received_ticks": received_ticks,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "error_message": (
-                    "Collection persistence failed. Inspect backend logs for details."
-                ),
+                "error_message": error_message[:500],
             },
         )
         response.raise_for_status()
     except (httpx.HTTPError, ValueError, TypeError):
-        # The database may be unavailable, including for this cleanup request.
-        # Preserve the initial exception rather than replacing it.
         return
 
 
-async def persist_collection(
-    *,
-    symbol: str,
-    requested_ticks: int,
-    ticks: list[dict[str, Any]],
-    started_at: datetime,
+async def start_collection_run(
+    *, symbol: str, requested_ticks: int, started_at: datetime
 ) -> str:
-    """Persist one collected sample and return its collection UUID.
-
-    The collection record is created first. Tick rows are inserted in one
-    bounded batch, then the collection is marked completed or partial.
-    If a later persistence step fails, the run is best-effort marked failed.
-    """
+    """Create the durable audit record before opening the market-data socket."""
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        collection_id: str | None = None
-        try:
-            run_response = await client.post(
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
                 f"{url}/rest/v1/even_odd_collection_runs",
                 headers=_headers(key, "return=representation"),
                 json={
@@ -113,14 +95,44 @@ async def persist_collection(
                     "metadata": {"collector": "dedicated_deriv_public_websocket"},
                 },
             )
-            run_response.raise_for_status()
-            run_rows = run_response.json()
-            if not isinstance(run_rows, list) or not run_rows:
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
                 raise EvenOddStorageError(
                     "Dedicated database did not return the new collection record."
                 )
-            collection_id = str(UUID(str(run_rows[0]["id"])))
+            return str(UUID(str(rows[0]["id"])))
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError(
+            "Could not create the collection audit record in the dedicated database."
+        ) from exc
 
+
+async def finish_collection_run(
+    *,
+    collection_id: str,
+    symbol: str,
+    requested_ticks: int,
+    ticks: list[dict[str, Any]],
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    """Persist the collected ticks and transition the run to a terminal state."""
+    if status not in {"completed", "partial"}:
+        raise ValueError("Collection terminal status must be completed or partial.")
+    if len(ticks) > requested_ticks:
+        raise ValueError("Received tick count cannot exceed requested tick count.")
+    if status == "completed" and len(ticks) != requested_ticks:
+        raise ValueError("A completed collection must contain every requested tick.")
+    if status == "partial" and not 0 < len(ticks) < requested_ticks:
+        raise ValueError("A partial collection must contain between 1 and requested ticks.")
+
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
             tick_rows = [
                 {
                     "collection_id": collection_id,
@@ -136,7 +148,6 @@ async def persist_collection(
                 }
                 for index, tick in enumerate(ticks, start=1)
             ]
-
             if tick_rows:
                 tick_response = await client.post(
                     f"{url}/rest/v1/even_odd_ticks",
@@ -145,30 +156,65 @@ async def persist_collection(
                 )
                 tick_response.raise_for_status()
 
-            run_status = "completed" if len(ticks) == requested_ticks else "partial"
             finish_response = await client.patch(
                 f"{url}/rest/v1/even_odd_collection_runs",
                 params={"id": f"eq.{collection_id}"},
                 headers=_headers(key, "return=minimal"),
                 json={
-                    "status": run_status,
+                    "status": status,
                     "received_ticks": len(ticks),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "error_message": error_message[:500] if error_message else None,
                 },
             )
             finish_response.raise_for_status()
-            return collection_id
-        except EvenOddStorageError:
-            if collection_id is not None:
-                await _mark_collection_failed(
-                    client, url=url, key=key, collection_id=collection_id
-                )
-            raise
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            if collection_id is not None:
-                await _mark_collection_failed(
-                    client, url=url, key=key, collection_id=collection_id
-                )
+            await _mark_collection_failed(
+                client,
+                url=url,
+                key=key,
+                collection_id=collection_id,
+                received_ticks=0,
+            )
             raise EvenOddStorageError(
-                "Failed to persist the collected sample in the dedicated Even/Odd database."
+                "Failed to persist or finalize the collection in the dedicated database."
             ) from exc
+
+
+async def fail_collection_run(
+    *, collection_id: str, received_ticks: int, error_message: str
+) -> None:
+    """Mark an upstream collection failure; database cleanup is best effort."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        await _mark_collection_failed(
+            client,
+            url=url,
+            key=key,
+            collection_id=collection_id,
+            received_ticks=received_ticks,
+            error_message=error_message,
+        )
+
+
+async def persist_collection(
+    *,
+    symbol: str,
+    requested_ticks: int,
+    ticks: list[dict[str, Any]],
+    started_at: datetime,
+) -> str:
+    """Backward-compatible helper for tests and internal callers."""
+    collection_id = await start_collection_run(
+        symbol=symbol, requested_ticks=requested_ticks, started_at=started_at
+    )
+    status = "completed" if len(ticks) == requested_ticks else "partial"
+    await finish_collection_run(
+        collection_id=collection_id,
+        symbol=symbol,
+        requested_ticks=requested_ticks,
+        ticks=ticks,
+        status=status,
+    )
+    return collection_id
