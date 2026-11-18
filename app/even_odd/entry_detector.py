@@ -1,0 +1,229 @@
+"""Conservative hybrid entry confirmation for Even/Odd opportunities.
+
+This module consumes validated model probability intervals and payout terms.
+It never places orders and always returns execution_authorized=False.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from math import isfinite
+from typing import Sequence
+
+
+@dataclass(frozen=True, slots=True)
+class EntryPolicy:
+    minimum_sample_size: int
+    maximum_data_age_seconds: float
+    required_confirmations: int
+    maximum_confirmation_gap_seconds: float
+    minimum_edge_over_break_even: float
+    minimum_conservative_expected_value: float
+
+    def __post_init__(self) -> None:
+        if type(self.minimum_sample_size) is not int or self.minimum_sample_size < 20:
+            raise ValueError("minimum_sample_size must be an integer of at least 20.")
+        if not isfinite(self.maximum_data_age_seconds) or self.maximum_data_age_seconds <= 0:
+            raise ValueError("maximum_data_age_seconds must be finite and positive.")
+        if type(self.required_confirmations) is not int or not 2 <= self.required_confirmations <= 10:
+            raise ValueError("required_confirmations must be between 2 and 10.")
+        if (
+            not isfinite(self.maximum_confirmation_gap_seconds)
+            or self.maximum_confirmation_gap_seconds <= 0
+        ):
+            raise ValueError("maximum_confirmation_gap_seconds must be finite and positive.")
+        if (
+            not isfinite(self.minimum_edge_over_break_even)
+            or not 0 <= self.minimum_edge_over_break_even < 1
+        ):
+            raise ValueError("minimum_edge_over_break_even must be in [0, 1).")
+        if (
+            not isfinite(self.minimum_conservative_expected_value)
+            or self.minimum_conservative_expected_value < 0
+        ):
+            raise ValueError("minimum_conservative_expected_value must be finite and non-negative.")
+
+
+@dataclass(frozen=True, slots=True)
+class EntryObservation:
+    tick_epoch: int
+    sample_size: int
+    data_age_seconds: float
+    even_probability: float
+    lower_even_probability: float
+    upper_even_probability: float
+    profit_if_win: float
+    loss_if_lose: float
+    model_id: str
+    model_version: str
+    model_validated: bool
+
+
+def _validate_observation(observation: EntryObservation) -> None:
+    if type(observation.tick_epoch) is not int or observation.tick_epoch <= 0:
+        raise ValueError("tick_epoch must be a positive integer.")
+    if type(observation.sample_size) is not int or observation.sample_size < 1:
+        raise ValueError("sample_size must be a positive integer.")
+    if not isfinite(observation.data_age_seconds) or observation.data_age_seconds < 0:
+        raise ValueError("data_age_seconds must be finite and non-negative.")
+    for name, value in (
+        ("even_probability", observation.even_probability),
+        ("lower_even_probability", observation.lower_even_probability),
+        ("upper_even_probability", observation.upper_even_probability),
+    ):
+        if not isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"{name} must be a finite probability from 0 to 1.")
+    if not (
+        observation.lower_even_probability
+        <= observation.even_probability
+        <= observation.upper_even_probability
+    ):
+        raise ValueError("Probability interval must contain the point forecast.")
+    if not isfinite(observation.profit_if_win) or observation.profit_if_win <= 0:
+        raise ValueError("profit_if_win must be finite and positive.")
+    if not isfinite(observation.loss_if_lose) or observation.loss_if_lose <= 0:
+        raise ValueError("loss_if_lose must be finite and positive.")
+    if not observation.model_id or not observation.model_version:
+        raise ValueError("Model identity and version are required.")
+    if type(observation.model_validated) is not bool:
+        raise ValueError("model_validated must be boolean.")
+
+
+def _conservative_side(observation: EntryObservation) -> dict:
+    break_even = observation.loss_if_lose / (
+        observation.profit_if_win + observation.loss_if_lose
+    )
+    even_lower = observation.lower_even_probability
+    odd_lower = 1.0 - observation.upper_even_probability
+    even_ev = (
+        even_lower * observation.profit_if_win
+        - (1 - even_lower) * observation.loss_if_lose
+    )
+    odd_ev = (
+        odd_lower * observation.profit_if_win
+        - (1 - odd_lower) * observation.loss_if_lose
+    )
+
+    if even_ev >= odd_ev:
+        return {
+            "side": "even",
+            "lower_probability": even_lower,
+            "break_even_probability": break_even,
+            "edge_over_break_even": even_lower - break_even,
+            "conservative_expected_value": even_ev,
+        }
+    return {
+        "side": "odd",
+        "lower_probability": odd_lower,
+        "break_even_probability": break_even,
+        "edge_over_break_even": odd_lower - break_even,
+        "conservative_expected_value": odd_ev,
+    }
+
+
+def evaluate_hybrid_entry(
+    observations: Sequence[EntryObservation],
+    *,
+    policy: EntryPolicy,
+) -> dict:
+    """Require fresh, stable, payout-positive evidence across distinct snapshots."""
+    if not observations:
+        raise ValueError("At least one entry observation is required.")
+    if any(not isinstance(item, EntryObservation) for item in observations):
+        raise ValueError("All observations must be EntryObservation instances.")
+
+    required = policy.required_confirmations
+    if len(observations) < required:
+        return {
+            "status": "wait",
+            "reason": f"Waiting for {required - len(observations)} more confirmations.",
+            "execution_authorized": False,
+        }
+
+    recent = list(observations[-required:])
+    for observation in recent:
+        _validate_observation(observation)
+        if not observation.model_validated:
+            return {
+                "status": "wait",
+                "reason": "Forecasting model has not passed independent validation.",
+                "execution_authorized": False,
+            }
+        if observation.sample_size < policy.minimum_sample_size:
+            return {
+                "status": "wait",
+                "reason": "The latest forecast does not have enough historical observations.",
+                "execution_authorized": False,
+            }
+        if observation.data_age_seconds > policy.maximum_data_age_seconds:
+            return {
+                "status": "wait",
+                "reason": "Market data is stale.",
+                "execution_authorized": False,
+            }
+
+    model_ids = {(item.model_id, item.model_version) for item in recent}
+    if len(model_ids) != 1:
+        return {
+            "status": "wait",
+            "reason": "Model identity or version changed during confirmation.",
+            "execution_authorized": False,
+        }
+
+    for previous, current in zip(recent, recent[1:]):
+        gap = current.tick_epoch - previous.tick_epoch
+        if gap <= 0:
+            return {
+                "status": "wait",
+                "reason": "Confirmation snapshots are not strictly chronological.",
+                "execution_authorized": False,
+            }
+        if gap > policy.maximum_confirmation_gap_seconds:
+            return {
+                "status": "wait",
+                "reason": "Confirmation sequence expired before enough stable observations arrived.",
+                "execution_authorized": False,
+            }
+
+    side_evidence = [_conservative_side(item) for item in recent]
+    sides = {item["side"] for item in side_evidence}
+    if len(sides) != 1:
+        return {
+            "status": "wait",
+            "reason": "Model direction changed during the confirmation window.",
+            "execution_authorized": False,
+        }
+
+    latest = side_evidence[-1]
+    if latest["edge_over_break_even"] < policy.minimum_edge_over_break_even:
+        return {
+            "status": "wait",
+            "reason": "Conservative probability edge is below the configured threshold.",
+            "execution_authorized": False,
+        }
+    if (
+        latest["conservative_expected_value"]
+        <= policy.minimum_conservative_expected_value
+    ):
+        return {
+            "status": "wait",
+            "reason": "Payout-adjusted conservative expected value is insufficient.",
+            "execution_authorized": False,
+        }
+
+    return {
+        "status": "candidate",
+        "side": latest["side"],
+        "model_id": recent[-1].model_id,
+        "model_version": recent[-1].model_version,
+        "confirmations": required,
+        "lower_probability": latest["lower_probability"],
+        "break_even_probability": latest["break_even_probability"],
+        "edge_over_break_even": latest["edge_over_break_even"],
+        "conservative_expected_value": latest["conservative_expected_value"],
+        "latest_tick_epoch": recent[-1].tick_epoch,
+        "execution_authorized": False,
+        "reason": (
+            "Fresh, consistent, validated forecasts passed the configured "
+            "payout-aware confirmation gates. This is a research candidate only."
+        ),
+    }
