@@ -30,4 +30,4 @@ jobs:
       - name: Install test runner
         run: python -m pip install --upgrade pip pytest
       - name: Run isolated Even/Odd tests
-        run: python -m pytest tests/test_even_odd_sequence_management.py -q
+        run: python -m pytest tests/test_even_odd_*.py -q
