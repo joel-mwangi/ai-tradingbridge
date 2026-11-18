@@ -721,6 +721,11 @@ async def check_hybrid_entry(
                     status_code=409,
                     detail="Entry observation does not match a persisted market tick.",
                 )
+            if persisted_tick["tick_epoch"] > now_epoch + 2:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Entry observation contains a future-dated market tick.",
+                )
             data_age_seconds = max(
                 0.0,
                 now_epoch - persisted_tick["tick_epoch"],
