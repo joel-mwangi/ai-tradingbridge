@@ -686,3 +686,72 @@ async def get_even_odd_sequence_state(sequence_id: str) -> dict[str, Any] | None
         raise
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         raise EvenOddStorageError("Could not load the Even/Odd sequence state.") from exc
+
+
+async def list_even_odd_models(*, symbol: str, limit: int = 50) -> list[dict[str, Any]]:
+    """List model metadata and evaluation summaries without exposing artifacts."""
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100.")
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{url}/rest/v1/even_odd_model_registry",
+                params={
+                    "select": (
+                        "id,market_symbol,model_name,model_version,status,"
+                        "execution_authorized,metrics,dataset_snapshot_max_id,"
+                        "training_rows,validation_rows,calibration_rows,test_rows,"
+                        "created_at,validated_at"
+                    ),
+                    "market_symbol": f"eq.{symbol}",
+                    "order": "created_at.desc",
+                    "limit": str(limit),
+                },
+                headers=_headers(key),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise EvenOddStorageError("Model registry returned an invalid response.")
+            return rows
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not list Even/Odd models.") from exc
+
+
+async def list_even_odd_research_runs(
+    *, symbol: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """List research-run summaries for one market."""
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100.")
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{url}/rest/v1/even_odd_research_runs",
+                params={
+                    "select": (
+                        "id,market_symbol,snapshot_max_id,dataset_rows,status,"
+                        "quality_report,partition_sizes,evaluation,model_id,"
+                        "started_at,completed_at,created_at,error_message"
+                    ),
+                    "market_symbol": f"eq.{symbol}",
+                    "order": "created_at.desc",
+                    "limit": str(limit),
+                },
+                headers=_headers(key),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise EvenOddStorageError("Research-run history returned an invalid response.")
+            return rows
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not list Even/Odd research runs.") from exc
