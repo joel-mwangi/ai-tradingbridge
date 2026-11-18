@@ -61,8 +61,9 @@ best-effort if the database itself becomes unavailable.
 Storage uses only `EVEN_ODD_SUPABASE_URL` and the dedicated secret/service-role
 key environment variables. It never falls back to the primary application's
 Supabase credentials. The collector is request-scoped and bounded; it is not
-a continuously running background worker. The authenticated `/even-odd/history` endpoint reads up to 5,000 rows per
-request in chronological order. It captures the maximum row ID before paging
+a continuously running background worker. The authenticated `/even-odd/history` endpoint reads up to 5,000 of the most
+recent rows per request and returns them in chronological order. It captures
+the maximum row ID before paging
 and applies that boundary to every page, so concurrent inserts do not shift
 the result set mid-read. When both epoch bounds are supplied, both are applied.
 Overlapping collection windows can still contain duplicate observations; the
