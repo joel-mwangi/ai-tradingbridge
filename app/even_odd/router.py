@@ -605,10 +605,11 @@ async def forecast_next_parity(
             "data_age_seconds": data_age_seconds,
             "data_quality": quality,
             "snapshot_max_id": snapshot["snapshot_max_id"],
-            "entry_eligible": (
+            "entry_gate_prerequisites_passed": (
                 model_validated and uncertainty_validated
                 and data_age_seconds <= max_data_age_seconds
             ),
+            "entry_candidate": False,
             "execution_authorized": False,
             "order_execution_enabled": False,
             "warning": (
