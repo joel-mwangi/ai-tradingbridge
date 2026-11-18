@@ -180,3 +180,17 @@ def test_every_confirmation_must_pass_conservative_edge_and_ev():
     )
     assert result["status"] == "wait"
     assert "at least one confirmation" in result["reason"].lower()
+
+
+
+def test_entry_confirmations_allow_same_second_ticks_with_increasing_database_ids():
+    observations = [
+        observation(100),
+        observation(100),
+        observation(101),
+    ]
+    observations[0] = replace(observations[0], tick_row_id=10)
+    observations[1] = replace(observations[1], tick_row_id=11)
+    observations[2] = replace(observations[2], tick_row_id=12)
+    result = evaluate_hybrid_entry(observations, policy=policy())
+    assert result["status"] == "candidate"
