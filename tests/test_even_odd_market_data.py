@@ -89,6 +89,7 @@ def test_even_odd_endpoints_require_authentication():
     assert client.get(
         "/even-odd/forecast?symbol=R_50&model_id=00000000-0000-0000-0000-000000000333"
     ).status_code == 401
+    assert client.post("/even-odd/entry-check", json={}).status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -768,3 +769,70 @@ def test_forecast_endpoint_rejects_retired_models(monkeypatch):
         headers=auth(),
     )
     assert response.status_code == 409
+
+
+
+def entry_check_payload(*, model_validated=True, uncertainty_validated=True):
+    return {
+        "observations": [
+            {
+                "tick_epoch": epoch,
+                "sample_size": 1200,
+                "data_age_seconds": "1.0",
+                "even_probability": "0.80",
+                "lower_even_probability": "0.75",
+                "upper_even_probability": "0.85",
+                "even_profit_if_win": "0.80",
+                "even_loss_if_lose": "1.00",
+                "odd_profit_if_win": "0.90",
+                "odd_loss_if_lose": "1.00",
+                "model_id": "model-1",
+                "model_version": "v1",
+                "model_validated": model_validated,
+                "uncertainty_method": "walk_forward_moving_block_bootstrap_local_calibration",
+                "uncertainty_level": "0.90",
+                "uncertainty_validated": uncertainty_validated,
+            }
+            for epoch in (100, 105, 110)
+        ],
+        "policy": {
+            "minimum_sample_size": 1000,
+            "maximum_data_age_seconds": "3.0",
+            "required_confirmations": 3,
+            "maximum_confirmation_gap_seconds": "10.0",
+            "minimum_edge_over_break_even": "0.05",
+            "minimum_conservative_expected_value": "0.10",
+        },
+    }
+
+
+def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_pass():
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "candidate"
+    assert payload["side"] == "even"
+    assert payload["execution_authorized"] is False
+    assert payload["order_execution_enabled"] is False
+
+
+def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation():
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(model_validated=False),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(uncertainty_validated=False),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
