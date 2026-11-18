@@ -59,8 +59,10 @@ A point forecast is research information, not an entry signal.
 observation supplies only:
 
 - `tick_row_id` and `tick_epoch` from a prior forecast response;
-- even and odd profit-if-win and loss-if-lose values from the actual contract
-  proposal being evaluated;
+- even and odd profit-if-win and loss-if-lose values from the actual Deriv
+  contract proposal being evaluated. These payout terms are currently supplied
+  by the caller; this backend does not yet fetch or independently verify a live
+  proposal quote;
 - `model_id` and `model_version`.
 
 The client does not supply model probabilities, validation flags, confidence
