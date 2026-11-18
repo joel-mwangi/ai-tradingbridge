@@ -7,6 +7,7 @@ def make_row(*, row_id=1, epoch=1760000000, digit=2, quote="123.452", parity="ev
     return {
         "id": row_id,
         "collection_id": collection,
+        "sequence_no": row_id,
         "market_symbol": "R_50",
         "tick_epoch": epoch,
         "quote": quote,
@@ -81,3 +82,16 @@ def test_quality_audit_reports_missing_fields():
 def test_quality_audit_rejects_non_collection_input():
     with pytest.raises(ValueError, match="list or tuple"):
         inspect_historical_ticks({"id": 1})
+
+
+
+def test_quality_audit_detects_duplicate_and_out_of_order_collection_sequences():
+    rows = [
+        make_row(row_id=1, epoch=1760000000, digit=2, quote="123.452"),
+        make_row(row_id=2, epoch=1760000001, digit=3, quote="123.453", parity="odd"),
+    ]
+    rows[1]["sequence_no"] = 1
+    result = inspect_historical_ticks(rows)
+    assert result["duplicate_sequence_numbers"] == 1
+    assert result["sequence_order_violations"] == 1
+    assert result["quality_passed"] is False
