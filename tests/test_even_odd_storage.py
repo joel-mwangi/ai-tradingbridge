@@ -142,12 +142,12 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
             return self.rows
 
     class FakeAsyncClient:
-        instance = None
+        instances = []
 
         def __init__(self, **kwargs):
             self.posts = []
             self.patches = []
-            FakeAsyncClient.instance = self
+            FakeAsyncClient.instances.append(self)
 
         async def __aenter__(self):
             return self
@@ -177,9 +177,10 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
     )
 
     assert result == collection_id
-    client = FakeAsyncClient.instance
-    run_payload = client.posts[0]["json"]
-    tick_payload = client.posts[1]["json"][0]
+    start_client, finish_client = FakeAsyncClient.instances
+    run_payload = start_client.posts[0]["json"]
+    tick_payload = finish_client.posts[0]["json"][0]
     assert run_payload["started_at"] == started_at.isoformat()
     assert tick_payload["deriv_stream_id"] == "deriv-stream-abc"
     assert "deriv_tick_id" not in tick_payload
+    assert finish_client.patches[0]["json"]["status"] == "completed"
