@@ -564,21 +564,28 @@ async def forecast_next_parity(
         )
         rows = snapshot["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=symbol)
-        if not quality["quality_passed"] or quality["exact_market_observation_duplicates"] > 0:
+        if (
+            not quality["quality_passed"]
+            or quality["exact_market_observation_duplicates"] > 0
+            or len(rows) < max(windows)
+        ):
             raise HTTPException(
                 status_code=409,
-                detail="Latest market-data snapshot failed quality or duplicate-observation checks.",
+                detail="Latest market-data snapshot is insufficient or failed quality checks.",
             )
         digits = [row["last_digit"] for row in rows]
         features = build_next_tick_features(digits, windows=tuple(windows))
         probability_even = predict_even_probability(artifact, features)
 
-        latest_epoch = rows[-1]["tick_epoch"] if rows else 0
-        data_age_seconds = max(
-            0.0,
-            datetime.now(timezone.utc).timestamp() - latest_epoch,
-        )
-        if not rows or data_age_seconds > max_data_age_seconds:
+        latest_epoch = rows[-1]["tick_epoch"]
+        now_epoch = datetime.now(timezone.utc).timestamp()
+        data_age_seconds = max(0.0, now_epoch - latest_epoch)
+        if latest_epoch > now_epoch + 2:
+            raise HTTPException(
+                status_code=409,
+                detail="Latest market tick has a future timestamp.",
+            )
+        if data_age_seconds > max_data_age_seconds:
             raise HTTPException(
                 status_code=409,
                 detail="Latest market data is stale or unavailable.",
