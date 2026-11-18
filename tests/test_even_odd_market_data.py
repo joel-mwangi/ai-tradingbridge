@@ -1327,3 +1327,16 @@ def test_payouts_endpoint_returns_read_only_even_and_odd_quotes(monkeypatch):
     assert payload["even"]["contract_type"] == "DIGITEVEN"
     assert payload["odd"]["contract_type"] == "DIGITODD"
     assert payload["execution_authorized"] is False
+
+
+
+def test_start_sequence_schema_uses_persisted_observation_references():
+    from app.even_odd.schemas import StartSequenceRequest
+
+    request = StartSequenceRequest.model_validate({
+        "session_id": "00000000-0000-0000-0000-000000000444",
+        "model_id": "00000000-0000-0000-0000-000000000333",
+        "model_version": "v1",
+        "observations": [{"tick_row_id": 24, "tick_epoch": 1_800_000_000}],
+    })
+    assert request.observations[0].tick_row_id == 24
