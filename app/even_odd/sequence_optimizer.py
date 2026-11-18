@@ -24,6 +24,7 @@ class CandidateTradeForecast:
     signal_valid: bool
     model_validated: bool
     uncertainty_validated: bool
+    risk_budget_available: bool
     model_id: str
     model_version: str
 
@@ -62,9 +63,11 @@ class CandidateTradeForecast:
             type(self.signal_valid) is not bool
             or type(self.model_validated) is not bool
             or type(self.uncertainty_validated) is not bool
+            or type(self.risk_budget_available) is not bool
         ):
             raise ValueError(
-                "signal_valid, model_validated and uncertainty_validated must be booleans."
+                "signal_valid, model_validated, uncertainty_validated and "
+                "risk_budget_available must be booleans."
             )
 
     @property
@@ -136,6 +139,9 @@ def select_sequence_length(
             break
         if not forecast.uncertainty_validated:
             stop_reason = "The model probability uncertainty has not passed validation."
+            break
+        if not forecast.risk_budget_available:
+            stop_reason = "The remaining session loss budget is insufficient."
             break
         if selected_model and (
             forecast.model_id != selected_model.model_id
