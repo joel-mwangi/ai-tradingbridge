@@ -12,6 +12,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.even_odd.collector import TickCollectionError, collect_ticks
 from app.even_odd.digit_engine import analyze_digits
 from app.even_odd.schemas import AnalyzeDigitsRequest, CollectTicksRequest
+from app.even_odd.storage import (
+    EvenOddStorageError,
+    persist_collection,
+    storage_is_configured,
+)
 
 
 router = APIRouter(prefix="/even-odd", tags=["even-odd-lab"])
@@ -47,6 +52,7 @@ def even_odd_status(
         "module": "even-odd-lab",
         "status": "available",
         "data_source": "dedicated_deriv_public_websocket",
+        "storage_configured": storage_is_configured(),
         "execution_enabled": False,
         "predictive_model_available": False,
         "warning": "Descriptive market analysis only; no trading signal is produced.",
@@ -74,7 +80,13 @@ async def collect_even_odd_market_ticks(
     request: CollectTicksRequest,
     _: Annotated[None, Depends(require_even_odd_api_token)],
 ) -> dict:
-    """Collect a bounded sample from the selected Deriv market and analyze it."""
+    """Collect a bounded Deriv sample and persist it to the dedicated database."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+
     try:
         ticks = await collect_ticks(
             symbol=request.symbol,
@@ -86,10 +98,25 @@ async def collect_even_odd_market_ticks(
     except TickCollectionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    try:
+        collection_id = await persist_collection(
+            symbol=request.symbol,
+            requested_ticks=request.tick_count,
+            ticks=ticks,
+        )
+    except EvenOddStorageError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ticks were collected but could not be saved to the dedicated Even/Odd database.",
+        ) from exc
+
     digits = [tick["last_digit"] for tick in ticks]
     return {
+        "collection_id": collection_id,
         "symbol": request.symbol,
         "source": "dedicated_deriv_public_websocket",
+        "storage": "dedicated_even_odd_supabase",
+        "persisted": True,
         "requested_ticks": request.tick_count,
         "returned_ticks": len(ticks),
         "complete": len(ticks) == request.tick_count,
