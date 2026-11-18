@@ -385,3 +385,35 @@ def test_history_endpoint_rejects_inverted_epoch_range():
         headers=auth(),
     )
     assert response.status_code == 422
+
+
+
+def test_quality_endpoint_audits_historical_snapshot(monkeypatch):
+    rows = [
+        {
+            "id": 1,
+            "collection_id": "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10",
+            "sequence_no": 1,
+            "market_symbol": "R_50",
+            "tick_epoch": 1760000000,
+            "quote": "123.452",
+            "pip_size": 3,
+            "last_digit": 2,
+            "parity": "even",
+            "deriv_stream_id": "stream-123",
+            "received_at": "2026-11-19T00:00:01+00:00",
+        }
+    ]
+
+    async def fake_load_historical_ticks(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 1}
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_historical_ticks)
+
+    response = client.get("/even-odd/quality?symbol=R_50", headers=auth())
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["quality"]["quality_passed"] is True
+    assert payload["quality"]["valid_rows"] == 1
+    assert payload["snapshot_max_id"] == 1
