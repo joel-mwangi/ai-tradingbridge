@@ -1,11 +1,13 @@
 import httpx
 import pytest
+from datetime import datetime, timezone
 
 from app.even_odd.storage import (
     EvenOddStorageError,
     _configuration,
     _headers,
     _mark_collection_failed,
+    persist_collection,
     storage_is_configured,
 )
 
@@ -112,3 +114,72 @@ async def test_failure_status_update_is_best_effort_and_does_not_raise():
         key="sb_secret_example",
         collection_id="00000000-0000-0000-0000-000000000001",
     )
+
+
+
+@pytest.mark.asyncio
+async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatch):
+    collection_id = "00000000-0000-0000-0000-000000000123"
+    started_at = datetime(2026, 11, 19, 0, 0, tzinfo=timezone.utc)
+    sample = [{
+        "epoch": 1795037706,
+        "quote": "83.2081",
+        "pip_size": 4,
+        "last_digit": 1,
+        "parity": "odd",
+        "stream_id": "deriv-stream-abc",
+        "received_at": "2026-11-19T00:00:01+00:00",
+    }]
+
+    class Response:
+        def __init__(self, rows=None):
+            self.rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.rows
+
+    class FakeAsyncClient:
+        instance = None
+
+        def __init__(self, **kwargs):
+            self.posts = []
+            self.patches = []
+            FakeAsyncClient.instance = self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            self.posts.append({"url": url, "json": json})
+            if url.endswith("/even_odd_collection_runs"):
+                return Response([{"id": collection_id}])
+            return Response()
+
+        async def patch(self, url, *, params, headers, json):
+            self.patches.append({"url": url, "json": json})
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await persist_collection(
+        symbol="R_50",
+        requested_ticks=1,
+        ticks=sample,
+        started_at=started_at,
+    )
+
+    assert result == collection_id
+    client = FakeAsyncClient.instance
+    run_payload = client.posts[0]["json"]
+    tick_payload = client.posts[1]["json"][0]
+    assert run_payload["started_at"] == started_at.isoformat()
+    assert tick_payload["deriv_stream_id"] == "deriv-stream-abc"
+    assert "deriv_tick_id" not in tick_payload
