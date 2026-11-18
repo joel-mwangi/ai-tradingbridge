@@ -313,6 +313,7 @@ def bootstrap_log_loss_improvement(
     block_size: int = 20,
     minimum_observations: int = 200,
     minimum_blocks: int = 10,
+    minimum_folds: int = 5,
     bootstrap_replicates: int = 500,
     seed: int = 20261120,
 ) -> dict:
@@ -337,6 +338,8 @@ def bootstrap_log_loss_improvement(
         raise ValueError("minimum_observations must be an integer of at least 20.")
     if type(minimum_blocks) is not int or minimum_blocks < 5:
         raise ValueError("minimum_blocks must be an integer of at least 5.")
+    if type(minimum_folds) is not int or minimum_folds < 2:
+        raise ValueError("minimum_folds must be an integer of at least 2.")
     if type(bootstrap_replicates) is not int or bootstrap_replicates < 200:
         raise ValueError("bootstrap_replicates must be an integer of at least 200.")
     if type(seed) is not int:
@@ -418,6 +421,7 @@ def bootstrap_log_loss_improvement(
         "sample_size": len(records),
         "block_count": len(blocks),
         "fold_count": len(fold_improvements),
+        "minimum_folds_required": minimum_folds,
         "positive_folds": positive_folds,
         "fold_improvements": {
             str(fold): value for fold, value in fold_improvements.items()
@@ -451,7 +455,11 @@ def bootstrap_log_loss_improvement(
     approximate_one_sided_p = (
         sum(value <= 0 for value in bootstrap_means) + 1
     ) / (len(bootstrap_means) + 1)
-    supported = lower > 0 and positive_folds == len(fold_improvements)
+    supported = (
+        lower > 0
+        and len(fold_improvements) >= minimum_folds
+        and positive_folds == len(fold_improvements)
+    )
     return {
         **base_result,
         "confidence_level": confidence_level,
@@ -462,6 +470,9 @@ def bootstrap_log_loss_improvement(
         "reason": (
             "Positive block-bootstrap improvement and positive improvement in every fold."
             if supported
-            else "Improvement did not clear the conservative interval and all-fold gates."
+            else (
+                "Improvement did not clear the minimum-fold, conservative interval "
+                "and all-fold gates."
+            )
         ),
     }
