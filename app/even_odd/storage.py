@@ -18,6 +18,10 @@ class EvenOddStorageError(RuntimeError):
     """Raised when the dedicated Even/Odd database is unavailable."""
 
 
+class EvenOddPolicyError(RuntimeError):
+    """Raised when the database rejects a session/sequence policy transition."""
+
+
 def _configuration() -> tuple[str, str]:
     url = os.getenv("EVEN_ODD_SUPABASE_URL", "").rstrip("/")
     key = (
@@ -491,6 +495,12 @@ async def create_even_odd_session(
             return rows[0]
     except EvenOddStorageError:
         raise
+    except httpx.HTTPStatusError as exc:
+        if 400 <= exc.response.status_code < 500:
+            raise EvenOddPolicyError(
+                "Session parameters were rejected by the dedicated database."
+            ) from exc
+        raise EvenOddStorageError("Could not create the Even/Odd session.") from exc
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise EvenOddStorageError("Could not create the Even/Odd session.") from exc
 
@@ -526,6 +536,12 @@ async def start_even_odd_sequence(
             return result
     except EvenOddStorageError:
         raise
+    except httpx.HTTPStatusError as exc:
+        if 400 <= exc.response.status_code < 500:
+            raise EvenOddPolicyError(
+                "Sequence start was rejected by a session or model safety rule."
+            ) from exc
+        raise EvenOddStorageError("Could not start the Even/Odd sequence.") from exc
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise EvenOddStorageError("Could not start the Even/Odd sequence.") from exc
 
@@ -579,6 +595,14 @@ async def record_even_odd_settlement(
             return result
     except EvenOddStorageError:
         raise
+    except httpx.HTTPStatusError as exc:
+        if 400 <= exc.response.status_code < 500:
+            raise EvenOddPolicyError(
+                "Settlement was rejected by a session, model, payout or risk rule."
+            ) from exc
+        raise EvenOddStorageError(
+            "Could not record the Even/Odd trade settlement."
+        ) from exc
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise EvenOddStorageError(
             "Could not record the Even/Odd trade settlement."
