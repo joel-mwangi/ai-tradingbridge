@@ -453,3 +453,133 @@ async def fail_research_run(*, research_run_id: str) -> None:
             response.raise_for_status()
     except (httpx.HTTPError, ValueError, TypeError, EvenOddStorageError):
         return
+
+
+async def create_even_odd_session(
+    *,
+    symbol: str,
+    account_mode: str,
+    currency: str,
+    fixed_stake: str,
+    max_session_loss: str | None,
+    max_trades_per_session: int = 10,
+    max_consecutive_losses: int = 2,
+) -> dict[str, Any]:
+    """Create a persistent risk-bounded session; no broker order is submitted."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    payload = {
+        "market_symbol": symbol,
+        "account_mode": account_mode,
+        "currency": currency,
+        "fixed_stake": fixed_stake,
+        "max_session_loss": max_session_loss,
+        "max_trades_per_session": max_trades_per_session,
+        "max_consecutive_losses": max_consecutive_losses,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/even_odd_sessions",
+                headers=_headers(key, "return=representation"),
+                json=payload,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                raise EvenOddStorageError("Session creation did not return a record.")
+            return rows[0]
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError("Could not create the Even/Odd session.") from exc
+
+
+async def start_even_odd_sequence(
+    *,
+    session_id: str,
+    model_id: str,
+    model_version: str,
+    planned_trades: int,
+    expected_value_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Call the database's atomic, validated-model sequence-start function."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/rpc/even_odd_start_sequence",
+                headers=_headers(key),
+                json={
+                    "p_session_id": session_id,
+                    "p_model_id": model_id,
+                    "p_model_version": model_version,
+                    "p_planned_trades": planned_trades,
+                    "p_expected_value_snapshot": expected_value_snapshot,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict) or not result.get("sequence_id"):
+                raise EvenOddStorageError("Sequence start did not return a valid result.")
+            return result
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError("Could not start the Even/Odd sequence.") from exc
+
+
+async def record_even_odd_settlement(
+    *,
+    sequence_id: str,
+    trade_number: int,
+    side: str,
+    stake: str,
+    profit_if_win: str,
+    loss_if_lose: str,
+    even_probability: str,
+    lower_even_probability: str,
+    upper_even_probability: str,
+    conservative_expected_value: str,
+    revalidation: dict[str, Any],
+    outcome: str,
+    realized_profit: str,
+    external_contract_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically record a settled result and update sequence/session counters."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/rpc/even_odd_record_trade_settlement",
+                headers=_headers(key),
+                json={
+                    "p_sequence_id": sequence_id,
+                    "p_trade_number": trade_number,
+                    "p_side": side,
+                    "p_stake": stake,
+                    "p_profit_if_win": profit_if_win,
+                    "p_loss_if_lose": loss_if_lose,
+                    "p_even_probability": even_probability,
+                    "p_lower_even_probability": lower_even_probability,
+                    "p_upper_even_probability": upper_even_probability,
+                    "p_conservative_expected_value": conservative_expected_value,
+                    "p_revalidation": revalidation,
+                    "p_outcome": outcome,
+                    "p_realized_profit": realized_profit,
+                    "p_external_contract_id": external_contract_id,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict) or not result.get("trade_id"):
+                raise EvenOddStorageError("Settlement did not return a valid result.")
+            return result
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError(
+            "Could not record the Even/Odd trade settlement."
+        ) from exc
