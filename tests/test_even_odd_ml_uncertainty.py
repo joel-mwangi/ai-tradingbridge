@@ -4,6 +4,7 @@ import pytest
 
 from app.even_odd.ml.uncertainty import (
     UncertaintyPolicy,
+    bootstrap_log_loss_improvement,
     estimate_local_probability_interval,
     select_probability_interval,
 )
@@ -143,3 +144,52 @@ def test_select_probability_interval_refuses_when_no_validated_interval_exists()
         target_probability=0.5,
     )
     assert result["validated"] is False
+
+
+
+def make_comparison_predictions(model_probability=0.8, baseline_probability=0.5):
+    generator = random.Random(43)
+    predictions = []
+    for index in range(1500):
+        actual = "even" if generator.random() < 0.70 else "odd"
+        predictions.append({
+            "target_index": index,
+            "fold": index // 300 + 1,
+            "probability_even": model_probability,
+            "constant_probability": 0.5,
+            "rolling_probability": baseline_probability,
+            "actual_parity": actual,
+        })
+    return predictions
+
+
+def test_block_bootstrap_supports_model_log_loss_improvement_over_baseline():
+    result = bootstrap_log_loss_improvement(
+        make_comparison_predictions(),
+        baseline_key="constant_probability",
+        bootstrap_replicates=300,
+    )
+    assert result["statistically_supported"] is True
+    assert result["lower_improvement"] > 0
+    assert result["positive_folds"] == 5
+    assert result["approximate_one_sided_bootstrap_p"] < 0.05
+
+
+def test_block_bootstrap_does_not_support_a_worse_model():
+    result = bootstrap_log_loss_improvement(
+        make_comparison_predictions(model_probability=0.2),
+        baseline_key="constant_probability",
+        bootstrap_replicates=300,
+    )
+    assert result["statistically_supported"] is False
+    assert result["upper_improvement"] < 0
+
+
+def test_block_bootstrap_reports_insufficient_sample_without_significance_claim():
+    result = bootstrap_log_loss_improvement(
+        make_comparison_predictions()[:100],
+        baseline_key="constant_probability",
+        bootstrap_replicates=200,
+    )
+    assert result["statistically_supported"] is False
+    assert result["lower_improvement"] is None
