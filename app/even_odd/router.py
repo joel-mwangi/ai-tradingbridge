@@ -750,7 +750,7 @@ async def check_hybrid_entry(
                 EntryObservation(
                     tick_row_id=persisted_tick["id"],
                     tick_epoch=persisted_tick["tick_epoch"],
-                    sample_size=len(prior_rows),
+                    sample_size=max(windows),
                     data_age_seconds=float(data_age_seconds),
                     even_probability=probability_even,
                     lower_even_probability=(
