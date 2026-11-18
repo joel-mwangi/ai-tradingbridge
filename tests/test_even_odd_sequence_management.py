@@ -18,6 +18,7 @@ def forecast(
     signal_valid: bool = True,
     model_validated: bool = True,
     uncertainty_validated: bool = True,
+    risk_budget_available: bool = True,
     model_id: str = "test-model",
     model_version: str = "1",
 ) -> CandidateTradeForecast:
@@ -30,6 +31,7 @@ def forecast(
         signal_valid=signal_valid,
         model_validated=model_validated,
         uncertainty_validated=uncertainty_validated,
+        risk_budget_available=risk_budget_available,
         model_id=model_id,
         model_version=model_version,
     )
@@ -188,3 +190,14 @@ def test_sequence_policy_and_revalidation_reject_boolean_coercion():
 def test_revalidation_rejects_non_finite_expected_value_at_construction():
     with pytest.raises(ValueError, match="finite and numeric"):
         valid_revalidation(conservative_expected_value=float("nan"))
+
+
+
+def test_sequence_optimizer_rejects_insufficient_session_loss_budget():
+    decision = select_sequence_length([
+        forecast(1, risk_budget_available=False),
+        forecast(2),
+    ])
+    assert decision.approved is False
+    assert decision.selected_trades == 0
+    assert "loss budget" in decision.reason
