@@ -61,3 +61,37 @@ class RecordTradeSettlementRequest(BaseModel):
     outcome: Literal["win", "loss"]
     realized_profit: Decimal
     external_contract_id: str | None = Field(default=None, max_length=128)
+
+
+
+class EntryObservationRequest(BaseModel):
+    tick_epoch: StrictInt = Field(gt=0)
+    sample_size: StrictInt = Field(ge=1)
+    data_age_seconds: Decimal = Field(ge=0)
+    even_probability: Decimal = Field(ge=0, le=1)
+    lower_even_probability: Decimal = Field(ge=0, le=1)
+    upper_even_probability: Decimal = Field(ge=0, le=1)
+    even_profit_if_win: Decimal = Field(gt=0)
+    even_loss_if_lose: Decimal = Field(gt=0)
+    odd_profit_if_win: Decimal = Field(gt=0)
+    odd_loss_if_lose: Decimal = Field(gt=0)
+    model_id: str = Field(min_length=1, max_length=128)
+    model_version: str = Field(min_length=1, max_length=128)
+    model_validated: bool
+    uncertainty_method: str = Field(min_length=1, max_length=128)
+    uncertainty_level: Decimal = Field(gt=0.5, lt=1)
+    uncertainty_validated: bool
+
+
+class EntryPolicyRequest(BaseModel):
+    minimum_sample_size: StrictInt = Field(ge=20)
+    maximum_data_age_seconds: Decimal = Field(gt=0)
+    required_confirmations: StrictInt = Field(ge=2, le=10)
+    maximum_confirmation_gap_seconds: Decimal = Field(gt=0)
+    minimum_edge_over_break_even: Decimal = Field(ge=0, lt=1)
+    minimum_conservative_expected_value: Decimal = Field(ge=0)
+
+
+class EvaluateEntryRequest(BaseModel):
+    observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
+    policy: EntryPolicyRequest
