@@ -633,12 +633,78 @@ async def forecast_next_parity(
 
 
 @router.post("/entry-check")
-def check_hybrid_entry(
+async def check_hybrid_entry(
     request: EvaluateEntryRequest,
     _: Annotated[None, Depends(require_even_odd_api_token)],
 ) -> dict:
-    """Evaluate consecutive model/payout/freshness evidence; never submit an order."""
+    """Evaluate consecutive evidence against model and uncertainty records in Supabase."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    model_id = request.observations[0].model_id
+    model_version = request.observations[0].model_version
+    if any(
+        item.model_id != model_id or item.model_version != model_version
+        for item in request.observations
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="All entry observations must reference the same model version.",
+        )
     try:
+        model = await get_even_odd_model(model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found.")
+        if model.get("model_version") != model_version:
+            raise HTTPException(status_code=409, detail="Model version is no longer current.")
+        if model.get("status") == "retired":
+            raise HTTPException(status_code=409, detail="Retired models cannot authorize entry checks.")
+
+        metrics = model.get("metrics") or {}
+        walk_forward = metrics.get("walk_forward") or {}
+        calibration_intervals = walk_forward.get("calibration_intervals") or []
+        model_validated = model.get("status") == "validated"
+
+        observations = []
+        for item in request.observations:
+            uncertainty = select_probability_interval(
+                calibration_intervals,
+                target_probability=float(item.even_probability),
+            )
+            uncertainty_validated = uncertainty.get("validated") is True
+            observations.append(
+                EntryObservation(
+                    tick_epoch=item.tick_epoch,
+                    sample_size=item.sample_size,
+                    data_age_seconds=float(item.data_age_seconds),
+                    even_probability=float(item.even_probability),
+                    lower_even_probability=(
+                        float(uncertainty["lower_probability"])
+                        if uncertainty_validated else 0.0
+                    ),
+                    upper_even_probability=(
+                        float(uncertainty["upper_probability"])
+                        if uncertainty_validated else 1.0
+                    ),
+                    even_profit_if_win=float(item.even_profit_if_win),
+                    even_loss_if_lose=float(item.even_loss_if_lose),
+                    odd_profit_if_win=float(item.odd_profit_if_win),
+                    odd_loss_if_lose=float(item.odd_loss_if_lose),
+                    model_id=model_id,
+                    model_version=model_version,
+                    model_validated=model_validated,
+                    uncertainty_method=(
+                        uncertainty.get("method") or "unavailable"
+                    ),
+                    uncertainty_level=float(
+                        uncertainty.get("confidence_level") or 0.9
+                    ),
+                    uncertainty_validated=uncertainty_validated,
+                )
+            )
+
         policy = EntryPolicy(
             minimum_sample_size=request.policy.minimum_sample_size,
             maximum_data_age_seconds=float(request.policy.maximum_data_age_seconds),
@@ -653,33 +719,17 @@ def check_hybrid_entry(
                 request.policy.minimum_conservative_expected_value
             ),
         )
-        observations = [
-            EntryObservation(
-                tick_epoch=item.tick_epoch,
-                sample_size=item.sample_size,
-                data_age_seconds=float(item.data_age_seconds),
-                even_probability=float(item.even_probability),
-                lower_even_probability=float(item.lower_even_probability),
-                upper_even_probability=float(item.upper_even_probability),
-                even_profit_if_win=float(item.even_profit_if_win),
-                even_loss_if_lose=float(item.even_loss_if_lose),
-                odd_profit_if_win=float(item.odd_profit_if_win),
-                odd_loss_if_lose=float(item.odd_loss_if_lose),
-                model_id=item.model_id,
-                model_version=item.model_version,
-                model_validated=item.model_validated,
-                uncertainty_method=item.uncertainty_method,
-                uncertainty_level=float(item.uncertainty_level),
-                uncertainty_validated=item.uncertainty_validated,
-            )
-            for item in request.observations
-        ]
         result = evaluate_hybrid_entry(observations, policy=policy)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not verify model entry evidence.") from exc
 
     return {
         **result,
+        "model_status": model["status"],
         "execution_authorized": False,
         "order_execution_enabled": False,
     }
