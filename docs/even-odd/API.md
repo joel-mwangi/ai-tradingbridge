@@ -37,6 +37,7 @@ snapshot boundary prevents concurrent inserts from shifting paged reads.
 | GET | `/even-odd/models?symbol=R_50` | List model metadata and evaluation summaries |
 | GET | `/even-odd/research-runs?symbol=R_50` | List experiment history |
 | GET | `/even-odd/forecast?symbol=R_50&model_id=<uuid>` | Research-only next-parity forecast |
+| GET | `/even-odd/payouts?symbol=R_50&currency=USD&stake=1` | Read-only current Even/Odd Deriv proposal terms |
 
 The research runner is local, not a Vercel request:
 
