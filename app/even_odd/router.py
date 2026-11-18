@@ -5,8 +5,9 @@ import hmac
 import os
 from datetime import datetime, timezone
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
@@ -16,6 +17,7 @@ from app.even_odd.storage import (
     EvenOddStorageError,
     fail_collection_run,
     finish_collection_run,
+    load_historical_ticks,
     start_collection_run,
     storage_is_configured,
 )
@@ -197,5 +199,52 @@ async def collect_even_odd_market_ticks(
         "warning": (
             "Observed frequencies and sequences are descriptive. This sample "
             "does not establish next-tick predictability or authorize a trade."
+        ),
+    }
+
+
+@router.get("/history")
+async def get_even_odd_history(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    symbol: str = Query(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_]{2,32}$"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    from_epoch: int | None = Query(default=None, ge=1),
+    to_epoch: int | None = Query(default=None, ge=1),
+    collection_id: UUID | None = None,
+) -> dict:
+    """Return a bounded, chronologically ordered snapshot of stored market ticks."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        snapshot = await load_historical_ticks(
+            symbol=symbol,
+            limit=limit,
+            from_epoch=from_epoch,
+            to_epoch=to_epoch,
+            collection_id=str(collection_id) if collection_id else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EvenOddStorageError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not load historical ticks from the dedicated database.",
+        ) from exc
+
+    rows = snapshot["rows"]
+    return {
+        "symbol": symbol,
+        "returned_ticks": len(rows),
+        "limit": limit,
+        "snapshot_max_id": snapshot["snapshot_max_id"],
+        "truncated": len(rows) == limit,
+        "ordering": "tick_epoch_asc_then_id_asc",
+        "rows": rows,
+        "warning": (
+            "Historical observations are research data, not proof of predictive "
+            "edge. Overlapping collection windows may contain repeated market ticks."
         ),
     }
