@@ -11,13 +11,14 @@ from app.even_odd.payouts import (
 
 
 class FakeWebSocket:
-    def __init__(self, *, error=None, bad_echo=False, invalid_payout=False, timeout=False):
+    def __init__(self, *, error=None, bad_echo=False, invalid_payout=False, timeout=False, stale_spot=False):
         self.requests = []
         self.responses = []
         self.error = error
         self.bad_echo = bad_echo
         self.invalid_payout = invalid_payout
         self.timeout = timeout
+        self.stale_spot = stale_spot
 
     async def __aenter__(self):
         return self
@@ -53,7 +54,7 @@ class FakeWebSocket:
                 "ask_price": ask_price,
                 "payout": payout,
                 "spot": 100.0,
-                "spot_time": int(datetime.now(timezone.utc).timestamp()),
+                "spot_time": int(datetime.now(timezone.utc).timestamp()) - (30 if self.stale_spot else 0),
             },
         })
 
@@ -112,6 +113,13 @@ async def test_payout_quote_rejects_deriv_errors_and_mismatched_echo(monkeypatch
 async def test_payout_quote_rejects_non_positive_net_profit(monkeypatch):
     install_fake_websocket(monkeypatch, invalid_payout=True)
     with pytest.raises(PayoutQuoteError, match="no positive net profit"):
+        await get_even_odd_payout_quote(symbol="R_50", currency="USD", stake="1")
+
+
+@pytest.mark.asyncio
+async def test_payout_quote_rejects_stale_market_spot(monkeypatch):
+    install_fake_websocket(monkeypatch, stale_spot=True)
+    with pytest.raises(PayoutQuoteError, match="stale or future-dated"):
         await get_even_odd_payout_quote(symbol="R_50", currency="USD", stake="1")
 
 
