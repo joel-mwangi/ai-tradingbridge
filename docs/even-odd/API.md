@@ -55,37 +55,44 @@ A point forecast is research information, not an entry signal.
 
 ## Hybrid entry evaluation
 
-`POST /even-odd/entry-check` accepts an ordered list of observations. Each
-observation supplies only:
+`POST /even-odd/entry-check` accepts an active `session_id` and an ordered
+list of observations. Each observation supplies only:
 
-- `tick_row_id` and `tick_epoch` from a prior forecast response;
-- even and odd profit-if-win and loss-if-lose values from the actual Deriv
-  contract proposal being evaluated. These payout terms are currently supplied
-  by the caller; this backend does not yet fetch or independently verify a live
-  proposal quote;
+- `tick_row_id` and `tick_epoch` from persisted market history;
 - `model_id` and `model_version`.
 
-The client does not supply model probabilities, validation flags, confidence
-intervals, sample sizes, or data-age claims. The backend re-loads the model,
-recomputes each probability from the persisted history strictly before the
-referenced tick, derives uncertainty bounds from the stored walk-forward
-calibration report, verifies the tick IDs/epochs, and computes freshness on
-the server.
+The backend loads the active session and derives the market, currency, and fixed
+stake from its stored configuration. It rejects closed sessions, market/model
+mismatches, exhausted trade limits, a missing monetary loss cap, and an
+insufficient remaining loss budget.
 
-The request also supplies an explicit entry policy:
+For payout-aware expected value, the backend obtains fresh one-tick
+`DIGITEVEN` and `DIGITODD` proposals from Deriv's public WebSocket API. It
+validates the returned proposal identifiers and echoed contract parameters,
+then derives net profit-if-win as `payout - ask_price` and loss-if-lose as
+`ask_price`. These are price quotes only: the backend does not buy either
+proposal. A quote failure blocks the entry check.
 
-- minimum sample size;
-- maximum data age;
-- required consecutive confirmations;
-- maximum confirmation gap;
-- minimum conservative edge over payout break-even;
-- minimum conservative expected value.
+The client does not supply model probabilities, payout values, validation
+flags, confidence intervals, sample sizes, or data-age claims. The backend
+re-loads the model, recomputes each probability from persisted history strictly
+before the referenced tick, derives uncertainty bounds from the stored
+walk-forward calibration report, verifies tick IDs/epochs, and computes
+freshness on the server.
+
+Entry thresholds are server-owned and cannot be relaxed by request fields:
+- minimum sample size is the model's largest trained feature window;
+- maximum data age is 10 seconds;
+- three consecutive confirmations are required;
+- maximum confirmation gap is 10 seconds;
+- minimum conservative edge over payout break-even is 5 percentage points;
+- minimum conservative expected value is 0.10 in the session currency.
 
 A `candidate` response means all configured gates passed. It is not an order
-instruction. Do not use caller-supplied payout values for execution until a
-server-side Deriv proposal-quote integration verifies them. A missing/invalid model or uncertainty interval, stale data,
-invalid tick reference, unstable side, insufficient payout-adjusted EV, or
-failed confirmation returns `wait` or an HTTP error.
+instruction. The session's fixed stake and remaining loss budget are checked
+before the candidate is returned. Missing/invalid model or uncertainty
+evidence, stale data, invalid tick references, unstable direction, inadequate
+payout-adjusted EV, or failed confirmation returns `wait` or an HTTP error.
 
 ## Persistent trade management
 
