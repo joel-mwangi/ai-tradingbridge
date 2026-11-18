@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 
 from app.even_odd.policies import EvenOddPolicy
 
@@ -55,6 +56,7 @@ class SequenceManager:
         return self.active_sequence
 
     def can_execute_next(self, revalidation: Revalidation) -> tuple[bool, str]:
+        """Call immediately before every order submission, including trade one."""
         state = self.active_sequence
         if state is None:
             return False, "No active sequence."
@@ -72,13 +74,19 @@ class SequenceManager:
             return False, "Market data is stale."
         if not revalidation.signal_valid:
             return False, "Opportunity is no longer valid."
-        if revalidation.conservative_expected_value <= 0:
-            return False, "Conservative expected value is not positive."
+        if (
+            not isfinite(revalidation.conservative_expected_value)
+            or revalidation.conservative_expected_value <= 0
+        ):
+            return False, "Conservative expected value is not positive and finite."
         if not revalidation.risk_budget_available:
             return False, "Risk budget is exhausted."
         return True, "Execution conditions passed; one trade may be submitted."
 
     def record_outcome(self, outcome: TradeOutcome) -> SequenceState:
+        """Record only a confirmed settlement; never infer outcome from order ack."""
+        if not isinstance(outcome, TradeOutcome):
+            raise ValueError("Outcome must be a confirmed TradeOutcome.")
         state = self.active_sequence
         if state is None or state.stopped:
             raise ValueError("There is no active sequence.")
@@ -93,12 +101,10 @@ class SequenceManager:
             state.wins += 1
             self.session_wins += 1
             state.consecutive_losses = 0
-        elif outcome == TradeOutcome.LOSS:
+        else:
             state.losses += 1
             self.session_losses += 1
             state.consecutive_losses += 1
-        else:
-            raise ValueError("Unknown trade outcome.")
 
         if state.consecutive_losses >= self.policy.max_consecutive_losses:
             self.stop_sequence("Two consecutive losses.")
