@@ -19,6 +19,7 @@ The token and dedicated Supabase credentials are backend-only. Never expose
 | GET | `/even-odd/status` | Module status and execution/model availability |
 | POST | `/even-odd/analyze` | Descriptive analysis of submitted digits |
 | POST | `/even-odd/collect` | Bounded Deriv public tick collection and persistence |
+| GET | `/even-odd/payouts?symbol=R_50&currency=USD&stake=1.00` | Read-only one-tick DIGITEVEN/DIGITODD payout proposals |
 | GET | `/even-odd/history` | Latest bounded persisted tick history, returned chronologically |
 | GET | `/even-odd/quality` | Structural and duplicate-observation audit |
 
