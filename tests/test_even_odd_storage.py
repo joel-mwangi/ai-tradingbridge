@@ -273,7 +273,7 @@ async def test_load_historical_ticks_uses_stable_snapshot_and_paginates(monkeypa
     data_call = client.calls[1]
     assert data_call["params"]["market_symbol"] == "eq.R_50"
     assert data_call["params"]["id"] == "lte.1002"
-    assert data_call["params"]["order"] == "tick_epoch.asc,id.asc"
+    assert data_call["params"]["order"] == "tick_epoch.desc,id.desc"
     assert data_call["params"]["and"] == (
         "(tick_epoch.gte.1760000000,tick_epoch.lte.1760001001)"
     )
