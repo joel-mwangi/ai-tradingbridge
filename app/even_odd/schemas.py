@@ -69,18 +69,13 @@ class EntryObservationRequest(BaseModel):
     sample_size: StrictInt = Field(ge=1)
     data_age_seconds: Decimal = Field(ge=0)
     even_probability: Decimal = Field(ge=0, le=1)
-    lower_even_probability: Decimal = Field(ge=0, le=1)
-    upper_even_probability: Decimal = Field(ge=0, le=1)
     even_profit_if_win: Decimal = Field(gt=0)
     even_loss_if_lose: Decimal = Field(gt=0)
     odd_profit_if_win: Decimal = Field(gt=0)
     odd_loss_if_lose: Decimal = Field(gt=0)
     model_id: str = Field(min_length=1, max_length=128)
     model_version: str = Field(min_length=1, max_length=128)
-    model_validated: bool
-    uncertainty_method: str = Field(min_length=1, max_length=128)
-    uncertainty_level: Decimal = Field(gt=0.5, lt=1)
-    uncertainty_validated: bool
+
 
 
 class EntryPolicyRequest(BaseModel):
