@@ -1,4 +1,4 @@
-""""Persistence adapter for the isolated Even/Odd Supabase project.
+"""Persistence adapter for the isolated Even/Odd Supabase project.
 
 Only backend-side Even/Odd environment variables are accepted here. This
 module deliberately never falls back to the application's primary Supabase
@@ -54,6 +54,34 @@ def _headers(key: str, prefer: str | None = None) -> dict[str, str]:
     return headers
 
 
+async def _mark_collection_failed(
+    client: httpx.AsyncClient,
+    *,
+    url: str,
+    key: str,
+    collection_id: str,
+) -> None:
+    """Best-effort terminal status update; never mask the original failure."""
+    try:
+        response = await client.patch(
+            f"{url}/rest/v1/even_odd_collection_runs",
+            params={"id": f"eq.{collection_id}"},
+            headers=_headers(key, "return=minimal"),
+            json={
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error_message": (
+                    "Collection persistence failed. Inspect backend logs for details."
+                ),
+            },
+        )
+        response.raise_for_status()
+    except (httpx.HTTPError, ValueError, TypeError):
+        # The database may be unavailable, including for this cleanup request.
+        # Preserve the initial exception rather than replacing it.
+        return
+
+
 async def persist_collection(
     *,
     symbol: str,
@@ -64,11 +92,13 @@ async def persist_collection(
 
     The collection record is created first. Tick rows are inserted in one
     bounded batch, then the collection is marked completed or partial.
+    If a later persistence step fails, the run is best-effort marked failed.
     """
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
+        collection_id: str | None = None
         try:
             run_response = await client.post(
                 f"{url}/rest/v1/even_odd_collection_runs",
@@ -127,8 +157,16 @@ async def persist_collection(
             finish_response.raise_for_status()
             return collection_id
         except EvenOddStorageError:
+            if collection_id is not None:
+                await _mark_collection_failed(
+                    client, url=url, key=key, collection_id=collection_id
+                )
             raise
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            if collection_id is not None:
+                await _mark_collection_failed(
+                    client, url=url, key=key, collection_id=collection_id
+                )
             raise EvenOddStorageError(
                 "Failed to persist the collected sample in the dedicated Even/Odd database."
             ) from exc
