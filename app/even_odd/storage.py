@@ -755,3 +755,32 @@ async def list_even_odd_research_runs(
         raise
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         raise EvenOddStorageError("Could not list Even/Odd research runs.") from exc
+
+
+async def get_even_odd_model(model_id: str) -> dict[str, Any] | None:
+    """Load one model artifact and its evaluation metadata for research forecasts."""
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{url}/rest/v1/even_odd_model_registry",
+                params={
+                    "select": (
+                        "id,market_symbol,model_name,model_version,status,"
+                        "execution_authorized,model_artifact,metrics,created_at,validated_at"
+                    ),
+                    "id": f"eq.{model_id}",
+                    "limit": "1",
+                },
+                headers=_headers(key),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise EvenOddStorageError("Model lookup returned an invalid response.")
+            return rows[0] if rows else None
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not load the Even/Odd model artifact.") from exc
