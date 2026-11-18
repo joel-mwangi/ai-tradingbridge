@@ -81,6 +81,8 @@ def test_even_odd_endpoints_require_authentication():
     assert client.post("/even-odd/sessions", json={}).status_code == 401
     assert client.post("/even-odd/sequences", json={}).status_code == 401
     assert client.post("/even-odd/settlements", json={}).status_code == 401
+    assert client.get("/even-odd/sessions/00000000-0000-0000-0000-000000000444").status_code == 401
+    assert client.get("/even-odd/sequences/00000000-0000-0000-0000-000000000555").status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -556,3 +558,43 @@ def test_session_endpoint_requires_explicit_monetary_loss_cap():
         },
     )
     assert response.status_code == 422
+
+
+
+def test_get_session_state_returns_persisted_sequences(monkeypatch):
+    async def fake_get_session(session_id):
+        assert session_id == "00000000-0000-0000-0000-000000000444"
+        return {
+            "session": {"id": session_id, "status": "active", "completed_trades": 2},
+            "sequences": [{"id": "sequence-1", "status": "active"}],
+        }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_get_session)
+
+    response = client.get(
+        "/even-odd/sessions/00000000-0000-0000-0000-000000000444",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    assert response.json()["session"]["completed_trades"] == 2
+    assert response.json()["sequences"][0]["status"] == "active"
+
+
+def test_get_sequence_state_returns_settled_trade_history(monkeypatch):
+    async def fake_get_sequence(sequence_id):
+        assert sequence_id == "00000000-0000-0000-0000-000000000555"
+        return {
+            "sequence": {"id": sequence_id, "planned_trades": 3, "status": "active"},
+            "trades": [{"trade_number": 1, "outcome": "win"}],
+        }
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_sequence_state", fake_get_sequence)
+
+    response = client.get(
+        "/even-odd/sequences/00000000-0000-0000-0000-000000000555",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    assert response.json()["trades"][0]["outcome"] == "win"
