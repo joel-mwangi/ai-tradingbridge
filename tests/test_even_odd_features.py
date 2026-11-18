@@ -1,6 +1,10 @@
 import pytest
 
-from app.even_odd.ml.features import build_supervised_rows, chronological_split
+from app.even_odd.ml.features import (
+    build_next_tick_features,
+    build_supervised_rows,
+    chronological_split,
+)
 
 
 def test_feature_rows_use_only_ticks_before_target():
@@ -80,3 +84,17 @@ def test_chronological_split_requires_untouched_test_fraction():
     rows = [{"target_index": i} for i in range(10)]
     with pytest.raises(ValueError, match="leave a test set"):
         chronological_split(rows, train_fraction=0.8, validation_fraction=0.2)
+
+
+
+def test_next_tick_features_do_not_depend_on_placeholder_target_value():
+    digits = [0, 2, 4, 6, 8, 1, 3, 5, 7, 9]
+    features = build_next_tick_features(digits, windows=(10,))
+    with_zero = build_supervised_rows([*digits, 0], windows=(10,))[-1]["features"]
+    with_nine = build_supervised_rows([*digits, 9], windows=(10,))[-1]["features"]
+    assert features == with_zero == with_nine
+
+
+def test_next_tick_features_require_complete_history():
+    with pytest.raises(ValueError, match="Not enough historical digits"):
+        build_next_tick_features([0, 1, 2], windows=(4,))
