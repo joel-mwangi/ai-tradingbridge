@@ -691,6 +691,14 @@ async def check_hybrid_entry(
             raise HTTPException(status_code=409, detail="Model version is no longer current.")
         if model.get("status") == "retired":
             raise HTTPException(status_code=409, detail="Retired models cannot authorize entry checks.")
+        if model.get("status") != "validated":
+            return {
+                "status": "wait",
+                "reason": "The selected model has not passed independent validation.",
+                "model_status": model.get("status"),
+                "execution_authorized": False,
+                "order_execution_enabled": False,
+            }
 
         session_state = await get_even_odd_session_state(str(request.session_id))
         if session_state is None:
