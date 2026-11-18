@@ -102,9 +102,16 @@ payout-adjusted EV, or failed confirmation returns `wait` or an HTTP error.
 |---|---|---|
 | POST | `/even-odd/sessions` | Create a research/demo/real-account ledger session |
 | GET | `/even-odd/sessions/{session_id}` | Read session and sequence history |
-| POST | `/even-odd/sequences` | Start an ML-planned sequence |
+| POST | `/even-odd/sequence-plan` | Plan a 1–7 trade upper bound from recent persisted opportunities |
+| POST | `/even-odd/sequences` | Start the approved sequence plan |
 | GET | `/even-odd/sequences/{sequence_id}` | Read sequence and settled trade records |
 | POST | `/even-odd/settlements` | Record a completed trade outcome |
+
+The sequence planner recomputes forecasts from persisted tick history, applies
+the live payout quote and uncertainty bounds, and selects the longest
+positive-conservative-EV prefix. Its current persistence input is a recent
+historical opportunity proxy, not a trained forward sequence-survival model.
+The result is only an upper bound; revalidate after every completed trade.
 
 Session creation requires an explicit fixed stake, currency, and maximum
 session-loss budget. Database functions enforce the 7-trade sequence cap,
