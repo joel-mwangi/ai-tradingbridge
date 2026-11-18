@@ -232,11 +232,12 @@ async def load_historical_ticks(
     to_epoch: int | None = None,
     collection_id: str | None = None,
 ) -> dict[str, Any]:
-    """Read a stable, chronologically ordered snapshot from dedicated storage.
+    """Read the latest bounded history snapshot, returned in chronological order.
 
     The maximum observed row ID is captured first and used as a snapshot
     boundary, preventing concurrent collection inserts from shifting offset
-    pages while this bounded read is in progress.
+    pages while this bounded read is in progress. Rows are fetched newest-first
+    to avoid training on the oldest slice, then reversed before returning.
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000.")
@@ -275,7 +276,7 @@ async def load_historical_ticks(
                 ),
                 "market_symbol": f"eq.{symbol}",
                 "id": f"lte.{snapshot_max_id}",
-                "order": "tick_epoch.asc,id.asc",
+                "order": "tick_epoch.desc,id.desc",
             }
             if from_epoch is not None and to_epoch is not None:
                 base_params["and"] = (
@@ -311,7 +312,7 @@ async def load_historical_ticks(
                 if len(page) < expected_page_size:
                     break
             return {
-                "rows": rows[:limit],
+                "rows": list(reversed(rows[:limit])),
                 "snapshot_max_id": snapshot_max_id,
             }
     except EvenOddStorageError:
