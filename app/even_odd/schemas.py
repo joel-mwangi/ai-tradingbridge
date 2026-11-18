@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 class CollectTicksRequest(BaseModel):
@@ -37,6 +37,8 @@ class StartSequenceRequest(BaseModel):
 
 
 class RevalidationEvidence(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_validated: bool
     uncertainty_validated: bool
     signal_valid: bool
