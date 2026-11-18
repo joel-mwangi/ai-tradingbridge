@@ -41,6 +41,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-epochs", type=int, default=200)
     parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument(
+        "--allow-duplicates",
+        action="store_true",
+        help="Explicitly allow repeated market-observation fingerprints in the research sample.",
+    )
     parser.add_argument("--minimum-train-rows", type=int, default=500)
     parser.add_argument("--test-rows", type=int, default=250)
     parser.add_argument("--maximum-folds", type=int, default=5)
@@ -75,9 +80,21 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
 
         if quality["exact_market_observation_duplicates"]:
+            if not args.allow_duplicates:
+                await fail_research_run(research_run_id=research_run_id)
+                print(json.dumps({
+                    "status": "blocked",
+                    "research_run_id": research_run_id,
+                    "reason": (
+                        "Repeated observation fingerprints were detected. "
+                        "Review the overlap or rerun with --allow-duplicates."
+                    ),
+                    "quality": quality,
+                }, indent=2))
+                return 2
             print(
-                "WARNING: repeated observation fingerprints detected; raw rows "
-                "are retained and may overweight overlapping collection windows.",
+                "WARNING: duplicates were explicitly allowed; repeated rows may "
+                "overweight overlapping collection windows.",
                 file=sys.stderr,
             )
 
