@@ -17,6 +17,7 @@ def forecast(
     lower: float = 0.56,
     signal_valid: bool = True,
     model_validated: bool = True,
+    uncertainty_validated: bool = True,
     model_id: str = "test-model",
     model_version: str = "1",
 ) -> CandidateTradeForecast:
@@ -28,6 +29,7 @@ def forecast(
         loss_if_lose=1.0,
         signal_valid=signal_valid,
         model_validated=model_validated,
+        uncertainty_validated=uncertainty_validated,
         model_id=model_id,
         model_version=model_version,
     )
@@ -36,6 +38,7 @@ def forecast(
 def valid_revalidation(**overrides) -> Revalidation:
     values = {
         "model_validated": True,
+        "uncertainty_validated": True,
         "signal_valid": True,
         "data_fresh": True,
         "conservative_expected_value": 0.12,
@@ -113,6 +116,7 @@ def test_win_resets_consecutive_loss_counter():
     ("changes", "expected_fragment"),
     [
         ({"model_validated": False}, "not validated"),
+        ({"uncertainty_validated": False}, "uncertainty is not validated"),
         ({"data_fresh": False}, "stale"),
         ({"signal_valid": False}, "no longer valid"),
         ({"conservative_expected_value": 0.0}, "not positive"),
@@ -153,3 +157,14 @@ def test_unknown_outcome_is_rejected_without_mutating_counters():
         manager.record_outcome("unknown")
     assert state.completed_trades == 0
     assert manager.session_trades == 0
+
+
+
+def test_sequence_optimizer_rejects_unvalidated_probability_uncertainty():
+    decision = select_sequence_length([
+        forecast(1, uncertainty_validated=False),
+        forecast(2),
+    ])
+    assert decision.approved is False
+    assert decision.selected_trades == 0
+    assert "uncertainty" in decision.reason
