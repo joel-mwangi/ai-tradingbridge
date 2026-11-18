@@ -56,6 +56,7 @@ class EntryPolicy:
 
 @dataclass(frozen=True, slots=True)
 class EntryObservation:
+    tick_row_id: int
     tick_epoch: int
     sample_size: int
     data_age_seconds: float
@@ -75,6 +76,8 @@ class EntryObservation:
 
 
 def _validate_observation(observation: EntryObservation) -> None:
+    if type(observation.tick_row_id) is not int or observation.tick_row_id <= 0:
+        raise ValueError("tick_row_id must be a positive integer.")
     if type(observation.tick_epoch) is not int or observation.tick_epoch <= 0:
         raise ValueError("tick_epoch must be a positive integer.")
     if type(observation.sample_size) is not int or observation.sample_size < 1:
@@ -222,13 +225,13 @@ def evaluate_hybrid_entry(
         }
 
     for previous, current in zip(recent, recent[1:]):
-        gap = current.tick_epoch - previous.tick_epoch
-        if gap <= 0:
+        if current.tick_row_id <= previous.tick_row_id or current.tick_epoch < previous.tick_epoch:
             return {
                 "status": "wait",
                 "reason": "Confirmation snapshots are not strictly chronological.",
                 "execution_authorized": False,
             }
+        gap = current.tick_epoch - previous.tick_epoch
         if gap > policy.maximum_confirmation_gap_seconds:
             return {
                 "status": "wait",
@@ -279,6 +282,7 @@ def evaluate_hybrid_entry(
         "edge_over_break_even": latest["edge_over_break_even"],
         "conservative_expected_value": latest["conservative_expected_value"],
         "latest_tick_epoch": recent[-1].tick_epoch,
+        "latest_tick_row_id": recent[-1].tick_row_id,
         "execution_authorized": False,
         "reason": (
             "Fresh, consistent, validated forecasts passed the configured "
