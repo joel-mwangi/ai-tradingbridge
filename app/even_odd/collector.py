@@ -62,9 +62,9 @@ def normalize_tick(payload: Any, expected_symbol: str) -> dict:
 
     formatted_quote = format(quote, f".{precision}f")
     last_digit = int(formatted_quote.replace(".", "")[-1])
-    tick_id = payload.get("id")
-    if tick_id is not None and not isinstance(tick_id, (str, int)):
-        raise ValueError("Tick id must be a string or integer.")
+    stream_id = payload.get("id")
+    if stream_id is not None and not isinstance(stream_id, (str, int)):
+        raise ValueError("Deriv stream id must be a string or integer.")
 
     return {
         "received_at": datetime.now(timezone.utc).isoformat(),
@@ -74,7 +74,7 @@ def normalize_tick(payload: Any, expected_symbol: str) -> dict:
         "pip_size": precision,
         "last_digit": last_digit,
         "parity": "even" if last_digit % 2 == 0 else "odd",
-        "tick_id": str(tick_id) if tick_id is not None else None,
+        "stream_id": str(stream_id) if stream_id is not None else None,
     }
 
 

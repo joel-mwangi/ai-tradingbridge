@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import os
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -87,6 +88,7 @@ async def collect_even_odd_market_ticks(
             detail="Dedicated Even/Odd database is not configured on this service.",
         )
 
+    collection_started_at = datetime.now(timezone.utc)
     try:
         ticks = await collect_ticks(
             symbol=request.symbol,
@@ -103,6 +105,7 @@ async def collect_even_odd_market_ticks(
             symbol=request.symbol,
             requested_ticks=request.tick_count,
             ticks=ticks,
+            started_at=collection_started_at,
         )
     except EvenOddStorageError as exc:
         raise HTTPException(
