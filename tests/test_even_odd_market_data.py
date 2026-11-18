@@ -83,6 +83,8 @@ def test_even_odd_endpoints_require_authentication():
     assert client.post("/even-odd/settlements", json={}).status_code == 401
     assert client.get("/even-odd/sessions/00000000-0000-0000-0000-000000000444").status_code == 401
     assert client.get("/even-odd/sequences/00000000-0000-0000-0000-000000000555").status_code == 401
+    assert client.get("/even-odd/models?symbol=R_50").status_code == 401
+    assert client.get("/even-odd/research-runs?symbol=R_50").status_code == 401
 
 
 def test_even_odd_status_is_research_only():
@@ -598,3 +600,41 @@ def test_get_sequence_state_returns_settled_trade_history(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["trades"][0]["outcome"] == "win"
+
+
+
+def test_list_models_endpoint_returns_metadata_only(monkeypatch):
+    async def fake_list_models(**kwargs):
+        assert kwargs == {"symbol": "R_50", "limit": 20}
+        return [{
+            "id": "model-1",
+            "model_version": "v1",
+            "status": "candidate",
+            "execution_authorized": False,
+            "metrics": {"test_log_loss": 0.69},
+        }]
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.list_even_odd_models", fake_list_models)
+
+    response = client.get(
+        "/even-odd/models?symbol=R_50&limit=20",
+        headers=auth(),
+    )
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert response.json()["models"][0]["status"] == "candidate"
+    assert "model_artifact" not in response.json()["models"][0]
+
+
+def test_list_research_runs_endpoint_returns_persisted_experiments(monkeypatch):
+    async def fake_list_runs(**kwargs):
+        assert kwargs == {"symbol": "R_50", "limit": 50}
+        return [{"id": "run-1", "status": "completed", "dataset_rows": 4000}]
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.list_even_odd_research_runs", fake_list_runs)
+
+    response = client.get("/even-odd/research-runs?symbol=R_50", headers=auth())
+    assert response.status_code == 200
+    assert response.json()["research_runs"][0]["status"] == "completed"
