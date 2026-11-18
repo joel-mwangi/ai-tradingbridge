@@ -72,6 +72,8 @@ def _validate_observation(observation: EntryObservation) -> None:
         ("lower_even_probability", observation.lower_even_probability),
         ("upper_even_probability", observation.upper_even_probability),
     ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be numeric.")
         if not isfinite(value) or not 0 <= value <= 1:
             raise ValueError(f"{name} must be a finite probability from 0 to 1.")
     if not (
