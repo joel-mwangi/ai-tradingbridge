@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +56,7 @@ def test_normalize_tick_uses_decimal_precision_without_float_rounding():
     assert tick["quote"] == "123.450"
     assert tick["last_digit"] == 0
     assert tick["parity"] == "even"
+    assert tick["stream_id"] == "x"
 
 
 @pytest.mark.parametrize(
@@ -104,7 +106,7 @@ def test_collect_endpoint_uses_dedicated_collector_and_persists(monkeypatch):
             "pip_size": 3,
             "last_digit": i % 10,
             "parity": "even" if i % 2 == 0 else "odd",
-            "tick_id": str(i),
+            "stream_id": "stream-123",
         }
         for i in range(10)
     ]
@@ -114,10 +116,13 @@ def test_collect_endpoint_uses_dedicated_collector_and_persists(monkeypatch):
         assert tick_count == 10
         return sample
 
-    async def fake_persist_collection(*, symbol, requested_ticks, ticks):
+    async def fake_persist_collection(*, symbol, requested_ticks, ticks, started_at):
         assert symbol == "R_50"
         assert requested_ticks == 10
         assert ticks == sample
+        assert isinstance(started_at, datetime)
+        assert started_at.tzinfo == timezone.utc
+        assert started_at.isoformat() < sample[0]["received_at"]
         return "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
 
     monkeypatch.setattr("app.even_odd.router.collect_ticks", fake_collect)
