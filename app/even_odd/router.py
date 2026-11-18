@@ -608,6 +608,7 @@ async def forecast_next_parity(
             "uncertainty_validated": uncertainty_validated,
             "sample_size": len(rows),
             "latest_tick_epoch": latest_epoch,
+            "latest_tick_row_id": rows[-1]["id"],
             "data_age_seconds": data_age_seconds,
             "data_quality": quality,
             "snapshot_max_id": snapshot["snapshot_max_id"],
