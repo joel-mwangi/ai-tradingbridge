@@ -192,7 +192,7 @@ def calibrate_model_probabilities(
     if type(max_epochs) is not int or not 1 <= max_epochs <= 2000:
         raise ValueError("max_epochs must be an integer from 1 to 2000.")
 
-    calibration_matrix, labels, _ = _extract_matrix(
+    _, labels, _ = _extract_matrix(
         calibration_rows, model.get("feature_names")
     )
     raw_probabilities = [
