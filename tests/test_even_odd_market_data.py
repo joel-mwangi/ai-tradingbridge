@@ -915,8 +915,28 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
         assert kwargs == {"symbol": "R_50", "limit": 5000}
         return {"rows": rows, "snapshot_max_id": 24}
 
+    async def fake_get_session(session_id):
+        return {"session": {
+            "id": session_id,
+            "status": "active",
+            "market_symbol": "R_50",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_session_loss": "10.00",
+            "realized_profit": "0.00",
+        }, "sequences": []}
+
+    async def fake_get_quotes(**kwargs):
+        assert kwargs == {"symbol": "R_50", "currency": "USD", "stake": Decimal("1.00")}
+        return {"quotes": {
+            "even": {"profit_if_win": "0.80", "loss_if_lose": "1.00"},
+            "odd": {"profit_if_win": "0.90", "loss_if_lose": "1.00"},
+        }}
+
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_get_session)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quotes", fake_get_quotes)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
