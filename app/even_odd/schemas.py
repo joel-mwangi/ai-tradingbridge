@@ -78,7 +78,7 @@ class EntryObservationRequest(BaseModel):
 
 class EvaluateEntryRequest(BaseModel):
     session_id: UUID
-    observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
+    observations: list[EntryObservationRequest] = Field(min_length=3, max_length=3)
 
 
 
