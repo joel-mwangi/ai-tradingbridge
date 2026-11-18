@@ -4,6 +4,7 @@ from app.even_odd.storage import (
     EvenOddStorageError,
     _configuration,
     _headers,
+    _mark_collection_failed,
     storage_is_configured,
 )
 
@@ -54,3 +55,58 @@ def test_legacy_service_role_jwt_uses_bearer_and_apikey():
 
     assert headers["apikey"] == "legacy-service-role-jwt"
     assert headers["Authorization"] == "Bearer legacy-service-role-jwt"
+
+
+@pytest.mark.asyncio
+async def test_failed_collection_update_sets_terminal_status_without_sensitive_details():
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self):
+            self.call = None
+
+        async def patch(self, url, *, params, headers, json):
+            self.call = {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "json": json,
+            }
+            return Response()
+
+    client = Client()
+    await _mark_collection_failed(
+        client,
+        url="https://dedicated.example.supabase.co",
+        key="sb_secret_example",
+        collection_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    assert client.call["url"].endswith("/even_odd_collection_runs")
+    assert client.call["params"] == {
+        "id": "eq.00000000-0000-0000-0000-000000000001"
+    }
+    assert client.call["json"]["status"] == "failed"
+    assert client.call["json"]["completed_at"]
+    assert "Inspect backend logs" in client.call["json"]["error_message"]
+    assert "sb_secret_example" not in str(client.call)
+
+
+@pytest.mark.asyncio
+async def test_failure_status_update_is_best_effort_and_does_not_raise():
+    class Response:
+        def raise_for_status(self):
+            raise RuntimeError("unexpected test response error")
+
+    class Client:
+        async def patch(self, *args, **kwargs):
+            return Response()
+
+    await _mark_collection_failed(
+        Client(),
+        url="https://dedicated.example.supabase.co",
+        key="sb_secret_example",
+        collection_id="00000000-0000-0000-0000-000000000001",
+    )
