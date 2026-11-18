@@ -800,6 +800,7 @@ async def plan_adaptive_sequence(
         calibration_intervals = walk_forward.get("calibration_intervals") or []
 
         observations: list[EntryObservation] = []
+        entry_policy = EntryPolicy(minimum_sample_size=max(windows))
         forecasts: list[CandidateTradeForecast] = []
         forecast_details = []
         previous_id = 0
@@ -875,9 +876,9 @@ async def plan_adaptive_sequence(
             )
             signal_valid = (
                 uncertainty_validated
-                and data_age_seconds <= 10.0
-                and selected_side["edge_over_break_even"] >= 0.05
-                and selected_side["conservative_expected_value"] > 0.10
+                and data_age_seconds <= entry_policy.maximum_data_age_seconds
+                and selected_side["edge_over_break_even"] >= entry_policy.minimum_edge_over_break_even
+                and selected_side["conservative_expected_value"] > entry_policy.minimum_conservative_expected_value
             )
             forecasts.append(CandidateTradeForecast(
                 trade_number=trade_number,
@@ -931,7 +932,7 @@ async def plan_adaptive_sequence(
             raise HTTPException(status_code=422, detail="At least three recent observations are required for entry confirmation.")
         entry_result = evaluate_hybrid_entry(
             observations[-3:],
-            policy=EntryPolicy(minimum_sample_size=max(windows)),
+            policy=entry_policy,
         )
         if entry_result["status"] != "candidate":
             return {
