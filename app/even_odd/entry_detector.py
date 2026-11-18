@@ -133,6 +133,8 @@ def _validate_observation(observation: EntryObservation) -> None:
         raise ValueError("uncertainty_level must be a finite confidence level in (0.5, 1).")
     if type(observation.uncertainty_validated) is not bool:
         raise ValueError("uncertainty_validated must be boolean.")
+    if type(observation.risk_budget_available) is not bool:
+        raise ValueError("risk_budget_available must be boolean.")
 
 
 def _conservative_side(observation: EntryObservation) -> dict:
@@ -214,6 +216,12 @@ def evaluate_hybrid_entry(
             return {
                 "status": "wait",
                 "reason": "Market data is stale.",
+                "execution_authorized": False,
+            }
+        if not observation.risk_budget_available:
+            return {
+                "status": "wait",
+                "reason": "The session loss budget cannot cover the quoted contract risk.",
                 "execution_authorized": False,
             }
 
