@@ -76,3 +76,23 @@ Before any model can be marked validated:
 - require a separate explicit approval before any demo execution integration.
 
 No live trading authorization is implemented by this pipeline.
+
+
+## Running a local experiment
+
+The research runner deliberately executes outside the Vercel request lifecycle
+so bounded serverless API requests are not used for model training. From the
+backend repository root, configure the dedicated database credentials in the
+local environment and run:
+
+```powershell
+$env:EVEN_ODD_SUPABASE_URL = "https://<your-dedicated-project>.supabase.co"
+$env:EVEN_ODD_SUPABASE_SECRET_KEY = "<your-secret-key>"
+python -m scripts.even_odd_research --symbol R_50 --limit 5000 --walk-forward
+```
+
+Do not paste the secret into chat or commit it. The runner loads only the
+dedicated Even/Odd database, performs the quality audit, then writes a JSON
+research report to stdout. The default 50/100/250/500/1000 feature windows
+require a sufficiently large historical sample; a small sample should fail
+rather than silently train on inadequate history.
