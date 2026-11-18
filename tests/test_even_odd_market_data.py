@@ -772,7 +772,7 @@ def test_forecast_endpoint_rejects_retired_models(monkeypatch):
 
 
 
-def entry_check_payload(*, model_validated=True, uncertainty_validated=True):
+def entry_check_payload():
     return {
         "observations": [
             {
@@ -780,18 +780,12 @@ def entry_check_payload(*, model_validated=True, uncertainty_validated=True):
                 "sample_size": 1200,
                 "data_age_seconds": "1.0",
                 "even_probability": "0.80",
-                "lower_even_probability": "0.75",
-                "upper_even_probability": "0.85",
                 "even_profit_if_win": "0.80",
                 "even_loss_if_lose": "1.00",
                 "odd_profit_if_win": "0.90",
                 "odd_loss_if_lose": "1.00",
-                "model_id": "model-1",
+                "model_id": "00000000-0000-0000-0000-000000000333",
                 "model_version": "v1",
-                "model_validated": model_validated,
-                "uncertainty_method": "walk_forward_moving_block_bootstrap_local_calibration",
-                "uncertainty_level": "0.90",
-                "uncertainty_validated": uncertainty_validated,
             }
             for epoch in (100, 105, 110)
         ],
@@ -806,7 +800,36 @@ def entry_check_payload(*, model_validated=True, uncertainty_validated=True):
     }
 
 
-def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_pass():
+def entry_model(*, status="validated", interval_validated=True, version="v1"):
+    return {
+        "id": "00000000-0000-0000-0000-000000000333",
+        "market_symbol": "R_50",
+        "model_version": version,
+        "status": status,
+        "metrics": {
+            "walk_forward": {
+                "calibration_intervals": [{
+                    "validated": interval_validated,
+                    "target_probability": 0.8,
+                    "probability_bandwidth": 0.1,
+                    "lower_probability": 0.75,
+                    "upper_probability": 0.85,
+                    "method": "walk_forward_moving_block_bootstrap_local_calibration",
+                    "confidence_level": 0.9,
+                }]
+            }
+        },
+    }
+
+
+def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_pass(monkeypatch):
+    async def fake_get_model(model_id):
+        assert model_id == "00000000-0000-0000-0000-000000000333"
+        return entry_model()
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
@@ -816,23 +839,49 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
     payload = response.json()
     assert payload["status"] == "candidate"
     assert payload["side"] == "even"
+    assert payload["model_status"] == "validated"
     assert payload["execution_authorized"] is False
     assert payload["order_execution_enabled"] is False
 
 
-def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation():
-    response = client.post(
-        "/even-odd/entry-check",
-        headers=auth(),
-        json=entry_check_payload(model_validated=False),
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "wait"
+def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkeypatch):
+    async def fake_candidate_model(model_id):
+        return entry_model(status="candidate")
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
 
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
-        json=entry_check_payload(uncertainty_validated=False),
+        json=entry_check_payload(),
     )
     assert response.status_code == 200
     assert response.json()["status"] == "wait"
+
+    async def fake_unvalidated_interval(model_id):
+        return entry_model(interval_validated=False)
+
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_unvalidated_interval)
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+
+
+def test_hybrid_entry_endpoint_rejects_stale_model_version(monkeypatch):
+    async def fake_old_model(model_id):
+        return entry_model(version="v2")
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_old_model)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=entry_check_payload(),
+    )
+    assert response.status_code == 409
