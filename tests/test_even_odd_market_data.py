@@ -772,6 +772,27 @@ def test_forecast_endpoint_rejects_retired_models(monkeypatch):
 
 
 
+def entry_history_fixture():
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    rows = []
+    for index in range(1, 21):
+        digit = index % 10
+        rows.append({
+            "id": index,
+            "collection_id": "entry-collection",
+            "sequence_no": index,
+            "market_symbol": "R_50",
+            "tick_epoch": now_epoch - (20 - index),
+            "quote": f"100.{digit}",
+            "pip_size": 1,
+            "last_digit": digit,
+            "parity": "even" if digit % 2 == 0 else "odd",
+            "deriv_stream_id": "entry-stream",
+            "received_at": "2026-11-19T00:00:00+00:00",
+        })
+    return rows
+
+
 def entry_check_payload(rows):
     return {
         "observations": [
@@ -786,10 +807,10 @@ def entry_check_payload(rows):
                 "model_id": "00000000-0000-0000-0000-000000000333",
                 "model_version": "v1",
             }
-            for row in rows[1:]
+            for row in rows[-3:]
         ],
         "policy": {
-            "minimum_sample_size": 4,
+            "minimum_sample_size": 20,
             "maximum_data_age_seconds": "10.0",
             "required_confirmations": 3,
             "maximum_confirmation_gap_seconds": "10.0",
@@ -823,7 +844,7 @@ def entry_model(*, status="validated", interval_validated=True, version="v1"):
 
 
 def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_pass(monkeypatch):
-    _, rows = forecast_fixture()
+    rows = entry_history_fixture()
 
     async def fake_get_model(model_id):
         assert model_id == "00000000-0000-0000-0000-000000000333"
@@ -852,7 +873,7 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
 
 
 def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkeypatch):
-    _, rows = forecast_fixture()
+    rows = entry_history_fixture()
 
     async def fake_candidate_model(model_id):
         return entry_model(status="candidate")
@@ -892,7 +913,7 @@ def test_hybrid_entry_endpoint_rejects_stale_model_version(monkeypatch):
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_old_model)
 
-    _, rows = forecast_fixture()
+    rows = entry_history_fixture()
     response = client.post(
         "/even-odd/entry-check",
         headers=auth(),
