@@ -932,3 +932,37 @@ def test_hybrid_entry_endpoint_rejects_stale_model_version(monkeypatch):
         json=entry_check_payload(rows),
     )
     assert response.status_code == 409
+
+
+
+def test_collect_request_rejects_timeout_above_hobby_safe_limit():
+    response = client.post(
+        "/even-odd/collect",
+        headers=auth(),
+        json={"symbol": "R_50", "tick_count": 10, "timeout_seconds": 81},
+    )
+    assert response.status_code == 422
+
+
+def test_hybrid_entry_endpoint_rejects_tick_ids_not_in_persisted_history(monkeypatch):
+    rows = entry_history_fixture()
+
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 24}
+
+    payload = entry_check_payload(rows)
+    payload["observations"][0]["tick_row_id"] = 9999
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.post(
+        "/even-odd/entry-check",
+        headers=auth(),
+        json=payload,
+    )
+    assert response.status_code == 409
