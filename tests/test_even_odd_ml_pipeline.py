@@ -55,6 +55,9 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     assert all(fold["validation_rows"] >= 20 for fold in result["folds"])
     assert all(fold["calibration_rows"] >= 50 for fold in result["folds"])
     assert result["aggregate_model_metrics"]["sample_size"] == 300
+    assert len(result["out_of_sample_predictions"]) == 300
+    assert len(result["calibration_intervals"]) == 9
+    assert all(interval["validated"] is False for interval in result["calibration_intervals"])
     assert result["promotion_status"]["validated"] is False
 
 
