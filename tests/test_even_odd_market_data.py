@@ -711,6 +711,8 @@ def test_forecast_endpoint_returns_research_only_probability_and_interval(monkey
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", lambda session_id: entry_session_state())
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.get(
@@ -795,6 +797,7 @@ def entry_history_fixture():
 
 def entry_check_payload(rows):
     return {
+        "session_id": "00000000-0000-0000-0000-000000000444",
         "observations": [
             {
                 "tick_row_id": row["id"],
@@ -816,6 +819,57 @@ def entry_check_payload(rows):
             "minimum_edge_over_break_even": "0.05",
             "minimum_conservative_expected_value": "0.10",
         },
+    }
+
+
+def entry_session_state():
+    return {
+        "session": {
+            "id": "00000000-0000-0000-0000-000000000444",
+            "status": "active",
+            "market_symbol": "R_50",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_session_loss": "10.00",
+            "realized_profit": "0.00",
+            "completed_trades": 0,
+            "max_trades_per_session": 10,
+            "consecutive_losses": 0,
+            "max_consecutive_losses": 2,
+        },
+        "sequences": [],
+    }
+
+
+async def fake_entry_payout_quote(*, symbol, currency, stake):
+    assert symbol == "R_50"
+    assert currency == "USD"
+    assert str(stake) == "1.00"
+    return {
+        "source": "deriv_public_websocket",
+        "symbol": symbol,
+        "currency": currency,
+        "requested_stake": "1.00",
+        "duration": 1,
+        "duration_unit": "t",
+        "quoted_at": datetime.now(timezone.utc).isoformat(),
+        "even": {
+            "contract_type": "DIGITEVEN",
+            "proposal_id": "even-proposal",
+            "ask_price": "1.00",
+            "payout": "1.80",
+            "profit_if_win": "0.80",
+            "loss_if_lose": "1.00",
+        },
+        "odd": {
+            "contract_type": "DIGITODD",
+            "proposal_id": "odd-proposal",
+            "ask_price": "1.00",
+            "payout": "1.90",
+            "profit_if_win": "0.90",
+            "loss_if_lose": "1.00",
+        },
+        "execution_authorized": False,
     }
 
 
@@ -878,6 +932,8 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
     assert payload["status"] == "candidate", payload
     assert payload["side"] == "even"
     assert payload["model_status"] == "validated"
+    assert payload["payout_terms_source"] == "deriv_public_websocket"
+    assert payload["payout_quote"]["even"]["profit_if_win"] == "0.80"
     assert payload["model_probability_even"] == pytest.approx(0.8)
     assert payload["latest_observation_sample_size"] >= 20
     assert payload["execution_authorized"] is False
@@ -895,6 +951,8 @@ def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkey
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", lambda session_id: entry_session_state())
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
     monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
 
     response = client.post(
