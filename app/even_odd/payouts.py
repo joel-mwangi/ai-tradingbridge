@@ -44,6 +44,7 @@ async def get_even_odd_payout_quote(
     currency: str,
     stake: Decimal | str | int | float,
     timeout_seconds: float = 10.0,
+    max_quote_age_seconds: int = 10,
 ) -> dict:
     """Get matched one-tick Even and Odd quotes for a fixed session stake."""
     if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
@@ -65,6 +66,8 @@ async def get_even_odd_payout_quote(
         or timeout_seconds <= 0
     ):
         raise ValueError("timeout_seconds must be finite and positive.")
+    if type(max_quote_age_seconds) is not int or max_quote_age_seconds < 1:
+        raise ValueError("max_quote_age_seconds must be a positive integer.")
 
     requests = [
         {
@@ -82,6 +85,7 @@ async def get_even_odd_payout_quote(
     ]
 
     quotes: dict[str, dict] = {}
+    now_epoch = datetime.now(timezone.utc).timestamp()
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     try:
         async with websockets.connect(
@@ -146,6 +150,12 @@ async def get_even_odd_payout_quote(
                 profit_if_win = payout - ask_price
                 if profit_if_win <= 0:
                     raise PayoutQuoteError("Deriv quote has no positive net profit on a win.")
+                spot_time = proposal.get("spot_time")
+                if type(spot_time) is not int or spot_time <= 0:
+                    raise PayoutQuoteError("Deriv proposal has no valid spot_time.")
+                quote_age = now_epoch - spot_time
+                if quote_age < -2 or quote_age > max_quote_age_seconds:
+                    raise PayoutQuoteError("Deriv proposal spot quote is stale or future-dated.")
 
                 quotes[side] = {
                     "contract_type": contract_type,
@@ -155,7 +165,8 @@ async def get_even_odd_payout_quote(
                     "profit_if_win": str(profit_if_win),
                     "loss_if_lose": str(ask_price),
                     "spot": proposal.get("spot"),
-                    "spot_time": proposal.get("spot_time"),
+                    "spot_time": spot_time,
+                    "quote_age_seconds": max(0.0, quote_age),
                 }
     except PayoutQuoteError:
         raise
