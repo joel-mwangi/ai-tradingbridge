@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 
 class CollectTicksRequest(BaseModel):
@@ -39,11 +39,11 @@ class StartSequenceRequest(BaseModel):
 class RevalidationEvidence(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
-    model_validated: bool
-    uncertainty_validated: bool
-    signal_valid: bool
-    data_fresh: bool
-    risk_budget_available: bool
+    model_validated: StrictBool
+    uncertainty_validated: StrictBool
+    signal_valid: StrictBool
+    data_fresh: StrictBool
+    risk_budget_available: StrictBool
 
 
 class RecordTradeSettlementRequest(BaseModel):
