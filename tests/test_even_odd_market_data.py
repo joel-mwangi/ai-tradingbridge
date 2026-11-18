@@ -95,8 +95,7 @@ def test_even_odd_analyze_endpoint():
     assert response.json()["analysis"]["sample"]["even"]["percentage"] == 50.0
 
 
-@pytest.mark.asyncio
-async def test_collect_endpoint_uses_dedicated_collector(monkeypatch):
+def test_collect_endpoint_uses_dedicated_collector(monkeypatch):
     sample = [
         {
             "received_at": "2026-11-18T00:00:00+00:00",
