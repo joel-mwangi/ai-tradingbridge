@@ -662,6 +662,41 @@ async def check_hybrid_entry(
         if model.get("status") == "retired":
             raise HTTPException(status_code=409, detail="Retired models cannot authorize entry checks.")
 
+        artifact = model.get("model_artifact")
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("feature_names"), list):
+            raise EvenOddStorageError("Stored model feature schema is invalid.")
+        windows = sorted({
+            int(name.split("_", 1)[0][1:])
+            for name in artifact["feature_names"]
+            if isinstance(name, str)
+            and name.startswith("w")
+            and name.endswith("_even_rate")
+            and name.split("_", 1)[0][1:].isdigit()
+        })
+        if not windows:
+            raise EvenOddStorageError("Stored model does not declare valid feature windows.")
+
+        snapshot = await load_historical_ticks(
+            symbol=model["market_symbol"],
+            limit=5000,
+        )
+        market_rows = snapshot["rows"]
+        quality = inspect_historical_ticks(
+            market_rows,
+            expected_symbol=model["market_symbol"],
+        )
+        if (
+            not quality["quality_passed"]
+            or quality["exact_market_observation_duplicates"] > 0
+            or len(market_rows) < max(windows)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Persisted market history is insufficient or failed quality checks.",
+            )
+        rows_by_id = {row["id"]: row for row in market_rows}
+        now_epoch = datetime.now(timezone.utc).timestamp()
+
         metrics = model.get("metrics") or {}
         walk_forward = metrics.get("walk_forward") or {}
         calibration_intervals = walk_forward.get("calibration_intervals") or []
@@ -669,6 +704,19 @@ async def check_hybrid_entry(
 
         observations = []
         for item in request.observations:
+            persisted_tick = rows_by_id.get(item.tick_row_id)
+            if (
+                persisted_tick is None
+                or persisted_tick["tick_epoch"] != item.tick_epoch
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Entry observation does not match a persisted market tick.",
+                )
+            data_age_seconds = max(
+                0.0,
+                now_epoch - persisted_tick["tick_epoch"],
+            )
             uncertainty = select_probability_interval(
                 calibration_intervals,
                 target_probability=float(item.even_probability),
