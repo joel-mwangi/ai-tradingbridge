@@ -643,7 +643,7 @@ async def check_hybrid_entry(
             status_code=503,
             detail="Dedicated Even/Odd database is not configured on this service.",
         )
-    model_id = request.observations[0].model_id
+    model_id = str(request.observations[0].model_id)
     model_version = request.observations[0].model_version
     if any(
         item.model_id != model_id or item.model_version != model_version
