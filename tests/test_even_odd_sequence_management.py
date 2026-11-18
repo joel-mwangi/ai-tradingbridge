@@ -17,6 +17,8 @@ def forecast(
     lower: float = 0.56,
     signal_valid: bool = True,
     model_validated: bool = True,
+    model_id: str = "test-model",
+    model_version: str = "1",
 ) -> CandidateTradeForecast:
     return CandidateTradeForecast(
         trade_number=trade_number,
@@ -26,8 +28,8 @@ def forecast(
         loss_if_lose=1.0,
         signal_valid=signal_valid,
         model_validated=model_validated,
-        model_id="test-model",
-        model_version="1",
+        model_id=model_id,
+        model_version=model_version,
     )
 
 
@@ -73,6 +75,13 @@ def test_unvalidated_model_cannot_authorize_any_trade():
     assert decision.selected_trades == 0
 
 
+def test_sequence_optimizer_rejects_model_version_change():
+    candidates = [forecast(1), forecast(2, model_version="2"), forecast(3)]
+    decision = select_sequence_length(candidates)
+    assert decision.selected_trades == 1
+    assert "identity/version changed" in decision.reason
+
+
 def test_sequence_is_capped_by_remaining_session_capacity():
     decision = select_sequence_length(
         [forecast(i) for i in range(1, 8)],
@@ -107,6 +116,7 @@ def test_win_resets_consecutive_loss_counter():
         ({"data_fresh": False}, "stale"),
         ({"signal_valid": False}, "no longer valid"),
         ({"conservative_expected_value": 0.0}, "not positive"),
+        ({"conservative_expected_value": float("nan")}, "not positive"),
         ({"risk_budget_available": False}, "exhausted"),
     ],
 )
@@ -134,3 +144,12 @@ def test_sequence_length_cannot_exceed_seven():
     manager = SequenceManager()
     with pytest.raises(ValueError, match="between 1 and 7"):
         manager.start_sequence(8)
+
+
+def test_unknown_outcome_is_rejected_without_mutating_counters():
+    manager = SequenceManager()
+    state = manager.start_sequence(2)
+    with pytest.raises(ValueError, match="confirmed TradeOutcome"):
+        manager.record_outcome("unknown")
+    assert state.completed_trades == 0
+    assert manager.session_trades == 0
