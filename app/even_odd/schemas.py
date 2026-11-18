@@ -75,3 +75,16 @@ class EntryObservationRequest(BaseModel):
 class EvaluateEntryRequest(BaseModel):
     session_id: UUID
     observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
+
+
+
+class SequencePlanObservationRequest(BaseModel):
+    tick_row_id: StrictInt = Field(gt=0)
+    tick_epoch: StrictInt = Field(gt=0)
+
+
+class PlanSequenceRequest(BaseModel):
+    session_id: UUID
+    model_id: UUID
+    model_version: str = Field(min_length=1, max_length=128)
+    observations: list[SequencePlanObservationRequest] = Field(min_length=1, max_length=7)
