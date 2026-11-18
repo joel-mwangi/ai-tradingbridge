@@ -17,6 +17,7 @@ All endpoints require the existing server-to-server bearer token.
 - `GET /even-odd/history`: returns a bounded historical tick snapshot, optionally filtered by epoch range or collection ID.
 - `GET /even-odd/quality`: audits quote-digit consistency, parity consistency, symbol consistency, collection sequence ordering, duplicate sequence numbers and exact repeated-observation fingerprints without deleting rows.
 - `GET /even-odd/models` and `GET /even-odd/research-runs`: list model metadata/evaluation summaries and persisted experiment history.
+- `GET /even-odd/forecast` and `POST /even-odd/entry-check`: produce a research-only point forecast and validate multi-snapshot entry evidence against persisted market ticks.
 - `POST /even-odd/collect`: creates a durable collection-run record, collects
   a bounded live tick sample from the selected Deriv symbol, persists normalized
   ticks to the dedicated Even/Odd Supabase project, and returns descriptive
