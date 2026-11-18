@@ -174,10 +174,78 @@ def train_logistic_model(
     }
 
 
-def predict_even_probability(model: dict, features: dict[str, float]) -> float:
-    """Return P(even) from a fitted model without changing its validation state."""
+def calibrate_model_probabilities(
+    model: dict,
+    calibration_rows: Sequence[dict],
+    *,
+    learning_rate: float = 0.01,
+    l2: float = 0.01,
+    max_epochs: int = 500,
+) -> dict:
+    """Fit a Platt-style logistic calibrator on a separate calibration period."""
+    if len(calibration_rows) < 50:
+        raise ValueError("At least 50 calibration rows are required.")
+    if not isfinite(learning_rate) or not 0 < learning_rate <= 0.1:
+        raise ValueError("learning_rate must be finite and in (0, 0.1].")
+    if not isfinite(l2) or l2 < 0:
+        raise ValueError("l2 must be finite and non-negative.")
+    if type(max_epochs) is not int or not 1 <= max_epochs <= 2000:
+        raise ValueError("max_epochs must be an integer from 1 to 2000.")
+
+    calibration_matrix, labels, _ = _extract_matrix(
+        calibration_rows, model.get("feature_names")
+    )
+    raw_probabilities = [
+        predict_even_probability(model, row["features"], apply_calibration=False)
+        for row in calibration_rows
+    ]
+    epsilon = 1e-12
+    logits = [
+        log(min(1 - epsilon, max(epsilon, probability)) /
+            (1 - min(1 - epsilon, max(epsilon, probability))))
+        for probability in raw_probabilities
+    ]
+
+    slope = 1.0
+    intercept = 0.0
+    count = len(labels)
+    for _ in range(max_epochs):
+        slope_gradient = l2 * (slope - 1.0)
+        intercept_gradient = 0.0
+        for logit, target in zip(logits, labels):
+            error = _sigmoid(slope * logit + intercept) - target
+            slope_gradient += error * logit / count
+            intercept_gradient += error / count
+        slope -= learning_rate * slope_gradient
+        intercept -= learning_rate * intercept_gradient
+
+    calibrated = [
+        _sigmoid(slope * logit + intercept)
+        for logit in logits
+    ]
+    model["calibration"] = {
+        "method": "platt_scaling",
+        "slope": slope,
+        "intercept": intercept,
+        "calibration_rows": count,
+        "calibration_log_loss_in_sample": _log_loss(labels, calibrated),
+        "raw_log_loss_in_sample": _log_loss(labels, raw_probabilities),
+    }
+    model["calibrated"] = True
+    model["validated"] = False
+    model["execution_authorized"] = False
+    return model
+
+
+def predict_even_probability(
+    model: dict,
+    features: dict[str, float],
+    *,
+    apply_calibration: bool = True,
+) -> float:
+    """Return P(even); a fitted calibrator is applied when present."""
     required = model.get("feature_names")
-    if not isinstance(required, list) or set(features) != set(required):
+    if not isinstance(features, dict) or not isinstance(required, list) or set(features) != set(required):
         raise ValueError("Prediction features do not match the trained model schema.")
     means = model["means"]
     scales = model["scales"]
@@ -193,4 +261,13 @@ def predict_even_probability(model: dict, features: dict[str, float]) -> float:
         if not isfinite(means[index]) or not isfinite(scales[index]) or scales[index] <= 0:
             raise ValueError("Trained model scaling parameters are invalid.")
         score += weights[index] * ((float(value) - means[index]) / scales[index])
-    return _sigmoid(score)
+    probability = _sigmoid(score)
+    calibration = model.get("calibration") if apply_calibration else None
+    if calibration:
+        epsilon = 1e-12
+        clipped = min(1 - epsilon, max(epsilon, probability))
+        logit = log(clipped / (1 - clipped))
+        probability = _sigmoid(
+            calibration["slope"] * logit + calibration["intercept"]
+        )
+    return probability
