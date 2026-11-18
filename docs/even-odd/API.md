@@ -108,10 +108,11 @@ payout-adjusted EV, or failed confirmation returns `wait` or an HTTP error.
 | POST | `/even-odd/settlements` | Record a completed trade outcome |
 
 The sequence planner recomputes forecasts from persisted tick history, applies
-the live payout quote and uncertainty bounds, and selects the longest
+the current live payout quote and uncertainty bounds, and selects the longest
 positive-conservative-EV prefix. Its current persistence input is a recent
-historical opportunity proxy, not a trained forward sequence-survival model.
-The result is only an upper bound; revalidate after every completed trade.
+historical opportunity proxy, not a trained forward sequence-survival model
+or a historical payout replay. The result is only an upper bound; revalidate
+after every completed trade.
 
 Session creation requires an explicit fixed stake, currency, and maximum
 session-loss budget. Database functions enforce the 7-trade sequence cap,
