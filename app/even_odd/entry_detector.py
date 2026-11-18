@@ -51,8 +51,10 @@ class EntryObservation:
     even_probability: float
     lower_even_probability: float
     upper_even_probability: float
-    profit_if_win: float
-    loss_if_lose: float
+    even_profit_if_win: float
+    even_loss_if_lose: float
+    odd_profit_if_win: float
+    odd_loss_if_lose: float
     model_id: str
     model_version: str
     model_validated: bool
@@ -78,10 +80,16 @@ def _validate_observation(observation: EntryObservation) -> None:
         <= observation.upper_even_probability
     ):
         raise ValueError("Probability interval must contain the point forecast.")
-    if not isfinite(observation.profit_if_win) or observation.profit_if_win <= 0:
-        raise ValueError("profit_if_win must be finite and positive.")
-    if not isfinite(observation.loss_if_lose) or observation.loss_if_lose <= 0:
-        raise ValueError("loss_if_lose must be finite and positive.")
+    for name, value in (
+        ("even_profit_if_win", observation.even_profit_if_win),
+        ("even_loss_if_lose", observation.even_loss_if_lose),
+        ("odd_profit_if_win", observation.odd_profit_if_win),
+        ("odd_loss_if_lose", observation.odd_loss_if_lose),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be numeric.")
+        if not isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive.")
     if not observation.model_id or not observation.model_version:
         raise ValueError("Model identity and version are required.")
     if type(observation.model_validated) is not bool:
@@ -89,33 +97,36 @@ def _validate_observation(observation: EntryObservation) -> None:
 
 
 def _conservative_side(observation: EntryObservation) -> dict:
-    break_even = observation.loss_if_lose / (
-        observation.profit_if_win + observation.loss_if_lose
+    even_break_even = observation.even_loss_if_lose / (
+        observation.even_profit_if_win + observation.even_loss_if_lose
+    )
+    odd_break_even = observation.odd_loss_if_lose / (
+        observation.odd_profit_if_win + observation.odd_loss_if_lose
     )
     even_lower = observation.lower_even_probability
     odd_lower = 1.0 - observation.upper_even_probability
     even_ev = (
-        even_lower * observation.profit_if_win
-        - (1 - even_lower) * observation.loss_if_lose
+        even_lower * observation.even_profit_if_win
+        - (1 - even_lower) * observation.even_loss_if_lose
     )
     odd_ev = (
-        odd_lower * observation.profit_if_win
-        - (1 - odd_lower) * observation.loss_if_lose
+        odd_lower * observation.odd_profit_if_win
+        - (1 - odd_lower) * observation.odd_loss_if_lose
     )
 
     if even_ev >= odd_ev:
         return {
             "side": "even",
             "lower_probability": even_lower,
-            "break_even_probability": break_even,
-            "edge_over_break_even": even_lower - break_even,
+            "break_even_probability": even_break_even,
+            "edge_over_break_even": even_lower - even_break_even,
             "conservative_expected_value": even_ev,
         }
     return {
         "side": "odd",
         "lower_probability": odd_lower,
-        "break_even_probability": break_even,
-        "edge_over_break_even": odd_lower - break_even,
+        "break_even_probability": odd_break_even,
+        "edge_over_break_even": odd_lower - odd_break_even,
         "conservative_expected_value": odd_ev,
     }
 
