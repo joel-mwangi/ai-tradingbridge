@@ -1281,3 +1281,27 @@ def test_hybrid_entry_endpoint_rejects_cherry_picked_nonconsecutive_ticks(monkey
         json=payload,
     )
     assert response.status_code == 409
+
+
+
+def test_sequence_plan_rejects_a_session_with_an_active_sequence(monkeypatch):
+    rows = entry_history_fixture()
+
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_active_session(session_id):
+        state = entry_session_state()
+        state["sequences"] = [{"status": "active"}]
+        return state
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_active_session)
+
+    response = client.post(
+        "/even-odd/sequence-plan",
+        headers=auth(),
+        json=sequence_plan_payload(rows),
+    )
+    assert response.status_code == 409
