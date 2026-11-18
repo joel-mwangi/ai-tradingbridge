@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.even_odd import collector
 from app.even_odd.collector import normalize_tick
 from app.even_odd.digit_engine import analyze_digits
 
@@ -38,7 +37,7 @@ def test_digit_engine_includes_rolling_windows_and_streaks():
     digits = [2, 4, 6, 1, 3] * 10
     result = analyze_digits(digits)
     assert "50" in result["rolling_windows"]
-    assert result["sample"]["current_parity_streak"] == 1
+    assert result["sample"]["current_parity_streak"] == 2
     assert result["sample"]["transitions"]["even_to_even"] > 0
 
 
