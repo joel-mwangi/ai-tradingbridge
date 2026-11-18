@@ -72,15 +72,6 @@ class EntryObservationRequest(BaseModel):
 
 
 
-class EntryPolicyRequest(BaseModel):
-    minimum_sample_size: StrictInt = Field(ge=20)
-    maximum_data_age_seconds: Decimal = Field(gt=0)
-    required_confirmations: StrictInt = Field(ge=2, le=10)
-    maximum_confirmation_gap_seconds: Decimal = Field(gt=0)
-    minimum_edge_over_break_even: Decimal = Field(ge=0, lt=1)
-    minimum_conservative_expected_value: Decimal = Field(ge=0)
-
-
 class EvaluateEntryRequest(BaseModel):
     session_id: UUID
     observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
