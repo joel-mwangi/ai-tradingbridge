@@ -1140,3 +1140,90 @@ def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "wait"
     assert "stale" in response.json()["reason"].lower()
+
+
+
+def sequence_plan_payload(rows):
+    return {
+        "session_id": "00000000-0000-0000-0000-000000000444",
+        "model_id": "00000000-0000-0000-0000-000000000333",
+        "model_version": "v1",
+        "observations": [
+            {"tick_row_id": row["id"], "tick_epoch": row["tick_epoch"]}
+            for row in rows[-4:]
+        ],
+    }
+
+
+def test_sequence_plan_uses_server_forecasts_and_selects_bounded_recent_persistence(monkeypatch):
+    rows = entry_history_fixture()
+
+    async def fake_get_model(model_id):
+        return entry_model()
+
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 24}
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_entry_session_state)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.post(
+        "/even-odd/sequence-plan",
+        headers=auth(),
+        json=sequence_plan_payload(rows),
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "plan"
+    assert payload["planned_trades"] == 4
+    assert payload["max_allowed_trades"] <= 7
+    assert payload["plan_basis"] == "recent_persisted_opportunity_persistence_proxy"
+    assert payload["execution_authorized"] is False
+    assert payload["order_execution_enabled"] is False
+
+
+def test_sequence_plan_waits_for_model_validation_and_risk_budget(monkeypatch):
+    rows = entry_history_fixture()
+
+    async def fake_candidate_model(model_id):
+        return entry_model(status="candidate")
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
+
+    response = client.post(
+        "/even-odd/sequence-plan",
+        headers=auth(),
+        json=sequence_plan_payload(rows),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+    assert response.json()["planned_trades"] == 0
+
+    async def fake_validated_model(model_id):
+        return entry_model()
+
+    async def fake_low_budget_session(session_id):
+        state = entry_session_state()
+        state["session"]["max_session_loss"] = "0.50"
+        return state
+
+    async def fake_load_history(**kwargs):
+        return {"rows": rows, "snapshot_max_id": 24}
+
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_validated_model)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_session_state", fake_low_budget_session)
+    monkeypatch.setattr("app.even_odd.router.get_even_odd_payout_quote", fake_entry_payout_quote)
+    monkeypatch.setattr("app.even_odd.router.load_historical_ticks", fake_load_history)
+
+    response = client.post(
+        "/even-odd/sequence-plan",
+        headers=auth(),
+        json=sequence_plan_payload(rows),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "wait"
+    assert response.json()["planned_trades"] == 0
