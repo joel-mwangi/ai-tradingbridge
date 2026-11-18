@@ -128,3 +128,21 @@ produces point probabilities plus a calibration mapping, so it cannot yet
 satisfy this entry gate by itself. That uncertainty-estimation component
 remains a prerequisite before entry candidates can be generated from the
 trained model.
+
+
+## Forecast and entry-check API
+
+- `GET /even-odd/forecast?symbol=R_50&model_id=<uuid>` loads the selected
+  stored model, fetches the latest bounded history, verifies data quality and
+  freshness, builds next-tick features without a target label, and returns a
+  research-only point forecast plus the nearest validated local-calibration
+  envelope when one exists. It exposes the persisted tick row ID so the
+  confirmation flow can reference an auditable observation.
+- `POST /even-odd/entry-check` accepts multiple forecast observations and
+  side-specific payout terms. The backend re-reads the model's validation
+  status and uncertainty intervals from the dedicated database, verifies each
+  tick row ID/epoch against persisted market history, computes data age on the
+  server, and then applies the hybrid confirmation gates. Client-supplied
+  validation flags and data-age claims are not trusted.
+- A response of `candidate` means only that the configured entry gates passed.
+  It is not an order instruction. The response always sets execution disabled.
