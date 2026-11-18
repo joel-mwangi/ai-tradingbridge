@@ -245,7 +245,7 @@ async def get_even_odd_history(
         "returned_ticks": len(rows),
         "limit": limit,
         "snapshot_max_id": snapshot["snapshot_max_id"],
-        "truncated": len(rows) == limit,
+        "limit_reached": len(rows) == limit,
         "ordering": "tick_epoch_asc_then_id_asc",
         "rows": rows,
         "warning": (
