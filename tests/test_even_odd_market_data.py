@@ -1137,6 +1137,6 @@ def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch
         headers=auth(),
         json=payload,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["status"] == "wait"
     assert "stale" in response.json()["reason"].lower()
