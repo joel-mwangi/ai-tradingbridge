@@ -194,3 +194,15 @@ def test_entry_confirmations_allow_same_second_ticks_with_increasing_database_id
     observations[2] = replace(observations[2], tick_row_id=12)
     result = evaluate_hybrid_entry(observations, policy=policy())
     assert result["status"] == "candidate"
+
+
+
+def test_entry_waits_when_remaining_session_loss_budget_is_insufficient():
+    observations = [
+        replace(observation(100), risk_budget_available=False),
+        observation(105),
+        observation(110),
+    ]
+    result = evaluate_hybrid_entry(observations, policy=policy())
+    assert result["status"] == "wait"
+    assert "loss budget" in result["reason"]
