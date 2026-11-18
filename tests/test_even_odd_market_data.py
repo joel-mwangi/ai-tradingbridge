@@ -236,3 +236,95 @@ def test_collect_endpoint_marks_zero_tick_failure(monkeypatch):
     assert failed["collection_id"] == "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
     assert failed["received_ticks"] == 0
     assert response.json()["detail"]["status"] == "failed"
+
+
+
+@pytest.mark.asyncio
+async def test_collector_retains_valid_ticks_when_deriv_feed_errors(monkeypatch):
+    import json
+    from app.even_odd.collector import TickCollectionError, collect_ticks
+
+    messages = [
+        json.dumps({
+            "msg_type": "tick",
+            "tick": {
+                "symbol": "R_50",
+                "quote": f"123.45{i}",
+                "epoch": 1760000000 + i,
+                "pip_size": 3,
+                "id": "stream-123",
+            },
+        })
+        for i in range(3)
+    ]
+    messages.append(json.dumps({"msg_type": "error", "error": {"message": "upstream detail"}}))
+
+    class FakeSocket:
+        async def send(self, payload):
+            return None
+
+        async def recv(self):
+            return messages.pop(0)
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return FakeSocket()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.even_odd.collector.websockets.connect",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+
+    with pytest.raises(TickCollectionError) as error:
+        await collect_ticks("R_50", 10, 5)
+    assert len(error.value.ticks) == 3
+    assert all(tick["symbol"] == "R_50" for tick in error.value.ticks)
+
+
+@pytest.mark.asyncio
+async def test_collector_retains_valid_ticks_when_timeout_occurs(monkeypatch):
+    import asyncio
+    import json
+    from app.even_odd.collector import TickCollectionError, collect_ticks
+
+    messages = [
+        json.dumps({
+            "msg_type": "tick",
+            "tick": {
+                "symbol": "R_50",
+                "quote": f"123.45{i}",
+                "epoch": 1760000000 + i,
+                "pip_size": 3,
+                "id": "stream-123",
+            },
+        })
+        for i in range(4)
+    ]
+
+    class FakeSocket:
+        async def send(self, payload):
+            return None
+
+        async def recv(self):
+            if messages:
+                return messages.pop(0)
+            raise asyncio.TimeoutError()
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return FakeSocket()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.even_odd.collector.websockets.connect",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+
+    with pytest.raises(TickCollectionError) as error:
+        await collect_ticks("R_50", 10, 5)
+    assert len(error.value.ticks) == 4
