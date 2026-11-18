@@ -1,4 +1,4 @@
-"""Persistence adapter for the isolated Even/Odd Supabase project.
+""""Persistence adapter for the isolated Even/Odd Supabase project.
 
 Only backend-side Even/Odd environment variables are accepted here. This
 module deliberately never falls back to the application's primary Supabase
@@ -40,11 +40,15 @@ def storage_is_configured() -> bool:
 
 
 def _headers(key: str, prefer: str | None = None) -> dict[str, str]:
+    # Modern sb_secret_* keys are opaque, not JWTs. Sending one as a Bearer
+    # token causes Supabase to reject it as an invalid JWT. Legacy service-role
+    # keys are JWTs and continue to use both headers.
     headers = {
         "apikey": key,
-        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    if not key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {key}"
     if prefer:
         headers["Prefer"] = prefer
     return headers
@@ -62,7 +66,6 @@ async def persist_collection(
     bounded batch, then the collection is marked completed or partial.
     """
     url, key = _configuration()
-    headers = _headers(key)
     timeout = httpx.Timeout(20.0, connect=10.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -110,13 +113,13 @@ async def persist_collection(
                 )
                 tick_response.raise_for_status()
 
-            status = "completed" if len(ticks) == requested_ticks else "partial"
+            run_status = "completed" if len(ticks) == requested_ticks else "partial"
             finish_response = await client.patch(
                 f"{url}/rest/v1/even_odd_collection_runs",
                 params={"id": f"eq.{collection_id}"},
                 headers=_headers(key, "return=minimal"),
                 json={
-                    "status": status,
+                    "status": run_status,
                     "received_ticks": len(ticks),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 },
