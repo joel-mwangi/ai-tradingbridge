@@ -27,8 +27,8 @@ class CandidateTradeForecast:
     model_version: str
 
     def __post_init__(self) -> None:
-        if self.trade_number < 1:
-            raise ValueError("trade_number must be positive.")
+        if type(self.trade_number) is not int or self.trade_number < 1:
+            raise ValueError("trade_number must be a positive integer.")
         for name, value in (
             ("win_probability", self.win_probability),
             ("lower_bound_win_probability", self.lower_bound_win_probability),
@@ -45,6 +45,8 @@ class CandidateTradeForecast:
             raise ValueError("A model ID is required.")
         if not isinstance(self.model_version, str) or not self.model_version.strip():
             raise ValueError("A model version is required.")
+        if type(self.signal_valid) is not bool or type(self.model_validated) is not bool:
+            raise ValueError("signal_valid and model_validated must be booleans.")
 
     @property
     def expected_value(self) -> float:
