@@ -218,3 +218,104 @@ async def persist_collection(
         status=status,
     )
     return collection_id
+
+
+async def load_historical_ticks(
+    *,
+    symbol: str,
+    limit: int = 5000,
+    from_epoch: int | None = None,
+    to_epoch: int | None = None,
+    collection_id: str | None = None,
+) -> dict[str, Any]:
+    """Read a stable, chronologically ordered snapshot from dedicated storage.
+
+    The maximum observed row ID is captured first and used as a snapshot
+    boundary, preventing concurrent collection inserts from shifting offset
+    pages while this bounded read is in progress.
+    """
+    if not 1 <= limit <= 5000:
+        raise ValueError("limit must be between 1 and 5000.")
+    if from_epoch is not None and from_epoch <= 0:
+        raise ValueError("from_epoch must be positive.")
+    if to_epoch is not None and to_epoch <= 0:
+        raise ValueError("to_epoch must be positive.")
+    if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
+        raise ValueError("from_epoch cannot exceed to_epoch.")
+
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    headers = _headers(key)
+    page_size = 1000
+    rows: list[dict[str, Any]] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            latest_response = await client.get(
+                f"{url}/rest/v1/even_odd_ticks",
+                params={"select": "id", "order": "id.desc", "limit": "1"},
+                headers=headers,
+            )
+            latest_response.raise_for_status()
+            latest_rows = latest_response.json()
+            if not isinstance(latest_rows, list):
+                raise EvenOddStorageError("Historical snapshot query returned an invalid response.")
+            if not latest_rows:
+                return {"rows": [], "snapshot_max_id": None}
+
+            snapshot_max_id = int(latest_rows[0]["id"])
+            base_params: dict[str, str] = {
+                "select": (
+                    "id,collection_id,sequence_no,market_symbol,tick_epoch,quote,"
+                    "pip_size,last_digit,parity,deriv_stream_id,received_at"
+                ),
+                "market_symbol": f"eq.{symbol}",
+                "id": f"lte.{snapshot_max_id}",
+                "order": "tick_epoch.asc,id.asc",
+            }
+            if from_epoch is not None:
+                base_params["tick_epoch"] = f"gte.{from_epoch}"
+            if to_epoch is not None:
+                base_params["tick_epoch"] = (
+                    f"lte.{to_epoch}" if from_epoch is None
+                    else f"gte.{from_epoch}"  # lower bound is applied below with and=
+                )
+                if from_epoch is not None:
+                    base_params["and"] = (
+                        f"(tick_epoch.gte.{from_epoch},tick_epoch.lte.{to_epoch})"
+                    )
+            if collection_id is not None:
+                base_params["collection_id"] = f"eq.{collection_id}"
+
+            while len(rows) < limit:
+                page_end = min(len(rows) + page_size, limit) - 1
+                response = await client.get(
+                    f"{url}/rest/v1/even_odd_ticks",
+                    params=base_params,
+                    headers={
+                        **headers,
+                        "Range-Unit": "items",
+                        "Range": f"{len(rows)}-{page_end}",
+                    },
+                )
+                response.raise_for_status()
+                page = response.json()
+                if not isinstance(page, list):
+                    raise EvenOddStorageError(
+                        "Historical tick query returned an invalid response."
+                    )
+                rows.extend(page)
+                if len(page) < page_end - len(rows) + len(page) + 1:
+                    break
+                if not page:
+                    break
+            return {
+                "rows": rows[:limit],
+                "snapshot_max_id": snapshot_max_id,
+            }
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise EvenOddStorageError(
+            "Could not load historical ticks from the dedicated database."
+        ) from exc
