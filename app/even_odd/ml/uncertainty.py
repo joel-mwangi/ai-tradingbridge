@@ -303,3 +303,165 @@ def select_probability_interval(
         "upper_probability": selected["upper_probability"],
         "reason": "Nearest validated local-calibration interval selected without extrapolation.",
     }
+
+
+def bootstrap_log_loss_improvement(
+    out_of_sample_predictions: Sequence[dict],
+    *,
+    baseline_key: str,
+    confidence_level: float = 0.90,
+    block_size: int = 20,
+    minimum_observations: int = 200,
+    minimum_blocks: int = 10,
+    bootstrap_replicates: int = 500,
+    seed: int = 20261120,
+) -> dict:
+    """Block-bootstrap baseline-minus-model log-loss improvement.
+
+    Positive values favour the model. Statistical support is deliberately
+    conservative: the lower bootstrap bound must be positive and every
+    walk-forward fold must show positive mean improvement.
+    """
+    if baseline_key not in {"constant_probability", "rolling_probability"}:
+        raise ValueError("baseline_key must identify a supported baseline.")
+    if (
+        isinstance(confidence_level, bool)
+        or not isinstance(confidence_level, (int, float))
+        or not isfinite(confidence_level)
+        or not 0.5 < confidence_level < 1
+    ):
+        raise ValueError("confidence_level must be in (0.5, 1).")
+    if type(block_size) is not int or block_size < 2:
+        raise ValueError("block_size must be an integer of at least 2.")
+    if type(minimum_observations) is not int or minimum_observations < 20:
+        raise ValueError("minimum_observations must be an integer of at least 20.")
+    if type(minimum_blocks) is not int or minimum_blocks < 5:
+        raise ValueError("minimum_blocks must be an integer of at least 5.")
+    if type(bootstrap_replicates) is not int or bootstrap_replicates < 200:
+        raise ValueError("bootstrap_replicates must be an integer of at least 200.")
+    if type(seed) is not int:
+        raise ValueError("seed must be an integer.")
+
+    records = []
+    epsilon = 1e-15
+    for item in out_of_sample_predictions:
+        if not isinstance(item, dict):
+            raise ValueError("Every out-of-sample prediction must be an object.")
+        index = item.get("target_index")
+        fold = item.get("fold")
+        actual = item.get("actual_parity")
+        model_probability = item.get("probability_even")
+        baseline_probability = item.get(baseline_key)
+        if type(index) is not int or index < 0:
+            raise ValueError("Every prediction needs a non-negative integer target_index.")
+        if type(fold) is not int or fold < 1:
+            raise ValueError("Every prediction needs a positive integer fold.")
+        if actual not in {"even", "odd"}:
+            raise ValueError("actual_parity must be even or odd.")
+        for name, value in (
+            ("probability_even", model_probability),
+            (baseline_key, baseline_probability),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or not 0 <= value <= 1
+            ):
+                raise ValueError(f"{name} must be a finite probability from 0 to 1.")
+
+        target = 1 if actual == "even" else 0
+        model_p = min(1 - epsilon, max(epsilon, float(model_probability)))
+        baseline_p = min(1 - epsilon, max(epsilon, float(baseline_probability)))
+        model_loss = -(
+            target * log(model_p) + (1 - target) * log(1 - model_p)
+        )
+        baseline_loss = -(
+            target * log(baseline_p) + (1 - target) * log(1 - baseline_p)
+        )
+        records.append({
+            "target_index": index,
+            "fold": fold,
+            "improvement": baseline_loss - model_loss,
+        })
+
+    if not records:
+        return {
+            "method": "moving_block_bootstrap_log_loss_difference",
+            "baseline": baseline_key,
+            "statistically_supported": False,
+            "reason": "No out-of-sample forecasts are available.",
+        }
+
+    records.sort(key=lambda item: item["target_index"])
+    indices = [item["target_index"] for item in records]
+    if len(set(indices)) != len(indices):
+        raise ValueError("Out-of-sample target_index values must be unique.")
+
+    fold_values: dict[int, list[float]] = {}
+    for item in records:
+        fold_values.setdefault(item["fold"], []).append(item["improvement"])
+    fold_improvements = {
+        fold: sum(values) / len(values)
+        for fold, values in fold_values.items()
+    }
+    positive_folds = sum(value > 0 for value in fold_improvements.values())
+
+    blocks = [
+        records[start:start + block_size]
+        for start in range(0, len(records), block_size)
+    ]
+    point_improvement = sum(item["improvement"] for item in records) / len(records)
+    base_result = {
+        "method": "moving_block_bootstrap_log_loss_difference",
+        "baseline": baseline_key,
+        "sample_size": len(records),
+        "block_count": len(blocks),
+        "fold_count": len(fold_improvements),
+        "positive_folds": positive_folds,
+        "fold_improvements": {
+            str(fold): value for fold, value in fold_improvements.items()
+        },
+        "point_improvement": point_improvement,
+        "statistically_supported": False,
+    }
+    if len(records) < minimum_observations or len(blocks) < minimum_blocks:
+        return {
+            **base_result,
+            "lower_improvement": None,
+            "upper_improvement": None,
+            "reason": "Insufficient out-of-sample observations or blocks.",
+        }
+
+    generator = random.Random(seed)
+    bootstrap_means = []
+    for _ in range(bootstrap_replicates):
+        sampled = []
+        for _ in range(len(blocks)):
+            sampled.extend(
+                item["improvement"]
+                for item in blocks[generator.randrange(len(blocks))]
+            )
+        if sampled:
+            bootstrap_means.append(sum(sampled) / len(sampled))
+
+    tail = (1 - confidence_level) / 2
+    lower = _quantile(bootstrap_means, tail)
+    upper = _quantile(bootstrap_means, 1 - tail)
+    approximate_one_sided_p = (
+        sum(value <= 0 for value in bootstrap_means) + 1
+    ) / (len(bootstrap_means) + 1)
+    supported = lower > 0 and positive_folds == len(fold_improvements)
+    return {
+        **base_result,
+        "confidence_level": confidence_level,
+        "lower_improvement": lower,
+        "upper_improvement": upper,
+        "approximate_one_sided_bootstrap_p": approximate_one_sided_p,
+        "statistically_supported": supported,
+        "reason": (
+            "Positive block-bootstrap improvement and positive improvement in every fold."
+            if supported
+            else "Improvement did not clear the conservative interval and all-fold gates."
+        ),
+    }
