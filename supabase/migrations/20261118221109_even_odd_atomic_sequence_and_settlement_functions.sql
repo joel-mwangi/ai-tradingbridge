@@ -132,10 +132,10 @@ declare
     v_session_status text := 'active';
     v_stop_reason text;
 begin
-    if p_side is null or p_side not in ('even', 'odd') then
+    if p_side not in ('even', 'odd') then
         raise exception 'Side must be even or odd';
     end if;
-    if p_outcome is null or p_outcome not in ('win', 'loss') then
+    if p_outcome not in ('win', 'loss') then
         raise exception 'Outcome must be win or loss';
     end if;
     if p_revalidation is null or jsonb_typeof(p_revalidation) <> 'object' then
