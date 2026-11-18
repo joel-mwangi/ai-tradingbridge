@@ -375,19 +375,44 @@ async def start_sequence(
     request: StartSequenceRequest,
     _: Annotated[None, Depends(require_even_odd_api_token)],
 ) -> dict:
-    """Start a sequence only when the database confirms a validated model."""
+    """Recompute the ML plan server-side, then atomically start that sequence."""
     if not storage_is_configured():
         raise HTTPException(
             status_code=503,
             detail="Dedicated Even/Odd database is not configured on this service.",
         )
+    plan_request = PlanSequenceRequest(
+        session_id=request.session_id,
+        model_id=request.model_id,
+        model_version=request.model_version,
+        observations=request.observations,
+    )
+    # Never trust a client-provided planned_trades count or EV snapshot. The
+    # same server-side planner used by /sequence-plan is rerun immediately
+    # before the database transition.
+    plan = await plan_adaptive_sequence(plan_request, None)
+    if plan.get("status") != "plan" or int(plan.get("planned_trades") or 0) < 1:
+        return {
+            **plan,
+            "sequence_started": False,
+            "order_execution_enabled": False,
+        }
+
+    expected_value_snapshot = {
+        "plan_basis": plan.get("plan_basis"),
+        "plan_reason": plan.get("plan_reason"),
+        "expected_value_by_trade": plan.get("expected_value_by_trade", []),
+        "conservative_ev_by_trade": plan.get("conservative_ev_by_trade", []),
+        "forecasts": plan.get("forecasts", []),
+        "payout_quote": plan.get("payout_quote"),
+    }
     try:
         result = await start_even_odd_sequence(
             session_id=str(request.session_id),
             model_id=str(request.model_id),
             model_version=request.model_version,
-            planned_trades=request.planned_trades,
-            expected_value_snapshot=request.expected_value_snapshot,
+            planned_trades=int(plan["planned_trades"]),
+            expected_value_snapshot=expected_value_snapshot,
         )
     except EvenOddPolicyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -396,6 +421,8 @@ async def start_sequence(
 
     return {
         **result,
+        "sequence_plan": plan,
+        "sequence_started": True,
         "order_execution_enabled": False,
     }
 
