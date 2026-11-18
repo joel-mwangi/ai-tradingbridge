@@ -860,7 +860,7 @@ def test_hybrid_entry_endpoint_returns_non_executable_candidate_when_all_gates_p
 
     async def fake_load_history(**kwargs):
         assert kwargs == {"symbol": "R_50", "limit": 5000}
-        return {"rows": rows, "snapshot_max_id": 4}
+        return {"rows": rows, "snapshot_max_id": 23}
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_get_model)
@@ -889,7 +889,7 @@ def test_hybrid_entry_endpoint_waits_for_model_and_uncertainty_validation(monkey
         return entry_model(status="candidate")
 
     async def fake_load_history(**kwargs):
-        return {"rows": rows, "snapshot_max_id": 4}
+        return {"rows": rows, "snapshot_max_id": 23}
 
     monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
     monkeypatch.setattr("app.even_odd.router.get_even_odd_model", fake_candidate_model)
