@@ -67,10 +67,6 @@ class RecordTradeSettlementRequest(BaseModel):
 class EntryObservationRequest(BaseModel):
     tick_row_id: StrictInt = Field(gt=0)
     tick_epoch: StrictInt = Field(gt=0)
-    even_profit_if_win: Decimal = Field(gt=0)
-    even_loss_if_lose: Decimal = Field(gt=0)
-    odd_profit_if_win: Decimal = Field(gt=0)
-    odd_loss_if_lose: Decimal = Field(gt=0)
     model_id: UUID
     model_version: str = Field(min_length=1, max_length=128)
 
@@ -86,5 +82,6 @@ class EntryPolicyRequest(BaseModel):
 
 
 class EvaluateEntryRequest(BaseModel):
+    session_id: UUID
     observations: list[EntryObservationRequest] = Field(min_length=1, max_length=10)
     policy: EntryPolicyRequest
