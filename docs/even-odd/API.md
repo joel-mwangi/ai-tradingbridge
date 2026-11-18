@@ -118,6 +118,10 @@ historical opportunity proxy, not a trained forward sequence-survival model
 or a historical payout replay. The result is only an upper bound; revalidate
 after every completed trade.
 
+The sequence-start endpoint accepts the session/model identity and the same
+persisted observation references, then recomputes the plan server-side. It
+does not trust a client-supplied planned trade count or expected-value snapshot.
+
 Session creation requires an explicit fixed stake, currency, and maximum
 session-loss budget. Database functions enforce the 7-trade sequence cap,
 10-trade session cap, 2-consecutive-loss stop, fixed stake, validated-model
