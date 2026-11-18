@@ -822,7 +822,9 @@ def entry_check_payload(rows):
 def entry_model(*, status="validated", interval_validated=True, version="v1"):
     from app.even_odd.ml.features import build_next_tick_features
 
-    feature_names = sorted(build_next_tick_features([0, 1, 2, 3], windows=(4,)))
+    feature_names = sorted(
+        build_next_tick_features(list(range(20)), windows=(20,))
+    )
     return {
         "id": "00000000-0000-0000-0000-000000000333",
         "market_symbol": "R_50",
