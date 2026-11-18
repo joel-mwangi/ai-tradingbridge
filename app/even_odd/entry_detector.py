@@ -22,22 +22,33 @@ class EntryPolicy:
     def __post_init__(self) -> None:
         if type(self.minimum_sample_size) is not int or self.minimum_sample_size < 20:
             raise ValueError("minimum_sample_size must be an integer of at least 20.")
-        if not isfinite(self.maximum_data_age_seconds) or self.maximum_data_age_seconds <= 0:
+        if (
+            isinstance(self.maximum_data_age_seconds, bool)
+            or not isinstance(self.maximum_data_age_seconds, (int, float))
+            or not isfinite(self.maximum_data_age_seconds)
+            or self.maximum_data_age_seconds <= 0
+        ):
             raise ValueError("maximum_data_age_seconds must be finite and positive.")
         if type(self.required_confirmations) is not int or not 2 <= self.required_confirmations <= 10:
             raise ValueError("required_confirmations must be between 2 and 10.")
         if (
-            not isfinite(self.maximum_confirmation_gap_seconds)
+            isinstance(self.maximum_confirmation_gap_seconds, bool)
+            or not isinstance(self.maximum_confirmation_gap_seconds, (int, float))
+            or not isfinite(self.maximum_confirmation_gap_seconds)
             or self.maximum_confirmation_gap_seconds <= 0
         ):
             raise ValueError("maximum_confirmation_gap_seconds must be finite and positive.")
         if (
-            not isfinite(self.minimum_edge_over_break_even)
+            isinstance(self.minimum_edge_over_break_even, bool)
+            or not isinstance(self.minimum_edge_over_break_even, (int, float))
+            or not isfinite(self.minimum_edge_over_break_even)
             or not 0 <= self.minimum_edge_over_break_even < 1
         ):
             raise ValueError("minimum_edge_over_break_even must be in [0, 1).")
         if (
-            not isfinite(self.minimum_conservative_expected_value)
+            isinstance(self.minimum_conservative_expected_value, bool)
+            or not isinstance(self.minimum_conservative_expected_value, (int, float))
+            or not isfinite(self.minimum_conservative_expected_value)
             or self.minimum_conservative_expected_value < 0
         ):
             raise ValueError("minimum_conservative_expected_value must be finite and non-negative.")
@@ -68,7 +79,12 @@ def _validate_observation(observation: EntryObservation) -> None:
         raise ValueError("tick_epoch must be a positive integer.")
     if type(observation.sample_size) is not int or observation.sample_size < 1:
         raise ValueError("sample_size must be a positive integer.")
-    if not isfinite(observation.data_age_seconds) or observation.data_age_seconds < 0:
+    if (
+        isinstance(observation.data_age_seconds, bool)
+        or not isinstance(observation.data_age_seconds, (int, float))
+        or not isfinite(observation.data_age_seconds)
+        or observation.data_age_seconds < 0
+    ):
         raise ValueError("data_age_seconds must be finite and non-negative.")
     for name, value in (
         ("even_probability", observation.even_probability),
@@ -95,7 +111,10 @@ def _validate_observation(observation: EntryObservation) -> None:
             raise ValueError(f"{name} must be numeric.")
         if not isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be finite and positive.")
-    if not observation.model_id or not observation.model_version:
+    if (
+        not isinstance(observation.model_id, str) or not observation.model_id.strip()
+        or not isinstance(observation.model_version, str) or not observation.model_version.strip()
+    ):
         raise ValueError("Model identity and version are required.")
     if type(observation.model_validated) is not bool:
         raise ValueError("model_validated must be boolean.")
