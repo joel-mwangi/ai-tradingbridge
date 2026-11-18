@@ -34,14 +34,26 @@ class CandidateTradeForecast:
             ("win_probability", self.win_probability),
             ("lower_bound_win_probability", self.lower_bound_win_probability),
         ):
-            if not isfinite(value) or not 0 <= value <= 1:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or not 0 <= value <= 1
+            ):
                 raise ValueError(f"{name} must be a finite probability from 0 to 1.")
         if self.lower_bound_win_probability > self.win_probability:
             raise ValueError("Lower-bound probability cannot exceed the point estimate.")
-        if not isfinite(self.profit_if_win) or self.profit_if_win <= 0:
-            raise ValueError("profit_if_win must be finite and positive.")
-        if not isfinite(self.loss_if_lose) or self.loss_if_lose <= 0:
-            raise ValueError("loss_if_lose must be finite and positive.")
+        for name, value in (
+            ("profit_if_win", self.profit_if_win),
+            ("loss_if_lose", self.loss_if_lose),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} must be finite and positive.")
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError("A model ID is required.")
         if not isinstance(self.model_version, str) or not self.model_version.strip():
