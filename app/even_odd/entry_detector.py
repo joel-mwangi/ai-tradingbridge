@@ -246,19 +246,23 @@ def evaluate_hybrid_entry(
         }
 
     latest = side_evidence[-1]
-    if latest["edge_over_break_even"] < policy.minimum_edge_over_break_even:
-        return {
-            "status": "wait",
-            "reason": "Conservative probability edge is below the configured threshold.",
-            "execution_authorized": False,
-        }
-    if (
-        latest["conservative_expected_value"]
-        <= policy.minimum_conservative_expected_value
+    if any(
+        item["edge_over_break_even"] < policy.minimum_edge_over_break_even
+        for item in side_evidence
     ):
         return {
             "status": "wait",
-            "reason": "Payout-adjusted conservative expected value is insufficient.",
+            "reason": "At least one confirmation has insufficient conservative probability edge.",
+            "execution_authorized": False,
+        }
+    if any(
+        item["conservative_expected_value"]
+        <= policy.minimum_conservative_expected_value
+        for item in side_evidence
+    ):
+        return {
+            "status": "wait",
+            "reason": "At least one confirmation has insufficient payout-adjusted conservative EV.",
             "execution_authorized": False,
         }
 
