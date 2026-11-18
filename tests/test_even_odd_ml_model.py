@@ -1,6 +1,10 @@
 import pytest
 
-from app.even_odd.ml.model import predict_even_probability, train_logistic_model
+from app.even_odd.ml.model import (
+    calibrate_model_probabilities,
+    predict_even_probability,
+    train_logistic_model,
+)
 
 
 def make_rows(start, end):
@@ -66,3 +70,36 @@ def test_training_rejects_inconsistent_or_non_finite_features():
     train[0]["features"]["signal"] = float("nan")
     with pytest.raises(ValueError, match="finite"):
         train_logistic_model(train, make_rows(100, 140))
+
+
+
+def test_model_calibration_uses_a_separate_period_and_remains_unvalidated():
+    model = train_logistic_model(
+        make_rows(0, 200),
+        make_rows(200, 260),
+        learning_rate=0.2,
+        max_epochs=100,
+    )
+    before = predict_even_probability(model, make_rows(260, 261)[0]["features"])
+    calibrated = calibrate_model_probabilities(model, make_rows(260, 340))
+    after = predict_even_probability(calibrated, make_rows(260, 261)[0]["features"])
+
+    assert 0 <= before <= 1
+    assert 0 <= after <= 1
+    assert calibrated["calibrated"] is True
+    assert calibrated["validated"] is False
+    assert calibrated["execution_authorized"] is False
+    assert calibrated["calibration"]["method"] == "platt_scaling"
+    assert calibrated["calibration"]["calibration_rows"] == 80
+
+
+def test_model_calibration_rejects_small_or_single_class_period():
+    model = train_logistic_model(make_rows(0, 100), make_rows(100, 140))
+    with pytest.raises(ValueError, match="50 calibration"):
+        calibrate_model_probabilities(model, make_rows(140, 160))
+    single_class = [
+        {"features": {"signal": float(i), "noise": 1.0}, "target_parity": "even"}
+        for i in range(60)
+    ]
+    with pytest.raises(ValueError, match="both parity classes"):
+        calibrate_model_probabilities(model, single_class)
