@@ -26,6 +26,8 @@ from app.even_odd.storage import (
     create_even_odd_session,
     fail_collection_run,
     finish_collection_run,
+    get_even_odd_sequence_state,
+    get_even_odd_session_state,
     load_historical_ticks,
     record_even_odd_settlement,
     start_collection_run,
@@ -418,3 +420,44 @@ async def record_trade_settlement(
         **result,
         "order_execution_enabled": False,
     }
+
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_state(
+    session_id: UUID,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Read a persistent session and its sequence history."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        result = await get_even_odd_session_state(str(session_id))
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not load session state.") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return result
+
+
+@router.get("/sequences/{sequence_id}")
+async def get_sequence_state(
+    sequence_id: UUID,
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+) -> dict:
+    """Read a sequence and its ordered settled trade records."""
+    if not storage_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Dedicated Even/Odd database is not configured on this service.",
+        )
+    try:
+        result = await get_even_odd_sequence_state(str(sequence_id))
+    except EvenOddStorageError as exc:
+        raise HTTPException(status_code=502, detail="Could not load sequence state.") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Sequence not found.")
+    return result
