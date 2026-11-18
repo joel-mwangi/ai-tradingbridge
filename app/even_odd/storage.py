@@ -174,7 +174,7 @@ async def finish_collection_run(
                 url=url,
                 key=key,
                 collection_id=collection_id,
-                received_ticks=0,
+                received_ticks=len(ticks),
             )
             raise EvenOddStorageError(
                 "Failed to persist or finalize the collection in the dedicated database."
