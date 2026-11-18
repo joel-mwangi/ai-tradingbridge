@@ -52,7 +52,7 @@ class FakeWebSocket:
                 "ask_price": ask_price,
                 "payout": payout,
                 "spot": 100.0,
-                "spot_time": 1_800_000_000,
+                "spot_time": int(__import__("datetime").datetime.now(__import__("datetime").timezone.utc).timestamp()),
             },
         })
 
