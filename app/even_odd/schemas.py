@@ -32,8 +32,7 @@ class StartSequenceRequest(BaseModel):
     session_id: UUID
     model_id: UUID
     model_version: str = Field(min_length=1, max_length=128)
-    planned_trades: StrictInt = Field(ge=1, le=7)
-    expected_value_snapshot: dict = Field(default_factory=dict)
+    observations: list[SequencePlanObservationRequest] = Field(min_length=1, max_length=7)
 
 
 class RevalidationEvidence(BaseModel):
