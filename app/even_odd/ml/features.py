@@ -57,6 +57,8 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
         streak += 1
     features[f"{prefix}_current_streak_length"] = float(streak)
     features[f"{prefix}_latest_parity_even"] = float(latest_parity == 0)
+    for digit in range(10):
+        features[f"{prefix}_latest_digit_{digit}"] = float(window[-1] == digit)
 
     # Compare the most recent half-window with the preceding half-window.
     half = max(1, total // 2)
@@ -110,3 +112,39 @@ def build_supervised_rows(
             "target_parity": "even" if digits[target_index] % 2 == 0 else "odd",
         })
     return rows
+
+
+
+def chronological_split(
+    rows: Sequence[dict],
+    train_fraction: float = 0.6,
+    validation_fraction: float = 0.2,
+) -> dict[str, list[dict]]:
+    """Split ordered samples without shuffling or crossing chronology.
+
+    The remaining fraction is reserved for the final untouched test set.
+    """
+    if not 0 < train_fraction < 1:
+        raise ValueError("train_fraction must be between 0 and 1.")
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be between 0 and 1.")
+    if train_fraction + validation_fraction >= 1:
+        raise ValueError("Train and validation fractions must leave a test set.")
+    if len(rows) < 5:
+        raise ValueError("At least five supervised rows are required to split.")
+    indices = [row.get("target_index") for row in rows]
+    if any(type(index) is not int for index in indices):
+        raise ValueError("Every row must contain an integer target_index.")
+    if indices != sorted(indices) or len(set(indices)) != len(indices):
+        raise ValueError("Rows must be uniquely ordered by target_index.")
+
+    train_end = int(len(rows) * train_fraction)
+    validation_end = train_end + int(len(rows) * validation_fraction)
+    if train_end < 1 or validation_end <= train_end or validation_end >= len(rows):
+        raise ValueError("Split fractions produce an empty train, validation, or test set.")
+
+    return {
+        "train": list(rows[:train_end]),
+        "validation": list(rows[train_end:validation_end]),
+        "test": list(rows[validation_end:]),
+    }
