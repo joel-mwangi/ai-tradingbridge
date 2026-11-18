@@ -52,7 +52,7 @@ The evaluator reports:
 
 Expanding walk-forward splits provide repeated chronological future test
 blocks. Results are compared against the constant 50% baseline and simple
-rolling-frequency baselines. A moving-block bootstrap estimates the
+rolling-frequency baselines. A block bootstrap estimates the
 baseline-minus-model log-loss improvement interval and an approximate
 one-sided bootstrap tail probability. Statistical support is reported only
 when at least five walk-forward folds are available, the lower interval bound
@@ -67,9 +67,9 @@ by overlapping collection windows. Ordinary IID confidence intervals and
 single-sample significance tests can overstate evidence. The quality audit is
 structural, not a test of independence or stationarity.
 
-An exploratory moving-block bootstrap estimates a local calibration interval
+An exploratory block bootstrap estimates a local calibration interval
 from calibrated walk-forward forecasts near a requested probability. It
-resamples contiguous blocks, requires sufficient local observations and blocks,
+resamples fixed-length chronological blocks, requires sufficient local observations and blocks,
 and checks stability across walk-forward folds and interval width. The
 `validated` flag means only that these configured empirical gates passed; it
 is not a distribution-free coverage guarantee and does not validate the model
@@ -126,8 +126,7 @@ both the minimum conservative probability edge over the payout-derived
 break-even probability and the minimum conservative expected value.
 
 The detector returns either `wait` or a non-executable `candidate`. It never
-submits an order. Thresholds are explicit policy inputs rather than hidden
-hard-coded claims of profitability. Walk-forward evaluation now produces
+submits an order. Thresholds are server-owned policy defaults; callers cannot weaken them. Walk-forward evaluation now produces
 local calibration envelopes using the moving-block bootstrap described above.
 The model itself is still stored as a candidate and is not validated by the
 training runner. Until an independent review approves the model and the
@@ -143,11 +142,18 @@ relevant local interval passes its empirical gates, the entry API must return
   research-only point forecast plus the nearest validated local-calibration
   envelope when one exists. It exposes the persisted tick row ID so the
   confirmation flow can reference an auditable observation.
-- `POST /even-odd/entry-check` accepts multiple forecast observations and
-  side-specific payout terms. The backend re-reads the model's validation
-  status and uncertainty intervals from the dedicated database, verifies each
-  tick row ID/epoch against persisted market history, computes data age on the
-  server, and then applies the hybrid confirmation gates. Client-supplied
-  validation flags and data-age claims are not trusted.
+- `GET /even-odd/payouts?symbol=R_50&currency=USD&stake=1.00` obtains
+  read-only one-tick `DIGITEVEN` and `DIGITODD` proposal quotes from Deriv.
+  Both quotes must match the requested contract parameters and have fresh spot
+  timestamps. The endpoint does not buy proposals.
+- `POST /even-odd/entry-check` requires an active `session_id` and ordered
+  persisted tick references (`tick_row_id`, `tick_epoch`, `model_id`,
+  `model_version`). It loads the session's market, currency, fixed stake and
+  remaining loss budget; obtains fresh Deriv payout proposals; recomputes each
+  probability from persisted ticks strictly before its referenced target; and
+  applies server-owned freshness, sample, confirmation, edge and expected-value
+  thresholds. Caller-supplied probabilities, payouts, validation flags,
+  confidence intervals, sample sizes, data ages and policy overrides are not
+  accepted as decision evidence.
 - A response of `candidate` means only that the configured entry gates passed.
   It is not an order instruction. The response always sets execution disabled.
