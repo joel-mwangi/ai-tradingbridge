@@ -700,6 +700,11 @@ async def plan_adaptive_sequence(
             raise HTTPException(status_code=409, detail="Sequence planning requires an active session.")
         if session.get("market_symbol") != model.get("market_symbol"):
             raise HTTPException(status_code=409, detail="Session and model markets do not match.")
+        if any(
+            sequence.get("status") == "active"
+            for sequence in session_state.get("sequences", [])
+        ):
+            raise HTTPException(status_code=409, detail="An active sequence already exists for this session.")
         if int(session.get("completed_trades") or 0) >= int(session.get("max_trades_per_session") or 10):
             raise HTTPException(status_code=409, detail="Session trade limit has been reached.")
         if int(session.get("consecutive_losses") or 0) >= int(session.get("max_consecutive_losses") or 2):
