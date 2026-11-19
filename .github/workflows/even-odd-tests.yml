@@ -5,8 +5,11 @@ on:
     branches: ["main"]
     paths:
       - "app/even_odd/**"
+      - "scripts/even_odd_*.py"
       - "tests/test_even_odd_*.py"
       - ".github/workflows/even-odd-tests.yml"
+      - ".github/workflows/even-odd-research.yml"
+      - "docs/even-odd/ML_RESEARCH_PIPELINE.md"
   push:
     branches: ["feature/even-odd-backend-complete"]
     paths:

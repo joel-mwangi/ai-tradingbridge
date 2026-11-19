@@ -157,3 +157,28 @@ relevant local interval passes its empirical gates, the entry API must return
   accepted as decision evidence.
 - A response of `candidate` means only that the configured entry gates passed.
   It is not an order instruction. The response always sets execution disabled.
+
+
+## Running a hosted research experiment
+
+A manually dispatched GitHub Actions workflow runs the same research CLI outside
+the Vercel request lifecycle:
+
+1. Add the dedicated database credentials as repository Actions secrets:
+   - `EVEN_ODD_SUPABASE_URL`
+   - `EVEN_ODD_SUPABASE_SECRET_KEY`
+2. Open **Actions → Even/Odd research experiment → Run workflow**.
+3. Select the market, historical row limit, initial training rows, test-block
+   size, fold count and maximum training epochs.
+4. Review the workflow output and download the immutable
+   `even-odd-research-...` JSON artifact.
+
+The workflow writes a research-run record and a candidate model to the isolated
+Even/Odd database. It never promotes a model to `validated` and never enables
+order execution. A failed data-quality check, duplicate-observation gate,
+insufficient history, or model-training error fails the run rather than
+silently relaxing the research criteria.
+
+The hosted workflow is intentionally manual: each experiment should be an
+explicit, reviewable research action. Do not add the database secret to Vercel
+frontend variables or expose it to browser code.
