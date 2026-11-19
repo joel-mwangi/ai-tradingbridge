@@ -336,9 +336,9 @@ grant execute on function public.even_odd_start_sequence(uuid, uuid, uuid, text,
 
 revoke all on function public.even_odd_record_trade_settlement(
     uuid, uuid, integer, text, numeric, numeric, numeric, numeric, numeric,
-    numeric, jsonb, text, numeric, text
+    numeric, numeric, jsonb, text, numeric, text
 ) from public, anon, authenticated;
 grant execute on function public.even_odd_record_trade_settlement(
     uuid, uuid, integer, text, numeric, numeric, numeric, numeric, numeric,
-    numeric, jsonb, text, numeric, text
+    numeric, numeric, jsonb, text, numeric, text
 ) to service_role;
