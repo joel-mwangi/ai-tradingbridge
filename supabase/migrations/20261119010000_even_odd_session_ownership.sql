@@ -331,7 +331,7 @@ $function$;
 
 revoke all on function public.even_odd_start_sequence(uuid, uuid, uuid, text, integer, jsonb)
     from public, anon, authenticated;
-grant execute on function public.even_odd_start_sequence(uuid, uuid, text, integer, jsonb)
+grant execute on function public.even_odd_start_sequence(uuid, uuid, uuid, text, integer, jsonb)
     to service_role;
 
 revoke all on function public.even_odd_record_trade_settlement(
@@ -339,6 +339,6 @@ revoke all on function public.even_odd_record_trade_settlement(
     numeric, jsonb, text, numeric, text
 ) from public, anon, authenticated;
 grant execute on function public.even_odd_record_trade_settlement(
-    uuid, integer, text, numeric, numeric, numeric, numeric, numeric, numeric,
+    uuid, uuid, integer, text, numeric, numeric, numeric, numeric, numeric,
     numeric, jsonb, text, numeric, text
 ) to service_role;
