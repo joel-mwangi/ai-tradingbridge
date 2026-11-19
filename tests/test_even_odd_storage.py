@@ -15,6 +15,8 @@ from app.even_odd.storage import (
     create_even_odd_session,
     start_even_odd_sequence,
     record_even_odd_settlement,
+    get_even_odd_session_state,
+    get_even_odd_sequence_state,
     storage_is_configured,
 )
 
@@ -614,3 +616,92 @@ async def test_settlement_calls_atomic_database_function(monkeypatch):
     assert FakeAsyncClient.url.endswith("/rest/v1/rpc/even_odd_record_trade_settlement")
     assert FakeAsyncClient.payload["p_owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert FakeAsyncClient.payload["p_conservative_expected_value"] == "0.35"
+
+@pytest.mark.asyncio
+async def test_session_read_is_filtered_by_owner_user_id(monkeypatch):
+    session_id = "00000000-0000-0000-0000-000000000444"
+    owner_id = "00000000-0000-0000-0000-000000000777"
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        calls = []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params, headers):
+            FakeAsyncClient.calls.append((url, params))
+            if url.endswith("/even_odd_sessions"):
+                return Response([{"id": session_id, "owner_user_id": owner_id}])
+            return Response([{"id": "sequence-1", "session_id": session_id}])
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await get_even_odd_session_state(session_id, owner_id)
+
+    assert result is not None
+    assert FakeAsyncClient.calls[0][1]["owner_user_id"] == f"eq.{owner_id}"
+
+
+@pytest.mark.asyncio
+async def test_sequence_read_denies_when_parent_session_is_not_owned(monkeypatch):
+    sequence_id = "00000000-0000-0000-0000-000000000555"
+    session_id = "00000000-0000-0000-0000-000000000444"
+    owner_id = "00000000-0000-0000-0000-000000000777"
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        calls = []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params, headers):
+            FakeAsyncClient.calls.append(url)
+            if url.endswith("/even_odd_sequences"):
+                return Response([{"id": sequence_id, "session_id": session_id}])
+            if url.endswith("/even_odd_sessions"):
+                return Response([])
+            raise AssertionError("Trade records must not be queried for an unowned sequence.")
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await get_even_odd_sequence_state(sequence_id, owner_id)
+
+    assert result is None
+    assert len(FakeAsyncClient.calls) == 2
+
