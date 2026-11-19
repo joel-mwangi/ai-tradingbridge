@@ -872,7 +872,7 @@ def entry_session_state():
     }
 
 
-async def fake_entry_session_state(session_id):
+async def fake_entry_session_state(session_id, owner_user_id):
     assert session_id == "00000000-0000-0000-0000-000000000444"
     return entry_session_state()
 
@@ -1249,7 +1249,7 @@ def test_sequence_plan_waits_for_model_validation_and_risk_budget(monkeypatch):
     async def fake_validated_model(model_id):
         return entry_model()
 
-    async def fake_low_budget_session(session_id):
+    async def fake_low_budget_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"]["max_session_loss"] = "0.50"
         return state
@@ -1312,7 +1312,7 @@ def test_sequence_plan_rejects_a_session_with_an_active_sequence(monkeypatch):
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_active_session(session_id):
+    async def fake_active_session(session_id, owner_user_id):
         state = entry_session_state()
         state["sequences"] = [{"status": "active"}]
         return state
