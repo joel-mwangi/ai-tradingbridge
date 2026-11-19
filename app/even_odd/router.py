@@ -1043,7 +1043,7 @@ async def check_hybrid_entry(
                 "order_execution_enabled": False,
             }
 
-        session_state = await get_even_odd_session_state(str(request.session_id))
+        session_state = await get_even_odd_session_state(str(request.session_id), str(owner_user_id))
         if session_state is None:
             raise HTTPException(status_code=404, detail="Even/Odd session not found.")
         session = session_state["session"]
