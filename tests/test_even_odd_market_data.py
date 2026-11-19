@@ -455,8 +455,24 @@ def test_create_session_endpoint_validates_and_persists_fixed_stake(monkeypatch)
     )
     assert response.status_code == 200
     assert response.json()["order_execution_enabled"] is False
+    assert captured["owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert captured["fixed_stake"] == "1.00"
     assert captured["max_trades_per_session"] == 10
+
+
+def test_session_creation_requires_verified_user_context():
+    response = client.post(
+        "/even-odd/sessions",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={
+            "symbol": "R_50",
+            "account_mode": "research",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_session_loss": "10.00",
+        },
+    )
+    assert response.status_code == 401
 
 
 def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
@@ -596,6 +612,7 @@ def test_session_endpoint_requires_explicit_monetary_loss_cap():
 def test_get_session_state_returns_persisted_sequences(monkeypatch):
     async def fake_get_session(session_id, owner_user_id):
         assert session_id == "00000000-0000-0000-0000-000000000444"
+        assert str(owner_user_id) == "00000000-0000-0000-0000-000000000777"
         return {
             "session": {"id": session_id, "status": "active", "completed_trades": 2},
             "sequences": [{"id": "sequence-1", "status": "active"}],
@@ -616,6 +633,7 @@ def test_get_session_state_returns_persisted_sequences(monkeypatch):
 def test_get_sequence_state_returns_settled_trade_history(monkeypatch):
     async def fake_get_sequence(sequence_id, owner_user_id):
         assert sequence_id == "00000000-0000-0000-0000-000000000555"
+        assert str(owner_user_id) == "00000000-0000-0000-0000-000000000777"
         return {
             "sequence": {"id": sequence_id, "planned_trades": 3, "status": "active"},
             "trades": [{"trade_number": 1, "outcome": "win"}],
