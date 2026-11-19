@@ -20,7 +20,7 @@ def configure_api_token(monkeypatch):
 
 
 def auth():
-    return {"Authorization": f"Bearer {TOKEN}"}
+    return {"Authorization": f"Bearer {TOKEN}", "X-TradeBridge-User-ID": "00000000-0000-0000-0000-000000000777"}
 
 
 def test_digit_engine_reports_parity_and_digit_frequencies():
@@ -462,7 +462,7 @@ def test_create_session_endpoint_validates_and_persists_fixed_stake(monkeypatch)
 def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
     captured = {}
 
-    async def fake_plan(request, _):
+    async def fake_plan(request, owner_user_id):
         assert str(request.session_id) == "00000000-0000-0000-0000-000000000444"
         assert len(request.observations) == 3
         return {
@@ -594,7 +594,7 @@ def test_session_endpoint_requires_explicit_monetary_loss_cap():
 
 
 def test_get_session_state_returns_persisted_sequences(monkeypatch):
-    async def fake_get_session(session_id):
+    async def fake_get_session(session_id, owner_user_id):
         assert session_id == "00000000-0000-0000-0000-000000000444"
         return {
             "session": {"id": session_id, "status": "active", "completed_trades": 2},
@@ -614,7 +614,7 @@ def test_get_session_state_returns_persisted_sequences(monkeypatch):
 
 
 def test_get_sequence_state_returns_settled_trade_history(monkeypatch):
-    async def fake_get_sequence(sequence_id):
+    async def fake_get_sequence(sequence_id, owner_user_id):
         assert sequence_id == "00000000-0000-0000-0000-000000000555"
         return {
             "sequence": {"id": sequence_id, "planned_trades": 3, "status": "active"},
@@ -1082,7 +1082,7 @@ def test_entry_check_waits_when_session_loss_budget_is_exhausted(monkeypatch):
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"]["realized_profit"] = "-10.00"
         return state
@@ -1110,7 +1110,7 @@ def test_entry_check_blocks_exhausted_session_trade_limits(monkeypatch, field, v
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"][field] = value
         return state
@@ -1135,7 +1135,7 @@ def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         return entry_session_state()
 
     async def fake_load_history(**kwargs):
