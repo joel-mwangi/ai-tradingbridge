@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
@@ -76,6 +76,20 @@ def require_even_odd_api_token(
             detail="Invalid or missing API token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def require_even_odd_user_id(
+    _: Annotated[None, Depends(require_even_odd_api_token)],
+    user_id: Annotated[str | None, Header(alias="X-TradeBridge-User-ID")] = None,
+) -> UUID:
+    """Require a verified user context injected by the authenticated app proxy."""
+    try:
+        return UUID(user_id or "")
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid authenticated user context is required.",
+        ) from exc
 
 
 @router.get("/status")
@@ -341,7 +355,7 @@ async def audit_even_odd_history(
 @router.post("/sessions")
 async def create_session(
     request: CreateSessionRequest,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Create a fixed-stake session; this endpoint does not place an order."""
     if not storage_is_configured():
@@ -351,6 +365,7 @@ async def create_session(
         )
     try:
         session = await create_even_odd_session(
+            owner_user_id=str(owner_user_id),
             symbol=request.symbol,
             account_mode=request.account_mode,
             currency=request.currency,
@@ -373,7 +388,7 @@ async def create_session(
 @router.post("/sequences")
 async def start_sequence(
     request: StartSequenceRequest,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Recompute the ML plan server-side, then atomically start that sequence."""
     if not storage_is_configured():
@@ -390,7 +405,7 @@ async def start_sequence(
     # Never trust a client-provided planned_trades count or EV snapshot. The
     # same server-side planner used by /sequence-plan is rerun immediately
     # before the database transition.
-    plan = await plan_adaptive_sequence(plan_request, None)
+    plan = await plan_adaptive_sequence(plan_request, owner_user_id)
     if plan.get("status") != "plan" or int(plan.get("planned_trades") or 0) < 1:
         return {
             **plan,
@@ -409,6 +424,7 @@ async def start_sequence(
     try:
         result = await start_even_odd_sequence(
             session_id=str(request.session_id),
+            owner_user_id=str(owner_user_id),
             model_id=str(request.model_id),
             model_version=request.model_version,
             planned_trades=int(plan["planned_trades"]),
@@ -430,7 +446,7 @@ async def start_sequence(
 @router.post("/settlements")
 async def record_trade_settlement(
     request: RecordTradeSettlementRequest,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Record a settled trade and atomically enforce sequence/session limits."""
     if not storage_is_configured():
@@ -441,6 +457,7 @@ async def record_trade_settlement(
     try:
         result = await record_even_odd_settlement(
             sequence_id=str(request.sequence_id),
+            owner_user_id=str(owner_user_id),
             trade_number=request.trade_number,
             side=request.side,
             stake=str(request.stake),
@@ -470,7 +487,7 @@ async def record_trade_settlement(
 @router.get("/sessions/{session_id}")
 async def get_session_state(
     session_id: UUID,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Read a persistent session and its sequence history."""
     if not storage_is_configured():
@@ -479,7 +496,7 @@ async def get_session_state(
             detail="Dedicated Even/Odd database is not configured on this service.",
         )
     try:
-        result = await get_even_odd_session_state(str(session_id))
+        result = await get_even_odd_session_state(str(session_id), str(owner_user_id))
     except EvenOddStorageError as exc:
         raise HTTPException(status_code=502, detail="Could not load session state.") from exc
     if result is None:
@@ -490,7 +507,7 @@ async def get_session_state(
 @router.get("/sequences/{sequence_id}")
 async def get_sequence_state(
     sequence_id: UUID,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Read a sequence and its ordered settled trade records."""
     if not storage_is_configured():
@@ -499,7 +516,7 @@ async def get_sequence_state(
             detail="Dedicated Even/Odd database is not configured on this service.",
         )
     try:
-        result = await get_even_odd_sequence_state(str(sequence_id))
+        result = await get_even_odd_sequence_state(str(sequence_id), str(owner_user_id))
     except EvenOddStorageError as exc:
         raise HTTPException(status_code=502, detail="Could not load sequence state.") from exc
     if result is None:
@@ -695,7 +712,7 @@ async def get_payout_quotes(
 @router.post("/sequence-plan")
 async def plan_adaptive_sequence(
     request: PlanSequenceRequest,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Plan a 1–7 trade upper bound from server-recomputed recent opportunities."""
     if not storage_is_configured():
@@ -719,7 +736,7 @@ async def plan_adaptive_sequence(
                 "order_execution_enabled": False,
             }
 
-        session_state = await get_even_odd_session_state(str(request.session_id))
+        session_state = await get_even_odd_session_state(str(request.session_id), str(owner_user_id))
         if session_state is None:
             raise HTTPException(status_code=404, detail="Even/Odd session not found.")
         session = session_state["session"]
@@ -991,7 +1008,7 @@ async def plan_adaptive_sequence(
 @router.post("/entry-check")
 async def check_hybrid_entry(
     request: EvaluateEntryRequest,
-    _: Annotated[None, Depends(require_even_odd_api_token)],
+    owner_user_id: Annotated[UUID, Depends(require_even_odd_user_id)],
 ) -> dict:
     """Evaluate consecutive evidence against model and uncertainty records in Supabase."""
     if not storage_is_configured():
