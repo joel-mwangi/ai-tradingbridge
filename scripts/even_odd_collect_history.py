@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import re
 from datetime import datetime, timezone
 
