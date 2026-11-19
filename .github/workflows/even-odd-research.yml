@@ -70,7 +70,7 @@ jobs:
   research:
     name: Train and evaluate candidate model
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       EVEN_ODD_SUPABASE_URL: ${{ secrets.EVEN_ODD_SUPABASE_URL }}
       EVEN_ODD_SUPABASE_SECRET_KEY: ${{ secrets.EVEN_ODD_SUPABASE_SECRET_KEY }}
@@ -113,7 +113,7 @@ jobs:
             --target-rows "$LIMIT" \
             --batch-size 300 \
             --timeout-seconds 80 \
-            --max-attempts 30 | tee even-odd-collection-report.json
+            --max-attempts 100 | tee even-odd-collection-report.json
 
       - name: Run chronological research and walk-forward evaluation
         shell: bash
