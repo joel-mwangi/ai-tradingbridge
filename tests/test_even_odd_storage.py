@@ -494,6 +494,7 @@ async def test_create_even_odd_session_uses_dedicated_storage(monkeypatch):
     monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
 
     result = await create_even_odd_session(
+        owner_user_id="00000000-0000-0000-0000-000000000777",
         symbol="R_50",
         account_mode="research",
         currency="USD",
@@ -502,6 +503,7 @@ async def test_create_even_odd_session_uses_dedicated_storage(monkeypatch):
     )
     assert result["id"] == session_id
     assert FakeAsyncClient.url.endswith("/rest/v1/even_odd_sessions")
+    assert FakeAsyncClient.payload["owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert FakeAsyncClient.payload["fixed_stake"] == "1.00"
     assert FakeAsyncClient.payload["max_trades_per_session"] == 10
 
@@ -541,6 +543,7 @@ async def test_start_sequence_calls_atomic_database_function(monkeypatch):
 
     result = await start_even_odd_sequence(
         session_id="00000000-0000-0000-0000-000000000444",
+        owner_user_id="00000000-0000-0000-0000-000000000777",
         model_id="00000000-0000-0000-0000-000000000333",
         model_version="v1",
         planned_trades=4,
@@ -548,6 +551,7 @@ async def test_start_sequence_calls_atomic_database_function(monkeypatch):
     )
     assert result["sequence_id"] == sequence_id
     assert FakeAsyncClient.url.endswith("/rest/v1/rpc/even_odd_start_sequence")
+    assert FakeAsyncClient.payload["p_owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert FakeAsyncClient.payload["p_planned_trades"] == 4
 
 
@@ -586,6 +590,7 @@ async def test_settlement_calls_atomic_database_function(monkeypatch):
 
     result = await record_even_odd_settlement(
         sequence_id="00000000-0000-0000-0000-000000000555",
+        owner_user_id="00000000-0000-0000-0000-000000000777",
         trade_number=1,
         side="even",
         stake="1",
@@ -607,4 +612,5 @@ async def test_settlement_calls_atomic_database_function(monkeypatch):
     )
     assert result["trade_id"] == trade_id
     assert FakeAsyncClient.url.endswith("/rest/v1/rpc/even_odd_record_trade_settlement")
+    assert FakeAsyncClient.payload["p_owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert FakeAsyncClient.payload["p_conservative_expected_value"] == "0.35"
