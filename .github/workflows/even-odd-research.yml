@@ -106,6 +106,17 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Collect enough historical ticks for the selected experiment
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.even_odd_collect_history \
+            --symbol "$SYMBOL" \
+            --target-rows "$LIMIT" \
+            --batch-size 300 \
+            --timeout-seconds 80 \
+            --max-attempts 30 | tee even-odd-collection-report.json
+
       - name: Run chronological research and walk-forward evaluation
         shell: bash
         run: |
@@ -119,11 +130,13 @@ jobs:
             --max-epochs "$MAX_EPOCHS" \
             --walk-forward | tee even-odd-research-report.json
 
-      - name: Upload immutable experiment report
-        if: always() && hashFiles('even-odd-research-report.json') != ''
+      - name: Upload immutable collection and experiment reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: even-odd-research-${{ inputs.symbol }}-${{ github.run_id }}
-          path: even-odd-research-report.json
-          if-no-files-found: error
+          path: |
+            even-odd-collection-report.json
+            even-odd-research-report.json
+          if-no-files-found: ignore
           retention-days: 90
