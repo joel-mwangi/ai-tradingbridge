@@ -462,6 +462,7 @@ async def fail_research_run(*, research_run_id: str) -> None:
 
 async def create_even_odd_session(
     *,
+    owner_user_id: str,
     symbol: str,
     account_mode: str,
     currency: str,
@@ -474,6 +475,7 @@ async def create_even_odd_session(
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
     payload = {
+        "owner_user_id": owner_user_id,
         "market_symbol": symbol,
         "account_mode": account_mode,
         "currency": currency,
@@ -509,6 +511,7 @@ async def create_even_odd_session(
 async def start_even_odd_sequence(
     *,
     session_id: str,
+    owner_user_id: str,
     model_id: str,
     model_version: str,
     planned_trades: int,
@@ -524,6 +527,7 @@ async def start_even_odd_sequence(
                 headers=_headers(key),
                 json={
                     "p_session_id": session_id,
+                    "p_owner_user_id": owner_user_id,
                     "p_model_id": model_id,
                     "p_model_version": model_version,
                     "p_planned_trades": planned_trades,
@@ -550,6 +554,7 @@ async def start_even_odd_sequence(
 async def record_even_odd_settlement(
     *,
     sequence_id: str,
+    owner_user_id: str,
     trade_number: int,
     side: str,
     stake: str,
@@ -574,6 +579,7 @@ async def record_even_odd_settlement(
                 headers=_headers(key),
                 json={
                     "p_sequence_id": sequence_id,
+                    "p_owner_user_id": owner_user_id,
                     "p_trade_number": trade_number,
                     "p_side": side,
                     "p_stake": stake,
@@ -610,7 +616,7 @@ async def record_even_odd_settlement(
         ) from exc
 
 
-async def get_even_odd_session_state(session_id: str) -> dict[str, Any] | None:
+async def get_even_odd_session_state(session_id: str, owner_user_id: str) -> dict[str, Any] | None:
     """Read one session and its sequences from the dedicated project."""
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
@@ -618,7 +624,7 @@ async def get_even_odd_session_state(session_id: str) -> dict[str, Any] | None:
         async with httpx.AsyncClient(timeout=timeout) as client:
             session_response = await client.get(
                 f"{url}/rest/v1/even_odd_sessions",
-                params={"select": "*", "id": f"eq.{session_id}", "limit": "1"},
+                params={"select": "*", "id": f"eq.{session_id}", "owner_user_id": f"eq.{owner_user_id}", "limit": "1"},
                 headers=_headers(key),
             )
             session_response.raise_for_status()
@@ -649,7 +655,7 @@ async def get_even_odd_session_state(session_id: str) -> dict[str, Any] | None:
         raise EvenOddStorageError("Could not load the Even/Odd session state.") from exc
 
 
-async def get_even_odd_sequence_state(sequence_id: str) -> dict[str, Any] | None:
+async def get_even_odd_sequence_state(sequence_id: str, owner_user_id: str) -> dict[str, Any] | None:
     """Read one sequence and its settled trade history."""
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
@@ -665,6 +671,23 @@ async def get_even_odd_sequence_state(sequence_id: str) -> dict[str, Any] | None
             if not isinstance(sequences, list):
                 raise EvenOddStorageError("Sequence lookup returned an invalid response.")
             if not sequences:
+                return None
+
+            owner_response = await client.get(
+                f"{url}/rest/v1/even_odd_sessions",
+                params={
+                    "select": "id",
+                    "id": f"eq.{sequences[0]['session_id']}",
+                    "owner_user_id": f"eq.{owner_user_id}",
+                    "limit": "1",
+                },
+                headers=_headers(key),
+            )
+            owner_response.raise_for_status()
+            owned_sessions = owner_response.json()
+            if not isinstance(owned_sessions, list):
+                raise EvenOddStorageError("Sequence ownership lookup returned an invalid response.")
+            if not owned_sessions:
                 return None
 
             trade_response = await client.get(
