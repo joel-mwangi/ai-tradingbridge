@@ -12,6 +12,25 @@ The token and dedicated Supabase credentials are backend-only. Never expose
 `EVEN_ODD_SUPABASE_SECRET_KEY` or the API token through a browser bundle or a
 `NEXT_PUBLIC_*` variable.
 
+Session and sequence management endpoints additionally require:
+
+```http
+X-TradeBridge-User-ID: <verified Supabase Auth user UUID>
+```
+
+This header is injected by the authenticated Next.js server proxy only after
+`supabase.auth.getUser()` succeeds. The proxy constructs a fresh upstream
+header set and never forwards a browser-supplied identity header. FastAPI
+requires both the server-to-server API token and a valid user UUID for every
+session-scoped operation. The backend persists that UUID in Database 2 and
+scopes reads and writes to it; the sequence-start and settlement RPCs repeat
+the ownership check inside their database transactions.
+
+Legacy sessions created before ownership enforcement have a NULL owner and
+remain inaccessible through session APIs. They are not automatically assigned
+to any user. Database 2 remains isolated from the primary TradeBridge Supabase
+project; no cross-project foreign key is used.
+
 ## Service and market data
 
 | Method | Endpoint | Purpose |

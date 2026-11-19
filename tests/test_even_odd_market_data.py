@@ -20,7 +20,7 @@ def configure_api_token(monkeypatch):
 
 
 def auth():
-    return {"Authorization": f"Bearer {TOKEN}"}
+    return {"Authorization": f"Bearer {TOKEN}", "X-TradeBridge-User-ID": "00000000-0000-0000-0000-000000000777"}
 
 
 def test_digit_engine_reports_parity_and_digit_frequencies():
@@ -455,14 +455,30 @@ def test_create_session_endpoint_validates_and_persists_fixed_stake(monkeypatch)
     )
     assert response.status_code == 200
     assert response.json()["order_execution_enabled"] is False
+    assert captured["owner_user_id"] == "00000000-0000-0000-0000-000000000777"
     assert captured["fixed_stake"] == "1.00"
     assert captured["max_trades_per_session"] == 10
+
+
+def test_session_creation_requires_verified_user_context():
+    response = client.post(
+        "/even-odd/sessions",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={
+            "symbol": "R_50",
+            "account_mode": "research",
+            "currency": "USD",
+            "fixed_stake": "1.00",
+            "max_session_loss": "10.00",
+        },
+    )
+    assert response.status_code == 401
 
 
 def test_start_sequence_endpoint_uses_server_recomputed_plan(monkeypatch):
     captured = {}
 
-    async def fake_plan(request, _):
+    async def fake_plan(request, owner_user_id):
         assert str(request.session_id) == "00000000-0000-0000-0000-000000000444"
         assert len(request.observations) == 3
         return {
@@ -594,8 +610,9 @@ def test_session_endpoint_requires_explicit_monetary_loss_cap():
 
 
 def test_get_session_state_returns_persisted_sequences(monkeypatch):
-    async def fake_get_session(session_id):
+    async def fake_get_session(session_id, owner_user_id):
         assert session_id == "00000000-0000-0000-0000-000000000444"
+        assert str(owner_user_id) == "00000000-0000-0000-0000-000000000777"
         return {
             "session": {"id": session_id, "status": "active", "completed_trades": 2},
             "sequences": [{"id": "sequence-1", "status": "active"}],
@@ -614,8 +631,9 @@ def test_get_session_state_returns_persisted_sequences(monkeypatch):
 
 
 def test_get_sequence_state_returns_settled_trade_history(monkeypatch):
-    async def fake_get_sequence(sequence_id):
+    async def fake_get_sequence(sequence_id, owner_user_id):
         assert sequence_id == "00000000-0000-0000-0000-000000000555"
+        assert str(owner_user_id) == "00000000-0000-0000-0000-000000000777"
         return {
             "sequence": {"id": sequence_id, "planned_trades": 3, "status": "active"},
             "trades": [{"trade_number": 1, "outcome": "win"}],
@@ -854,7 +872,7 @@ def entry_session_state():
     }
 
 
-async def fake_entry_session_state(session_id):
+async def fake_entry_session_state(session_id, owner_user_id):
     assert session_id == "00000000-0000-0000-0000-000000000444"
     return entry_session_state()
 
@@ -1082,7 +1100,7 @@ def test_entry_check_waits_when_session_loss_budget_is_exhausted(monkeypatch):
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"]["realized_profit"] = "-10.00"
         return state
@@ -1110,7 +1128,7 @@ def test_entry_check_blocks_exhausted_session_trade_limits(monkeypatch, field, v
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"][field] = value
         return state
@@ -1135,7 +1153,7 @@ def test_entry_check_does_not_allow_client_to_relax_freshness_policy(monkeypatch
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_session(session_id):
+    async def fake_session(session_id, owner_user_id):
         return entry_session_state()
 
     async def fake_load_history(**kwargs):
@@ -1231,7 +1249,7 @@ def test_sequence_plan_waits_for_model_validation_and_risk_budget(monkeypatch):
     async def fake_validated_model(model_id):
         return entry_model()
 
-    async def fake_low_budget_session(session_id):
+    async def fake_low_budget_session(session_id, owner_user_id):
         state = entry_session_state()
         state["session"]["max_session_loss"] = "0.50"
         return state
@@ -1294,7 +1312,7 @@ def test_sequence_plan_rejects_a_session_with_an_active_sequence(monkeypatch):
     async def fake_get_model(model_id):
         return entry_model()
 
-    async def fake_active_session(session_id):
+    async def fake_active_session(session_id, owner_user_id):
         state = entry_session_state()
         state["sequences"] = [{"status": "active"}]
         return state
