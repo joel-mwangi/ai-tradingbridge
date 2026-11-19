@@ -1,0 +1,129 @@
+name: Even/Odd research experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: Deriv market symbol
+        required: true
+        type: choice
+        options:
+          - R_50
+          - R_75
+          - 1HZ100V
+          - 1HZ75V
+      limit:
+        description: Maximum historical rows (the runner caps this at 5000)
+        required: true
+        default: "5000"
+        type: choice
+        options:
+          - "1000"
+          - "2000"
+          - "3000"
+          - "4000"
+          - "5000"
+      minimum_train_rows:
+        description: Initial expanding-window training rows
+        required: true
+        default: "500"
+        type: choice
+        options:
+          - "500"
+          - "750"
+          - "1000"
+          - "1500"
+      test_rows:
+        description: Future observations per walk-forward fold
+        required: true
+        default: "250"
+        type: choice
+        options:
+          - "100"
+          - "250"
+          - "500"
+      maximum_folds:
+        description: Number of chronological future folds
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "8"
+          - "10"
+      max_epochs:
+        description: Maximum logistic-regression training epochs
+        required: true
+        default: "200"
+        type: choice
+        options:
+          - "100"
+          - "200"
+          - "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: even-odd-research-${{ inputs.symbol }}
+  cancel-in-progress: false
+
+jobs:
+  research:
+    name: Train and evaluate candidate model
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EVEN_ODD_SUPABASE_URL: ${{ secrets.EVEN_ODD_SUPABASE_URL }}
+      EVEN_ODD_SUPABASE_SECRET_KEY: ${{ secrets.EVEN_ODD_SUPABASE_SECRET_KEY }}
+      SYMBOL: ${{ inputs.symbol }}
+      LIMIT: ${{ inputs.limit }}
+      MINIMUM_TRAIN_ROWS: ${{ inputs.minimum_train_rows }}
+      TEST_ROWS: ${{ inputs.test_rows }}
+      MAXIMUM_FOLDS: ${{ inputs.maximum_folds }}
+      MAX_EPOCHS: ${{ inputs.max_epochs }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Verify dedicated database credentials
+        shell: bash
+        run: |
+          if [[ -z "$EVEN_ODD_SUPABASE_URL" || -z "$EVEN_ODD_SUPABASE_SECRET_KEY" ]]; then
+            echo "::error::Configure EVEN_ODD_SUPABASE_URL and EVEN_ODD_SUPABASE_SECRET_KEY as GitHub Actions secrets."
+            exit 1
+          fi
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run chronological research and walk-forward evaluation
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.even_odd_research \
+            --symbol "$SYMBOL" \
+            --limit "$LIMIT" \
+            --minimum-train-rows "$MINIMUM_TRAIN_ROWS" \
+            --test-rows "$TEST_ROWS" \
+            --maximum-folds "$MAXIMUM_FOLDS" \
+            --max-epochs "$MAX_EPOCHS" \
+            --walk-forward | tee even-odd-research-report.json
+
+      - name: Upload immutable experiment report
+        if: always() && hashFiles('even-odd-research-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: even-odd-research-${{ inputs.symbol }}-${{ github.run_id }}
+          path: even-odd-research-report.json
+          if-no-files-found: error
+          retention-days: 90
