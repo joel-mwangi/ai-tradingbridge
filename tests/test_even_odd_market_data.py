@@ -195,6 +195,7 @@ def test_history_endpoint_returns_bounded_live_capture_snapshot(monkeypatch):
         "from_epoch": 1760000000,
         "to_epoch": None,
         "collection_id": None,
+        "capture_mode": "browser_stream",
     }
 
 
