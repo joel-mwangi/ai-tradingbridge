@@ -1,6 +1,6 @@
 import pytest
 
-from app.even_odd.data_quality import inspect_historical_ticks
+from app.even_odd.data_quality import (\n    canonicalize_overlapping_collection_ticks,\n    inspect_historical_ticks,\n)
 
 
 def make_row(*, row_id=1, epoch=1760000000, digit=2, quote="123.452", parity="even", collection="run-a"):
@@ -50,7 +50,8 @@ def test_quality_audit_reports_duplicate_observations_without_dropping_rows():
     assert result["sample_size"] == 2
     assert result["valid_rows"] == 2
     assert result["exact_market_observation_duplicates"] == 1
-    assert "retained" in result["duplicate_policy"]
+    assert result["quality_passed"] is False
+    assert "Raw records are retained" in result["duplicate_policy"]
 
 
 def test_quality_audit_detects_non_chronological_order():
@@ -95,3 +96,37 @@ def test_quality_audit_detects_duplicate_and_out_of_order_collection_sequences()
     assert result["duplicate_sequence_numbers"] == 1
     assert result["sequence_order_violations"] == 1
     assert result["quality_passed"] is False
+
+
+
+def test_canonical_view_excludes_only_cross_collection_overlap_and_preserves_raw_rows():
+    first = make_row(row_id=1, collection="run-a")
+    overlap = make_row(row_id=2, collection="run-b")
+    same_collection_repeat = make_row(
+        row_id=3, collection="run-a", epoch=1760000000,
+        digit=2, quote="123.452"
+    )
+    different_tick = make_row(
+        row_id=4, collection="run-b", epoch=1760000001,
+        digit=3, quote="123.453", parity="odd"
+    )
+
+    result = canonicalize_overlapping_collection_ticks(
+        [first, overlap, same_collection_repeat, different_tick]
+    )
+
+    assert result["raw_rows"] == 4
+    assert result["canonical_rows"] == 3
+    assert result["overlap_duplicates_excluded"] == 1
+    assert [row["id"] for row in result["rows"]] == [1, 3, 4]
+    assert len([first, overlap, same_collection_repeat, different_tick]) == 4
+
+
+def test_canonical_view_keeps_identical_fingerprints_within_same_collection():
+    rows = [
+        make_row(row_id=1, collection="run-a"),
+        make_row(row_id=2, collection="run-a"),
+    ]
+    result = canonicalize_overlapping_collection_ticks(rows)
+    assert result["canonical_rows"] == 2
+    assert result["overlap_duplicates_excluded"] == 0
