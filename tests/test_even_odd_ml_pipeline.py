@@ -28,6 +28,9 @@ def test_research_pipeline_uses_disjoint_periods_and_keeps_execution_disabled():
     assert result["model"]["validated"] is False
     assert result["model"]["execution_authorized"] is False
     assert result["promotion_status"]["validated"] is False
+    assert set(result["model_candidates"]) == {"logistic", "markov"}
+    assert set(result["candidate_metrics"]) == {"logistic", "markov"}
+    assert result["candidate_metrics"]["markov"]["sample_size"] == partitions["test"]
 
 
 def test_research_pipeline_rejects_insufficient_history():
@@ -55,6 +58,8 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     assert all(fold["validation_rows"] >= 20 for fold in result["folds"])
     assert all(fold["calibration_rows"] >= 50 for fold in result["folds"])
     assert result["aggregate_model_metrics"]["sample_size"] == 300
+    assert set(result["aggregate_model_metrics_by_model"]) == {"logistic", "markov"}
+    assert all(set(fold["model_metrics"]) == {"logistic", "markov"} for fold in result["folds"])
     assert len(result["out_of_sample_predictions"]) == 300
     assert len(result["calibration_intervals"]) == 9
     assert all(interval["validated"] is False for interval in result["calibration_intervals"])
