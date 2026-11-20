@@ -61,8 +61,8 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
         def raise_for_status(self):
             return None
 
-        def __init__(self, rows):
-            self.rows = rows
+        def __init__(self, rows=None):
+            self.rows = rows or []
 
         def json(self):
             return self.rows
