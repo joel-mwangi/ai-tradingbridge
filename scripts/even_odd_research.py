@@ -35,7 +35,7 @@ from app.even_odd.storage import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run chronological Even/Odd ML research.")
+    parser = argparse.ArgumentParser(description="Run chronological research on live-captured Even/Odd observations.")
     parser.add_argument("--symbol", required=True, help="Deriv market symbol, e.g. R_50.")
     parser.add_argument("--limit", type=int, default=5000, choices=range(1, 5001))
     parser.add_argument(
@@ -85,7 +85,7 @@ async def _run(args: argparse.Namespace) -> int:
             print(json.dumps({
                 "status": "blocked",
                 "research_run_id": research_run_id,
-                "reason": "Canonical historical dataset failed structural quality checks.",
+                "reason": "Live-captured dataset failed structural quality checks.",
                 "snapshot_max_id": snapshot["snapshot_max_id"],
                 "quality": quality,
             }, indent=2))
@@ -98,7 +98,7 @@ async def _run(args: argparse.Namespace) -> int:
                     "status": "blocked",
                     "research_run_id": research_run_id,
                     "reason": (
-                        "Repeated observation fingerprints were detected. "
+                        "Repeated observation fingerprints were detected in the research sample. "
                         "Review the overlap or rerun with --allow-duplicates."
                     ),
                     "quality": quality,
