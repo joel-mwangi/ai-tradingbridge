@@ -285,6 +285,9 @@ async def test_browser_tick_batch_maps_rpc_batch_id_conflict_to_409(monkeypatch)
             return self.payload
 
     class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
         async def __aenter__(self):
             return self
 
