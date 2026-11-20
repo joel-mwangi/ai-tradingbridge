@@ -77,6 +77,45 @@ itself. The interval selector refuses extrapolation outside the calibrated
 probability band. Regime drift and long-memory dependence remain risks that
 must be assessed before demo use.
 
+## Candidate model comparison and payout replay
+
+Each experiment fits two candidate families using only past observations:
+- standardized multivariate logistic regression;
+- a Laplace-smoothed first-order parity Markov transition model.
+
+Both candidates use the same chronological train, validation, calibration and
+untouched holdout partitions. Walk-forward folds report each model separately
+against the constant 50% and rolling-frequency baselines. Candidate selection
+and promotion are not based on the final test partition. Both artifacts remain
+`candidate`; neither family is automatically marked validated.
+
+Walk-forward uncertainty for a test fold is estimated only from earlier
+out-of-sample folds. The first folds therefore have no validated uncertainty
+interval and cannot produce replay entries. The hosted workflow defaults to
+eight folds so later folds can accumulate prior calibration evidence. The
+aggregate intervals retained in the model registry are for future live
+research forecasts; they must not be retroactively applied to the same rows
+that produced them in a backtest.
+
+The read-only `GET /even-odd/payouts` endpoint records matched Even and Odd
+proposal terms in `even_odd_payout_quote_snapshots` when Database 2 is
+configured and the migration has been applied. A historical replay uses only
+a quote snapshot at or before the target tick, within the configured age
+limit, and matching the exact market, currency and stake. It computes
+payout-adjusted conservative EV, entry coverage, win/loss counts, net P&L,
+ROI on stake, profit factor and maximum drawdown from out-of-sample forecasts.
+No current quote is substituted for a missing historical quote.
+
+If quote snapshots are absent or sparse, replay reports unavailable or low
+coverage rather than inventing returns. A replay with fewer than 200 entries
+is explicitly marked as insufficient evidence. Replay metrics remain
+unvalidated research evidence and never enable broker execution.
+
+Apply the migration
+`20261120100000_even_odd_historical_payout_snapshots.sql` to the dedicated
+Database 2 project only. Continue collecting payout snapshots over time; the
+migration cannot reconstruct historical payout prices that were never stored.
+
 ## Promotion gate
 
 Before any model can be marked validated:
