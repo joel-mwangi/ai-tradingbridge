@@ -86,3 +86,28 @@ def test_walk_forward_default_training_rows_provide_calibration_minimum():
     first_fold = result["folds"][0]
     assert first_fold["calibration_rows"] >= 50
     assert first_fold["validation_rows"] >= 20
+
+def test_walk_forward_uncertainty_for_each_fold_uses_only_prior_oos_folds():
+    digits = [0, 1] * 500
+    epochs = list(range(1_700_000_000, 1_700_001_000))
+    result = run_walk_forward_evaluation(
+        digits,
+        windows=(20,),
+        minimum_train_rows=400,
+        test_rows=50,
+        maximum_folds=8,
+        max_epochs=20,
+        patience=5,
+        tick_epochs=epochs,
+    )
+    first_fold_predictions = [
+        row for row in result["out_of_sample_predictions"]
+        if row["fold"] == 1
+    ]
+    assert first_fold_predictions
+    assert all(row["uncertainty_validated"] is False for row in first_fold_predictions)
+    assert all("target_epoch" in row for row in result["out_of_sample_predictions"])
+    assert all(
+        row["target_epoch"] == epochs[row["target_index"]]
+        for row in result["out_of_sample_predictions"]
+    )
