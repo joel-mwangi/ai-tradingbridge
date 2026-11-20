@@ -834,6 +834,8 @@ async def plan_adaptive_sequence(
         historical_oos_evidence_rows = int(payout_replay.get("entry_count") or 0)
         historical_oos_positive_fold_rate = float(payout_replay.get("positive_fold_rate") or 0.0)
         historical_oos_expected_value = float(payout_replay.get("average_conservative_expected_value") or 0.0)
+        historical_oos_net_profit = float(payout_replay.get("net_profit") or 0.0)
+        historical_oos_roi = float(payout_replay.get("roi_on_staked") or 0.0)
 
 
         observations: list[EntryObservation] = []
@@ -949,6 +951,8 @@ async def plan_adaptive_sequence(
                 historical_oos_evidence_rows=historical_oos_evidence_rows,
                 historical_oos_positive_fold_rate=historical_oos_positive_fold_rate,
                 historical_oos_expected_value=historical_oos_expected_value,
+                historical_oos_net_profit=historical_oos_net_profit,
+                historical_oos_roi=historical_oos_roi,
             ))
             observations.append(EntryObservation(
                 tick_row_id=persisted_tick["id"],
@@ -988,6 +992,8 @@ async def plan_adaptive_sequence(
                 "historical_oos_evidence_rows": historical_oos_evidence_rows,
                 "historical_oos_positive_fold_rate": historical_oos_positive_fold_rate,
                 "historical_oos_expected_value": historical_oos_expected_value,
+                "historical_oos_net_profit": historical_oos_net_profit,
+                "historical_oos_roi": historical_oos_roi,
                 "persistence_adjusted_conservative_ev": (
                     persistence_lower_bound * selected_side["conservative_expected_value"]
                 ),
