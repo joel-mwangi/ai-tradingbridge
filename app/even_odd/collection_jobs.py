@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import os
 from typing import Annotated
+from datetime import datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -163,7 +164,7 @@ async def persist_browser_tick_batch(
             await persist_live_tick_batch(
                 symbol=symbol, ticks=request.ticks, worker_id=f"browser:{owner}", job_id=str(job_id)
             )
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             raise HTTPException(status_code=502, detail="Could not persist the live tick batch.") from exc
         received = previous + len(request.ticks)
         new_status = "completed" if received == target else "collecting"
