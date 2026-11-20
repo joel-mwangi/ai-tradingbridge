@@ -13,9 +13,10 @@ def quote(epoch, *, ask=1.0, payout=1.95):
     }
 
 
-def prediction(epoch, actual="even", *, lower=0.8, upper=0.9, valid=True):
+def prediction(epoch, actual="even", *, lower=0.8, upper=0.9, valid=True, fold=1):
     return {
         "target_epoch": epoch,
+        "fold": fold,
         "actual_parity": actual,
         "probability_even": (lower + upper) / 2,
         "lower_even_probability": lower,
@@ -78,3 +79,43 @@ def test_replay_excludes_multiple_ticks_sharing_second_resolution_quote_time():
     assert result["ambiguous_timestamp_opportunities"] == 2
     assert result["unambiguous_timestamp_opportunities"] == 1
     assert result["entry_count"] == 1
+
+def test_replay_estimates_same_side_persistence_only_with_sufficient_oos_folds():
+    predictions = []
+    quotes = []
+    epoch = 1_800_000_000
+    for fold in range(1, 6):
+        for _ in range(100):
+            predictions.append(prediction(epoch, fold=fold))
+            quotes.append(quote(epoch))
+            epoch += 1
+    result = replay_payout_aware_strategy(
+        predictions,
+        quotes,
+        stake=1.0,
+        minimum_trades_for_evidence=200,
+    )
+    assert result["evidence_sample_sufficient"] is True
+    assert result["positive_fold_rate"] == 1.0
+    horizon_one = result["sequence_persistence_by_horizon"]["1"]
+    assert horizon_one["validated"] is True
+    assert horizon_one["fold_count"] == 5
+    assert horizon_one["trials"] == 495
+    assert horizon_one["persistence_rate"] == 1.0
+    assert horizon_one["lower_confidence_bound_90"] > 0.9
+
+
+def test_replay_does_not_claim_persistence_from_fewer_than_five_folds():
+    predictions = []
+    quotes = []
+    epoch = 1_800_000_000
+    for fold in range(1, 3):
+        for _ in range(150):
+            predictions.append(prediction(epoch, fold=fold))
+            quotes.append(quote(epoch))
+            epoch += 1
+    result = replay_payout_aware_strategy(predictions, quotes, stake=1.0)
+    horizon_one = result["sequence_persistence_by_horizon"]["1"]
+    assert horizon_one["trials"] >= 200
+    assert horizon_one["validated"] is False
+    assert horizon_one["lower_confidence_bound_90"] is None
