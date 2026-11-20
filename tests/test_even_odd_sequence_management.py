@@ -39,6 +39,8 @@ def forecast(
         historical_oos_evidence_rows=500,
         historical_oos_positive_fold_rate=0.8,
         historical_oos_expected_value=0.12,
+        historical_oos_net_profit=20.0,
+        historical_oos_roi=0.1,
     )
 
 
@@ -233,3 +235,10 @@ def test_sequence_optimizer_adjusts_ev_by_conservative_persistence_bound():
     assert decision.sequence_adjusted_conservative_ev_by_trade[1] == pytest.approx(
         decision.conservative_ev_by_trade[1] * 0.25
     )
+
+def test_sequence_optimizer_requires_positive_realized_oos_pnl_and_roi():
+    decision = select_sequence_length([
+        forecast(1, historical_oos_net_profit=-1.0),
+    ])
+    assert decision.selected_trades == 0
+    assert "not consistently positive" in decision.reason
