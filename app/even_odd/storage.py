@@ -332,9 +332,13 @@ async def save_payout_quote_snapshot(*, quote: dict) -> None:
         quoted_at = quote["quoted_at"]
         even = quote["even"]
         odd = quote["odd"]
-        spot_time = int(even["spot_time"])
-        if int(odd["spot_time"]) != spot_time:
-            raise ValueError("Even and Odd quote spot times do not match.")
+        even_spot_time = int(even["spot_time"])
+        odd_spot_time = int(odd["spot_time"])
+        if abs(even_spot_time - odd_spot_time) > 2:
+            raise ValueError("Even and Odd quote spot times are not sufficiently close.")
+        # Anchor the pair to the older proposal timestamp so replay never
+        # treats the older side as if it had been quoted at a later instant.
+        spot_time = min(even_spot_time, odd_spot_time)
         payload = {
             "market_symbol": symbol,
             "currency": currency,
@@ -351,6 +355,8 @@ async def save_payout_quote_snapshot(*, quote: dict) -> None:
                 "duration_unit": quote.get("duration_unit"),
                 "even_contract_type": even.get("contract_type"),
                 "odd_contract_type": odd.get("contract_type"),
+                "even_spot_time": even_spot_time,
+                "odd_spot_time": odd_spot_time,
             },
         }
         url, key = _configuration()
