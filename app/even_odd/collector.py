@@ -1,7 +1,7 @@
-"""Dedicated public Deriv tick collector for Even/Odd Lab.
+"""Tick normalization for the independent live-only Even/Odd collector.
 
-Each collection creates and closes its own public market-data WebSocket. It
-does not use the legacy collector, shared strategy feed, or trading session.
+The persistent worker owns the public WebSocket connection. This module does
+not request or normalize historical tick snapshots.
 """
 from __future__ import annotations
 
