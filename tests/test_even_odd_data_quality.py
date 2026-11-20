@@ -54,7 +54,7 @@ def test_quality_audit_reports_duplicate_observations_without_dropping_rows():
     assert result["valid_rows"] == 2
     assert result["exact_market_observation_duplicates"] == 1
     assert result["quality_passed"] is False
-    assert "Raw records are retained" in result["duplicate_policy"]
+    assert "Raw historical records are retained" in result["duplicate_policy"]
 
 
 def test_quality_audit_detects_non_chronological_order():
@@ -133,3 +133,20 @@ def test_canonical_view_keeps_identical_fingerprints_within_same_collection():
     result = canonicalize_overlapping_collection_ticks(rows)
     assert result["canonical_rows"] == 2
     assert result["overlap_duplicates_excluded"] == 0
+
+
+def test_live_quality_reports_same_epoch_quote_repeats_without_blocking_or_dropping():
+    first = make_row(row_id=1, collection="live-batch-1")
+    second = make_row(row_id=2, collection="live-batch-2")
+    first["capture_mode"] = "live_stream"
+    second["capture_mode"] = "live_stream"
+
+    result = inspect_historical_ticks([first, second], expected_symbol="R_50")
+    canonical = canonicalize_overlapping_collection_ticks([first, second])
+
+    assert result["quality_passed"] is True
+    assert result["exact_market_observation_duplicates"] == 0
+    assert result["potential_same_epoch_quote_repeats"] == 1
+    assert canonical["canonical_rows"] == 2
+    assert canonical["overlap_duplicates_excluded"] == 0
+    assert [row["id"] for row in canonical["rows"]] == [1, 2]

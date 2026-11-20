@@ -8,6 +8,7 @@ from app.even_odd.storage import (
     _headers,
     _mark_collection_failed,
     persist_collection,
+    persist_live_tick_batch,
     save_candidate_model,
     start_research_run,
     complete_research_run,
@@ -164,8 +165,8 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
-            self.posts.append({"url": url, "json": json})
+        async def post(self, url, *, headers, json, params=None):
+            self.posts.append({"url": url, "json": json, "params": params})
             if url.endswith("/even_odd_collection_runs"):
                 return Response([{"id": collection_id}])
             return Response()
@@ -191,7 +192,9 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
     tick_payload = finish_client.posts[0]["json"][0]
     assert run_payload["started_at"] == started_at.isoformat()
     assert tick_payload["deriv_stream_id"] == "deriv-stream-abc"
-    assert "deriv_tick_id" not in tick_payload
+    assert tick_payload["deriv_tick_id"] is None
+    assert tick_payload["capture_id"]
+    assert tick_payload["capture_mode"] == "historical"
     assert finish_client.patches[0]["json"]["status"] == "completed"
 
 
@@ -274,6 +277,7 @@ async def test_load_historical_ticks_uses_stable_snapshot_and_paginates(monkeypa
     assert len(client.calls) == 3
     data_call = client.calls[1]
     assert data_call["params"]["market_symbol"] == "eq.R_50"
+    assert data_call["params"]["capture_mode"] == "eq.live_stream"
     assert data_call["params"]["id"] == "lte.1002"
     assert data_call["params"]["order"] == "tick_epoch.desc,id.desc"
     assert data_call["params"]["and"] == (
@@ -339,7 +343,7 @@ async def test_start_research_run_persists_snapshot_and_quality(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.payload = json
             return Response()
 
@@ -382,7 +386,7 @@ async def test_candidate_model_is_persisted_with_execution_disabled(monkeypatch)
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.payload = json
             return Response()
 
@@ -486,7 +490,7 @@ async def test_create_even_odd_session_uses_dedicated_storage(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -534,7 +538,7 @@ async def test_start_sequence_calls_atomic_database_function(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -581,7 +585,7 @@ async def test_settlement_calls_atomic_database_function(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -705,3 +709,74 @@ async def test_sequence_read_denies_when_parent_session_is_not_owned(monkeypatch
     assert result is None
     assert len(FakeAsyncClient.calls) == 2
 
+
+
+@pytest.mark.asyncio
+async def test_live_batch_persistence_marks_only_live_capture_and_keeps_tick_ids(monkeypatch):
+    collection_id = "00000000-0000-0000-0000-000000000789"
+
+    class Response:
+        def __init__(self, rows=None):
+            self.rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.rows
+
+    class FakeAsyncClient:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.posts = []
+            self.patches = []
+            FakeAsyncClient.instances.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers, json, params=None):
+            self.posts.append({"url": url, "json": json, "params": params})
+            if url.endswith("/even_odd_collection_runs"):
+                return Response([{"id": collection_id}])
+            return Response()
+
+        async def patch(self, url, *, params, headers, json):
+            self.patches.append({"url": url, "json": json})
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    tick = {
+        "epoch": 1760000000,
+        "quote": "123.450",
+        "pip_size": 3,
+        "last_digit": 0,
+        "parity": "even",
+        "tick_id": "tick-123",
+        "stream_id": "subscription-456",
+        "received_at": "2026-11-20T00:00:00+00:00",
+    }
+    result = await persist_live_tick_batch(
+        symbol="R_50", ticks=[tick], worker_id="collector-test"
+    )
+
+    assert result == collection_id
+    run_payload = FakeAsyncClient.instances[0].posts[0]["json"]
+    tick_payload = FakeAsyncClient.instances[1].posts[0]["json"][0]
+    assert run_payload["requested_ticks"] == 10
+    assert run_payload["metadata"]["capture_mode"] == "live_stream"
+    assert run_payload["metadata"]["worker_id"] == "collector-test"
+    assert tick_payload["capture_mode"] == "live_stream"
+    assert tick_payload["deriv_tick_id"] == "tick-123"
+    assert tick_payload["deriv_stream_id"] == "subscription-456"
+    assert tick_payload["capture_id"]
+    assert FakeAsyncClient.instances[1].posts[0]["url"].endswith("/even_odd_ticks")
+    assert FakeAsyncClient.instances[1].posts[0]["params"] == {"on_conflict": "capture_id"}
+    assert FakeAsyncClient.instances[1].patches[0]["json"]["status"] == "partial"

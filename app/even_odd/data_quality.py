@@ -114,7 +114,15 @@ def inspect_historical_ticks(
         collection_ids.add(collection_id)
         valid_epochs.append(epoch)
 
-    duplicate_rows = sum(count - 1 for count in fingerprints.values() if count > 1)
+    potential_repeated_fingerprints = sum(count - 1 for count in fingerprints.values() if count > 1)
+    live_only_sample = bool(rows) and all(
+        isinstance(row, dict) and row.get("capture_mode") == "live_stream"
+        for row in rows
+    )
+    # In a live tick stream, multiple genuine ticks can share the same
+    # second-resolution epoch and quote. Treat these as review diagnostics,
+    # not proof of duplicate identity and not an automatic research blocker.
+    duplicate_rows = 0 if live_only_sample else potential_repeated_fingerprints
     valid_rows = len(rows) - invalid_rows
     return {
         "sample_size": len(rows),
@@ -128,6 +136,7 @@ def inspect_historical_ticks(
         "duplicate_sequence_numbers": duplicate_sequence_numbers,
         "sequence_order_violations": sequence_order_violations,
         "exact_market_observation_duplicates": duplicate_rows,
+        "potential_same_epoch_quote_repeats": potential_repeated_fingerprints if live_only_sample else 0,
         "collection_count": len(collection_ids),
         "first_tick_epoch": min(valid_epochs) if valid_epochs else None,
         "last_tick_epoch": max(valid_epochs) if valid_epochs else None,
@@ -142,10 +151,13 @@ def inspect_historical_ticks(
             and duplicate_rows == 0
         ),
         "duplicate_policy": (
-            "Raw records are retained for auditability. Exact market fingerprints "
-            "repeated across different collection runs are treated as overlapping "
-            "window contamination in the canonical research view; they block "
-            "research readiness until reviewed."
+            "Live-captured observations are never removed by timestamp/quote fingerprint: "
+            "multiple genuine ticks can share a second and quote. Potential repeats are "
+            "reported for review. Legacy historical imports are excluded from this dataset."
+            if live_only_sample else
+            "Raw historical records are retained for auditability. Exact fingerprints "
+            "repeated across collection runs are treated as overlapping-window "
+            "contamination in the canonical historical research view."
         ),
         "interpretation": (
             "Structural quality checks only. Passing this audit does not establish "
@@ -162,6 +174,24 @@ def canonicalize_overlapping_collection_ticks(rows: Sequence[dict[str, Any]]) ->
     """
     if not isinstance(rows, (list, tuple)):
         raise ValueError("rows must be a list or tuple of tick records.")
+
+    if rows and all(
+        isinstance(row, dict) and row.get("capture_mode") == "live_stream"
+        for row in rows
+    ):
+        live_rows = [dict(row) for row in rows if isinstance(row, dict)]
+        live_rows.sort(key=lambda row: (row.get("tick_epoch", 0), row.get("id", 0)))
+        return {
+            "rows": live_rows,
+            "raw_rows": len(rows),
+            "canonical_rows": len(live_rows),
+            "overlap_duplicates_excluded": 0,
+            "policy": (
+                "Live stream observations are retained as received. No timestamp/quote "
+                "fingerprint deduplication is applied because separate ticks can share "
+                "the same epoch and quote."
+            ),
+        }
 
     selected: dict[tuple, dict[str, Any]] = {}
     duplicate_rows = 0

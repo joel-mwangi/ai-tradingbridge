@@ -35,7 +35,7 @@ from app.even_odd.storage import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run chronological Even/Odd ML research.")
+    parser = argparse.ArgumentParser(description="Run chronological research on live-captured Even/Odd observations.")
     parser.add_argument("--symbol", required=True, help="Deriv market symbol, e.g. R_50.")
     parser.add_argument("--limit", type=int, default=5000, choices=range(1, 5001))
     parser.add_argument(
@@ -67,6 +67,17 @@ async def _run(args: argparse.Namespace) -> int:
             limit=args.limit,
         )
         raw_rows = snapshot["rows"]
+        if not raw_rows:
+            print(json.dumps({
+                "status": "blocked",
+                "reason": (
+                    "No live-captured observations are available yet. Start the "
+                    "always-on Deriv live collector and wait for data to accumulate."
+                ),
+                "historical_imports_enabled": False,
+                "order_execution_enabled": False,
+            }, indent=2))
+            return 2
         canonical = canonicalize_overlapping_collection_ticks(raw_rows)
         rows = canonical["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=args.symbol)
@@ -85,7 +96,7 @@ async def _run(args: argparse.Namespace) -> int:
             print(json.dumps({
                 "status": "blocked",
                 "research_run_id": research_run_id,
-                "reason": "Canonical historical dataset failed structural quality checks.",
+                "reason": "Live-captured dataset failed structural quality checks.",
                 "snapshot_max_id": snapshot["snapshot_max_id"],
                 "quality": quality,
             }, indent=2))
@@ -98,7 +109,7 @@ async def _run(args: argparse.Namespace) -> int:
                     "status": "blocked",
                     "research_run_id": research_run_id,
                     "reason": (
-                        "Repeated observation fingerprints were detected. "
+                        "Repeated observation fingerprints were detected in the research sample. "
                         "Review the overlap or rerun with --allow-duplicates."
                     ),
                     "quality": quality,
