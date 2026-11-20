@@ -386,7 +386,7 @@ async def test_candidate_model_is_persisted_with_execution_disabled(monkeypatch)
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.payload = json
             return Response()
 
@@ -490,7 +490,7 @@ async def test_create_even_odd_session_uses_dedicated_storage(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -538,7 +538,7 @@ async def test_start_sequence_calls_atomic_database_function(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -585,7 +585,7 @@ async def test_settlement_calls_atomic_database_function(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.url = url
             FakeAsyncClient.payload = json
             return Response()
@@ -739,7 +739,7 @@ async def test_live_batch_persistence_marks_only_live_capture_and_keeps_tick_ids
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             self.posts.append({"url": url, "json": json, "params": params})
             if url.endswith("/even_odd_collection_runs"):
                 return Response([{"id": collection_id}])
