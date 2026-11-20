@@ -100,9 +100,10 @@ def even_odd_status(
     return {
         "module": "even-odd-lab",
         "status": "available",
-        "data_source": "continuous_deriv_live_tick_stream",
+        "data_source": "browser_managed_deriv_live_tick_stream",
         "historical_imports_enabled": False,
-        "live_collector_required": True,
+        "live_collector_required": False,
+        "browser_collection_supported": True,
         "storage_configured": storage_is_configured(),
         "execution_enabled": False,
         "predictive_model_available": False,
