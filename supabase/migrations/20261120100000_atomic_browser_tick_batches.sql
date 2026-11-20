@@ -35,91 +35,62 @@ create or replace function public.even_odd_persist_browser_tick_batch(
     p_ticks jsonb
 )
 returns jsonb
-language plpgsql
+language sql
 security invoker
 set search_path = public
 as $$
-declare
-    v_job public.even_odd_collection_jobs;
-    v_existing public.even_odd_collection_batch_receipts;
-    v_collection_id uuid;
-    v_count integer;
-    v_received integer;
-    v_status text;
-    v_result jsonb;
-    v_tick jsonb;
-    v_index integer := 0;
-    v_quote numeric;
-    v_epoch bigint;
-    v_pip_size smallint;
-    v_last_digit smallint;
-    v_parity text;
-    v_received_at timestamptz;
-    v_payload_hash text;
-begin
-    if p_job_id is null or p_owner_user_id is null or p_batch_id is null then
-        raise exception 'job, owner and batch identifiers are required' using errcode = '22023';
-    end if;
-    if jsonb_typeof(p_ticks) <> 'array' then
-        raise exception 'ticks must be a JSON array' using errcode = '22023';
-    end if;
-    v_count := jsonb_array_length(p_ticks);
-    if v_count < 1 or v_count > 100 then
-        raise exception 'batch must contain between 1 and 100 ticks' using errcode = '22023';
-    end if;
-
-    select * into v_job
-      from public.even_odd_collection_jobs
-     where id = p_job_id and owner_user_id = p_owner_user_id
-     for update;
-    if not found then
-        raise exception 'collection job not found' using errcode = 'P0002';
-    end if;
-
-    -- Exclude backend-generated receive timestamps and random capture IDs:
-    -- those change when an identical raw browser batch is retried.
-    select md5(jsonb_agg(value - 'received_at' - 'capture_id' order by ordinality)::text)
-      into v_payload_hash
-      from jsonb_array_elements(p_ticks) with ordinality as item(value, ordinality);
-
-    -- Idempotency is checked after taking the job lock so concurrent retries
-    -- serialize and can only commit one receipt.
-    select * into v_existing
-      from public.even_odd_collection_batch_receipts
-     where job_id = p_job_id and batch_id = p_batch_id;
-    if found then
-        if v_existing.owner_user_id <> p_owner_user_id then
-            raise exception 'batch owner mismatch' using errcode = '42501';
-        end if;
-        if v_existing.payload_hash <> v_payload_hash then
-            raise exception 'batch_id was already used with a different payload' using errcode = '22023';
-        end if;
-        return jsonb_build_object(
-            'job', to_jsonb(v_job),
-            'persisted_ticks', v_existing.tick_count,
-            'collection_id', v_existing.collection_id,
-            'batch_id', p_batch_id,
-            'duplicate', true,
-            'live_only', true,
-            'provenance', 'browser_stream'
-        );
-    end if;
-
-    if v_job.status not in ('queued', 'collecting') then
-        raise exception 'collection job is no longer active' using errcode = '55000';
-    end if;
-    if v_job.received_ticks + v_count > v_job.target_ticks then
-        raise exception 'batch would exceed the collection target' using errcode = '22023';
-    end if;
-
-    v_collection_id := gen_random_uuid();
+with input as materialized (
+    select case when jsonb_typeof(p_ticks) = 'array' then p_ticks else '[]'::jsonb end as ticks
+),
+payload as materialized (
+    select
+        count(*)::integer as tick_count,
+        md5(coalesce(jsonb_agg(value - 'received_at' - 'capture_id' order by ordinality), '[]'::jsonb)::text) as payload_hash
+    from input i
+    cross join lateral jsonb_array_elements(i.ticks) with ordinality as item(value, ordinality)
+),
+validation as materialized (
+    select
+        count(*)::integer as tick_count,
+        coalesce(bool_and(
+            (value->>'quote')::numeric > 0
+            and (value->>'epoch')::bigint > 0
+            and (value->>'pip_size')::smallint between 0 and 10
+            and (value->>'last_digit')::smallint between 0 and 9
+            and (
+                ((value->>'last_digit')::smallint % 2 = 0 and value->>'parity' = 'even')
+                or ((value->>'last_digit')::smallint % 2 = 1 and value->>'parity' = 'odd')
+            )
+            and nullif(value->>'received_at', '') is not null
+        ), false) as valid
+    from input i
+    cross join lateral jsonb_array_elements(i.ticks) with ordinality as item(value, ordinality)
+),
+job as materialized (
+    select *
+    from public.even_odd_collection_jobs
+    where id = p_job_id and owner_user_id = p_owner_user_id
+    for update
+),
+existing as materialized (
+    select r.*
+    from public.even_odd_collection_batch_receipts r
+    join job j on j.id = r.job_id
+    where r.job_id = p_job_id and r.batch_id = p_batch_id
+),
+new_run as (
     insert into public.even_odd_collection_runs (
         id, market_symbol, status, requested_ticks, received_ticks,
         started_at, completed_at, metadata
-    ) values (
-        v_collection_id, v_job.market_symbol,
-        case when v_count >= 10 then 'completed' else 'partial' end,
-        greatest(10, v_count), v_count, now(), now(),
+    )
+    select
+        gen_random_uuid(),
+        j.market_symbol,
+        case when p.tick_count >= 10 then 'completed' else 'partial' end,
+        greatest(10, p.tick_count),
+        p.tick_count,
+        now(),
+        now(),
         jsonb_build_object(
             'capture_mode', 'browser_stream',
             'collector', 'authenticated_browser_deriv_public_websocket',
@@ -127,69 +98,123 @@ begin
             'batch_id', p_batch_id,
             'owner_user_id', p_owner_user_id
         )
-    );
-
-    for v_tick in select value from jsonb_array_elements(p_ticks)
-    loop
-        v_index := v_index + 1;
-        v_quote := (v_tick->>'quote')::numeric;
-        v_epoch := (v_tick->>'epoch')::bigint;
-        v_pip_size := (v_tick->>'pip_size')::smallint;
-        v_last_digit := (v_tick->>'last_digit')::smallint;
-        v_parity := v_tick->>'parity';
-        v_received_at := (v_tick->>'received_at')::timestamptz;
-
-        if v_quote <= 0 or v_epoch <= 0 or v_pip_size not between 0 and 10
-           or v_last_digit not between 0 and 9
-           or v_parity not in ('even', 'odd')
-           or v_parity <> case when v_last_digit % 2 = 0 then 'even' else 'odd' end
-           or v_received_at is null then
-            raise exception 'invalid normalized tick at batch index %', v_index using errcode = '22023';
-        end if;
-
-        insert into public.even_odd_ticks (
-            capture_id, collection_id, sequence_no, market_symbol,
-            tick_epoch, quote, pip_size, last_digit, parity,
-            deriv_tick_id, deriv_stream_id, capture_mode, received_at
-        ) values (
-            gen_random_uuid(), v_collection_id, v_index, v_job.market_symbol,
-            v_epoch, v_quote, v_pip_size, v_last_digit, v_parity,
-            nullif(v_tick->>'tick_id', ''),
-            nullif(v_tick->>'stream_id', ''),
-            'browser_stream', v_received_at
-        );
-    end loop;
-
-    v_received := v_job.received_ticks + v_count;
-    v_status := case when v_received = v_job.target_ticks then 'completed' else 'collecting' end;
-
-    update public.even_odd_collection_jobs
-       set received_ticks = v_received,
-           status = v_status,
-           started_at = coalesce(started_at, now()),
-           updated_at = now(),
-           completed_at = case when v_status = 'completed' then now() else null end
-     where id = p_job_id
-     returning * into v_job;
-
-    v_result := jsonb_build_object(
-        'job', to_jsonb(v_job),
-        'persisted_ticks', v_count,
-        'collection_id', v_collection_id,
-        'batch_id', p_batch_id,
-        'duplicate', false,
-        'live_only', true,
-        'provenance', 'browser_stream'
-    );
-
+    from job j
+    cross join payload p
+    cross join validation v
+    where not exists (select 1 from existing)
+      and j.status in ('queued', 'collecting')
+      and p.tick_count between 1 and 100
+      and v.valid
+      and v.tick_count = p.tick_count
+      and j.received_ticks + p.tick_count <= j.target_ticks
+    returning id, market_symbol
+),
+new_ticks as (
+    insert into public.even_odd_ticks (
+        capture_id, collection_id, sequence_no, market_symbol,
+        tick_epoch, quote, pip_size, last_digit, parity,
+        deriv_tick_id, deriv_stream_id, capture_mode, received_at
+    )
+    select
+        gen_random_uuid(),
+        nr.id,
+        item.ordinality::integer,
+        nr.market_symbol,
+        (item.value->>'epoch')::bigint,
+        (item.value->>'quote')::numeric,
+        (item.value->>'pip_size')::smallint,
+        (item.value->>'last_digit')::smallint,
+        item.value->>'parity',
+        nullif(item.value->>'tick_id', ''),
+        nullif(item.value->>'stream_id', ''),
+        'browser_stream',
+        (item.value->>'received_at')::timestamptz
+    from new_run nr
+    cross join input i
+    cross join lateral jsonb_array_elements(i.ticks) with ordinality as item(value, ordinality)
+    returning collection_id
+),
+new_tick_count as (
+    select count(*)::integer as tick_count from new_ticks
+),
+updated_job as (
+    update public.even_odd_collection_jobs j
+    set received_ticks = j.received_ticks + c.tick_count,
+        status = case when j.received_ticks + c.tick_count = j.target_ticks then 'completed' else 'collecting' end,
+        started_at = coalesce(j.started_at, now()),
+        updated_at = now(),
+        completed_at = case when j.received_ticks + c.tick_count = j.target_ticks then now() else null end
+    from new_run nr
+    cross join new_tick_count c
+    where j.id = p_job_id and c.tick_count > 0
+    returning j.*
+),
+receipt_insert as (
     insert into public.even_odd_collection_batch_receipts (
         job_id, batch_id, owner_user_id, collection_id, tick_count, payload_hash, response
-    ) values (
-        p_job_id, p_batch_id, p_owner_user_id, v_collection_id, v_count, v_payload_hash, v_result
-    );
-
-    return v_result;
-end;
+    )
+    select
+        p_job_id,
+        p_batch_id,
+        p_owner_user_id,
+        nr.id,
+        c.tick_count,
+        p.payload_hash,
+        jsonb_build_object(
+            'job', to_jsonb(u),
+            'persisted_ticks', c.tick_count,
+            'collection_id', nr.id,
+            'batch_id', p_batch_id,
+            'duplicate', false,
+            'live_only', true,
+            'provenance', 'browser_stream'
+        )
+    from updated_job u
+    cross join new_run nr
+    cross join new_tick_count c
+    cross join payload p
+    returning response
+),
+duplicate_response as (
+    select jsonb_build_object(
+        'job', to_jsonb(j),
+        'persisted_ticks', e.tick_count,
+        'collection_id', e.collection_id,
+        'batch_id', p_batch_id,
+        'duplicate', true,
+        'live_only', true,
+        'provenance', 'browser_stream'
+    ) as response
+    from existing e
+    cross join job j
+    cross join payload p
+    where e.payload_hash = p.payload_hash
+),
+error_response as (
+    select jsonb_build_object(
+        'error',
+        case
+            when p_job_id is null or p_owner_user_id is null or p_batch_id is null then 'job, owner and batch identifiers are required'
+            when not exists (select 1 from job) then 'collection job not found'
+            when exists (select 1 from existing) and exists (select 1 from existing e cross join payload p where e.payload_hash <> p.payload_hash) then 'batch_id was already used with a different payload'
+            when p.tick_count not between 1 and 100 then 'batch must contain between 1 and 100 ticks'
+            when not v.valid then 'batch contains invalid tick values'
+            when j.status not in ('queued', 'collecting') then 'collection job is no longer active'
+            when j.received_ticks + p.tick_count > j.target_ticks then 'batch would exceed the collection target'
+            else 'batch was not persisted'
+        end
+    ) as response
+    from payload p
+    cross join validation v
+    left join job j on true
+    where not exists (select 1 from duplicate_response)
+      and not exists (select 1 from receipt_insert)
+)
+select coalesce(
+    (select response from duplicate_response),
+    (select response from receipt_insert),
+    (select response from error_response)
+)
 $$;
 
 revoke all on function public.even_odd_persist_browser_tick_batch(uuid, uuid, uuid, jsonb)

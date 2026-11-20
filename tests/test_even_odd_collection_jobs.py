@@ -266,3 +266,55 @@ async def test_browser_tick_batch_calls_atomic_rpc_with_owner_and_stable_batch_i
     assert fake.rpc_payload["p_batch_id"] == str(batch_id)
     assert fake.rpc_payload["p_ticks"][0]["tick_id"] == "deriv-tick-1"
     assert fake.rpc_payload["p_ticks"][0]["stream_id"] == "subscription-1"
+
+
+@pytest.mark.asyncio
+async def test_browser_tick_batch_maps_rpc_batch_id_conflict_to_409(monkeypatch):
+    batch_id = UUID("00000000-0000-0000-0000-000000000445")
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return Response([{"id": JOB_ID, "market_symbol": "R_50"}])
+
+        async def post(self, *args, **kwargs):
+            return Response({"error": "batch_id was already used with a different payload"})
+
+    monkeypatch.setattr(collection_jobs, "_configuration", lambda: ("https://db.example", "secret"))
+    monkeypatch.setattr(collection_jobs.httpx, "AsyncClient", FakeClient)
+    request = collection_jobs.LiveTickBatchRequest(
+        batch_id=batch_id,
+        ticks=[{
+            "tick": {
+                "symbol": "R_50", "quote": "83.2081", "epoch": 1795037706,
+                "pip_size": 4, "id": "deriv-tick-1",
+            },
+            "subscription_id": "subscription-1",
+        }],
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await collection_jobs.persist_browser_tick_batch(UUID(JOB_ID), request, USER_ID)
+
+    assert error.value.status_code == 409
+    assert "different payload" in error.value.detail
