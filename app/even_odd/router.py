@@ -181,7 +181,7 @@ async def get_even_odd_history(
     to_epoch: int | None = Query(default=None, ge=1),
     collection_id: UUID | None = None,
 ) -> dict:
-    """Return a bounded, chronologically ordered snapshot of stored market ticks."""
+    """Return only live-captured observations in chronological order."""
     if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
         raise HTTPException(
             status_code=422,
@@ -205,7 +205,7 @@ async def get_even_odd_history(
     except EvenOddStorageError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Could not load historical ticks from the dedicated database.",
+            detail="Could not load live-captured ticks from the dedicated database.",
         ) from exc
 
     raw_rows = snapshot["rows"]
@@ -223,9 +223,10 @@ async def get_even_odd_history(
         "ordering": "tick_epoch_asc_then_id_asc",
         "rows": rows,
         "warning": (
-            "This canonical view excludes exact market fingerprints repeated "
-            "across collection runs. Raw records remain persisted and available "
-            "to the quality audit. This does not establish predictive edge."
+            "Only observations captured by the live Deriv subscription are included. "
+            "Potential same-second quote repeats are retained because timestamps and "
+            "quotes alone do not prove tick identity. Legacy historical imports are "
+            "excluded. This does not establish predictive edge."
         ),
     }
 
@@ -240,7 +241,7 @@ async def audit_even_odd_history(
     to_epoch: int | None = Query(default=None, ge=1),
     collection_id: UUID | None = None,
 ) -> dict:
-    """Audit structural integrity of a bounded historical market-data snapshot."""
+    """Audit structural integrity of the live-captured research dataset."""
     if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
         raise HTTPException(
             status_code=422,
@@ -268,7 +269,7 @@ async def audit_even_odd_history(
     except EvenOddStorageError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Could not load historical ticks for quality auditing.",
+            detail="Could not load live-captured ticks for quality auditing.",
         ) from exc
 
     return {
