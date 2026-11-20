@@ -343,7 +343,7 @@ async def test_start_research_run_persists_snapshot_and_quality(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, headers, json):
+        async def post(self, url, *, headers, json, params=None):
             FakeAsyncClient.payload = json
             return Response()
 
@@ -740,7 +740,7 @@ async def test_live_batch_persistence_marks_only_live_capture_and_keeps_tick_ids
             return False
 
         async def post(self, url, *, headers, json):
-            self.posts.append({"url": url, "json": json})
+            self.posts.append({"url": url, "json": json, "params": params})
             if url.endswith("/even_odd_collection_runs"):
                 return Response([{"id": collection_id}])
             return Response()
