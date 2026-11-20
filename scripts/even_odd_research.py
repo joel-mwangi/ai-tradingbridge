@@ -164,6 +164,7 @@ async def _run(args: argparse.Namespace) -> int:
         model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
             "test_metrics": experiment["test_metrics"],
+            "candidate_metrics": experiment["candidate_metrics"],
             "constant_baseline_metrics": experiment["constant_baseline_metrics"],
             "rolling_frequency_baseline_metrics": experiment[
                 "rolling_frequency_baseline_metrics"
