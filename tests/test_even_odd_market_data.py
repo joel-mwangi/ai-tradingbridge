@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.even_odd.collector import normalize_tick
+from app.even_odd.collector import normalize_tick, normalize_live_tick
 from app.even_odd.digit_engine import analyze_digits
 
 
@@ -58,6 +58,23 @@ def test_normalize_tick_uses_decimal_precision_without_float_rounding():
     assert tick["last_digit"] == 0
     assert tick["parity"] == "even"
     assert tick["stream_id"] == "x"
+
+
+def test_normalize_live_tick_keeps_tick_and_subscription_ids_separate():
+    tick = normalize_live_tick(
+        {
+            "symbol": "R_50",
+            "quote": "123.450",
+            "epoch": 1760000000,
+            "pip_size": 3,
+            "id": "tick-id-1",
+        },
+        "R_50",
+        subscription_id="subscription-id-1",
+    )
+    assert tick["tick_id"] == "tick-id-1"
+    assert tick["stream_id"] == "subscription-id-1"
+    assert tick["last_digit"] == 0
 
 
 @pytest.mark.parametrize(
