@@ -52,11 +52,27 @@ def replay_payout_aware_strategy(
         if float(quote["odd_payout"]) <= float(quote["odd_ask_price"]):
             raise ValueError("Odd payout must exceed its ask price.")
 
-    ordered_predictions = sorted(predictions, key=lambda item: int(item["target_epoch"]))
-    if len({int(item["target_epoch"]) for item in ordered_predictions}) != len(ordered_predictions):
-        raise ValueError("Prediction target epochs must be unique.")
+    ordered_predictions = sorted(
+        predictions,
+        key=lambda item: (int(item["target_epoch"]), int(item.get("target_index", 0))),
+    )
+    epoch_counts: dict[int, int] = {}
+    for item in ordered_predictions:
+        epoch = int(item["target_epoch"])
+        epoch_counts[epoch] = epoch_counts.get(epoch, 0) + 1
+    ambiguous_epochs = {epoch for epoch, count in epoch_counts.items() if count > 1}
+    ambiguous_timestamp_opportunities = sum(
+        count for count in epoch_counts.values() if count > 1
+    )
+    # Deriv spot_time is second-resolution. If several ticks share one second,
+    # a quote snapshot cannot safely be assigned to a unique tick; exclude the
+    # entire ambiguous second rather than reusing one quote for multiple ticks.
+    ordered_predictions = [
+        item for item in ordered_predictions
+        if int(item["target_epoch"]) not in ambiguous_epochs
+    ]
 
-    opportunities = len(ordered_predictions)
+    opportunities = len(predictions)
     quote_matched = 0
     uncertainty_eligible = 0
     trades = []
@@ -153,6 +169,8 @@ def replay_payout_aware_strategy(
     return {
         "status": "evaluated" if trade_count else "insufficient_quote_or_uncertainty_coverage",
         "opportunities": opportunities,
+        "unambiguous_timestamp_opportunities": len(ordered_predictions),
+        "ambiguous_timestamp_opportunities": ambiguous_timestamp_opportunities,
         "quote_matched_opportunities": quote_matched,
         "quote_coverage": quote_matched / opportunities if opportunities else 0.0,
         "uncertainty_eligible_opportunities": uncertainty_eligible,
