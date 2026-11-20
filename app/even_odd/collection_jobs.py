@@ -98,7 +98,28 @@ async def active_collection(
         )
         response.raise_for_status()
         rows = response.json()
-        return {"job": rows[0] if rows else None, "live_only": True}
+        job = rows[0] if rows else None
+        if job and job.get("status") in {"queued", "collecting"}:
+            timestamp = job.get("updated_at") or job.get("created_at")
+            if timestamp:
+                try:
+                    last_seen = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                    stale = (datetime.now(timezone.utc) - last_seen).total_seconds() > 60
+                except ValueError:
+                    stale = False
+                if stale:
+                    recovered = await client.patch(
+                        f"{url}/rest/v1/even_odd_collection_jobs",
+                        params={"id": f"eq.{job['id']}", "owner_user_id": f"eq.{owner}",
+                                "status": "in.(queued,collecting)"},
+                        headers=_headers(key, "return=representation"),
+                        json={"status": "failed", "last_error": "Browser heartbeat expired; collection was interrupted."},
+                    )
+                    recovered.raise_for_status()
+                    recovered_rows = recovered.json()
+                    if recovered_rows:
+                        job = recovered_rows[0]
+        return {"job": job, "live_only": True}
 
 
 @router.post("/{job_id}/stop")
