@@ -1,4 +1,8 @@
-        calibrate_model_probabilities(model, single_class)
+from app.even_odd.ml.model import (
+    predict_even_probability,
+    train_markov_transition_model,
+)
+
 
 def test_markov_transition_candidate_is_smoothed_and_uses_only_prior_state():
     rows = []
@@ -14,4 +18,6 @@ def test_markov_transition_candidate_is_smoothed_and_uses_only_prior_state():
     assert model["validated"] is False
     assert model["execution_authorized"] is False
     assert predict_even_probability(model, rows[-1]["features"]) > 0.9
-    assert 0 < predict_even_probability(model, {"w50_latest_parity_even": 0.0, "w50_even_rate": 0.5}) < 1
+    assert 0 < predict_even_probability(
+        model, {"w50_latest_parity_even": 0.0, "w50_even_rate": 0.5}
+    ) < 1
