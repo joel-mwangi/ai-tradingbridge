@@ -52,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--minimum-train-rows", type=int, default=500)
     parser.add_argument("--test-rows", type=int, default=250)
-    parser.add_argument("--maximum-folds", type=int, default=5)
+    parser.add_argument("--maximum-folds", type=int, default=8)
     return parser
 
 
@@ -119,9 +119,6 @@ async def _run(args: argparse.Namespace) -> int:
                 max_epochs=args.max_epochs,
                 tick_epochs=[int(row["tick_epoch"]) for row in rows],
             )
-            # Persist compact metrics and calibrated intervals, not every raw OOS row.
-            walk_forward.pop("out_of_sample_predictions", None)
-            walk_forward.pop("out_of_sample_predictions_by_model", None)
 
         payout_replay_by_model = {}
         try:
@@ -157,6 +154,12 @@ async def _run(args: argparse.Namespace) -> int:
                 }
                 for name in experiment["model_candidates"]
             }
+
+        if walk_forward:
+            # Keep full OOS predictions in memory for replay, but omit them from
+            # the persisted summary and console artifact.
+            walk_forward.pop("out_of_sample_predictions", None)
+            walk_forward.pop("out_of_sample_predictions_by_model", None)
 
         model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
