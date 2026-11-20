@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
-from app.even_odd.storage import _configuration, _headers, persist_live_tick_batch
+from app.even_odd.storage import _configuration, _headers
 from app.even_odd.collector import normalize_live_tick
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
@@ -144,6 +144,7 @@ async def stop_collection(
 
 
 class LiveTickBatchRequest(BaseModel):
+    batch_id: UUID
     ticks: list[dict] = Field(min_length=1, max_length=100)
 
 
@@ -153,60 +154,60 @@ async def persist_browser_tick_batch(
     request: LiveTickBatchRequest,
     owner: Annotated[UUID, Depends(_auth)],
 ) -> dict:
-    """Persist a bounded batch captured by the authenticated user's browser."""
+    """Atomically persist one idempotent browser-captured batch and job progress."""
     url, key = await _client()
-    timeout = httpx.Timeout(30.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    normalized_ticks: list[dict] = []
+    # Read the owner-scoped job only to validate the incoming Deriv payload's
+    # symbol. The database RPC repeats ownership/status/target checks under a
+    # row lock and is the sole authority for progress updates.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
         response = await client.get(
             f"{url}/rest/v1/even_odd_collection_jobs",
-            params={"select": "id,market_symbol,target_ticks,received_ticks,status",
-                    "id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}", "limit": "1"},
+            params={"select": "id,market_symbol", "id": f"eq.{job_id}",
+                    "owner_user_id": f"eq.{owner}", "limit": "1"},
             headers=_headers(key),
         )
         response.raise_for_status()
         rows = response.json()
         if not rows:
             raise HTTPException(status_code=404, detail="Collection job not found.")
-        job = rows[0]
-        if job["status"] not in {"queued", "collecting"}:
-            raise HTTPException(status_code=409, detail="Collection job is no longer active.")
-        symbol = str(job["market_symbol"])
-        normalized_ticks: list[dict] = []
+        symbol = str(rows[0]["market_symbol"])
         try:
             for item in request.ticks:
                 raw_tick = item.get("tick")
                 subscription = item.get("subscription_id")
                 normalized_ticks.append(
-                    normalize_live_tick(raw_tick, symbol, subscription_id=str(subscription) if subscription is not None else None)
+                    normalize_live_tick(
+                        raw_tick,
+                        symbol,
+                        subscription_id=str(subscription) if subscription is not None else None,
+                    )
                 )
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail="Batch contains an invalid Deriv tick.") from exc
-        previous = int(job.get("received_ticks") or 0)
-        target = int(job["target_ticks"])
-        if previous + len(request.ticks) > target:
-            raise HTTPException(status_code=409, detail="Batch would exceed the collection target.")
-        try:
-            await persist_live_tick_batch(
-                symbol=symbol, ticks=normalized_ticks, worker_id=f"browser:{owner}", job_id=str(job_id)
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail="Could not persist the live tick batch.") from exc
-        received = previous + len(request.ticks)
-        new_status = "completed" if received == target else "collecting"
-        patch = await client.patch(
-            f"{url}/rest/v1/even_odd_collection_jobs",
-            params={"id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}",
-                    "status": "in.(queued,collecting)"},
-            headers=_headers(key, "return=representation"),
-            json={"received_ticks": received, "status": new_status,
-                  **({"completed_at": datetime.now(timezone.utc).isoformat()} if new_status == "completed" else {})},
-        )
-        patch.raise_for_status()
-        updated = patch.json()
-        if not updated:
-            raise HTTPException(status_code=409, detail="Collection job changed while saving the batch.")
-        return {"job": updated[0], "persisted_ticks": len(normalized_ticks), "live_only": True}
 
+        rpc = await client.post(
+            f"{url}/rest/v1/rpc/even_odd_persist_browser_tick_batch",
+            headers=_headers(key),
+            json={
+                "p_job_id": str(job_id),
+                "p_owner_user_id": str(owner),
+                "p_batch_id": str(request.batch_id),
+                "p_ticks": normalized_ticks,
+            },
+        )
+        if rpc.status_code in {404, 409}:
+            raise HTTPException(status_code=409, detail="Collection job is no longer active or batch is invalid.")
+        if rpc.status_code == 400:
+            raise HTTPException(status_code=422, detail="Database rejected the tick batch.")
+        try:
+            rpc.raise_for_status()
+            result = rpc.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail="Could not atomically persist the live tick batch.") from exc
+        if not isinstance(result, dict) or not isinstance(result.get("job"), dict):
+            raise HTTPException(status_code=502, detail="Database returned an invalid batch receipt.")
+        return result
 
 @router.post("/{job_id}/heartbeat")
 async def collection_heartbeat(
