@@ -242,7 +242,7 @@ async def load_historical_ticks(
     from_epoch: int | None = None,
     to_epoch: int | None = None,
     collection_id: str | None = None,
-    capture_mode: str = "browser_stream",
+    capture_mode: str = "live_stream",
 ) -> dict[str, Any]:
     """Read the latest bounded history snapshot, returned in chronological order.
 
