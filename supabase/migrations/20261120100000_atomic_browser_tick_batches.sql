@@ -35,7 +35,7 @@ create or replace function public.even_odd_persist_browser_tick_batch(
 )
 returns jsonb
 language plpgsql
-security definer
+security invoker
 set search_path = public
 as $$
 declare
