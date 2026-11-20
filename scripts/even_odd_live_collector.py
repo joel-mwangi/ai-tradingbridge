@@ -151,6 +151,12 @@ async def run_worker() -> None:
                         last_heartbeat = now
 
         except asyncio.CancelledError:
+            try:
+                for symbol in symbols:
+                    await flush(symbol)
+                await heartbeat("stopped")
+            except EvenOddStorageError:
+                print("Live collector stopped but the final batch/heartbeat could not be persisted.")
             raise
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError, websockets.WebSocketException, EvenOddStorageError) as exc:
             try:
