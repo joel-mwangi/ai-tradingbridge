@@ -44,6 +44,7 @@ async def run_worker() -> None:
     last_tick_at: dict[str, datetime | None] = {symbol: None for symbol in symbols}
     last_heartbeat = 0.0
     backoff = 2
+    request_symbols = {req_id: symbol for req_id, symbol in enumerate(symbols, start=5100)}
 
     async def heartbeat(status: str, error: str | None = None) -> None:
         for symbol in symbols:
@@ -114,9 +115,14 @@ async def run_worker() -> None:
                         continue
                     symbol = payload.get("symbol")
                     if symbol not in buffers:
+                        symbol = request_symbols.get(message.get("req_id"))
+                    if symbol not in buffers:
                         continue
 
-                    normalized = normalize_tick(payload, symbol)
+                    try:
+                        normalized = normalize_tick({**payload, "symbol": symbol}, symbol)
+                    except ValueError:
+                        continue
                     # Deriv's optional tick.id is kept separately from the
                     # per-subscription stream identifier. Neither is assumed
                     # globally unique by this collector.
@@ -146,7 +152,11 @@ async def run_worker() -> None:
                     await flush(symbol)
             except EvenOddStorageError:
                 pass
-            await heartbeat("reconnecting", str(exc))
+            try:
+                await heartbeat("reconnecting", str(exc))
+            except EvenOddStorageError:
+                print("Live collector heartbeat could not reach the dedicated database.")
+            print(f"Live collector connection error: {exc}")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
