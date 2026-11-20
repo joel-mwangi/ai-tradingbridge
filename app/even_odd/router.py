@@ -621,7 +621,7 @@ async def forecast_next_parity(
             symbol=symbol,
             limit=max(windows),
         )
-        rows = snapshot["rows"]
+        rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=symbol)
         if (
             not quality["quality_passed"]
