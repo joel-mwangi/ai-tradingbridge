@@ -166,7 +166,7 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
             return False
 
         async def post(self, url, *, headers, json, params=None):
-            self.posts.append({"url": url, "json": json})
+            self.posts.append({"url": url, "json": json, "params": params})
             if url.endswith("/even_odd_collection_runs"):
                 return Response([{"id": collection_id}])
             return Response()
@@ -776,6 +776,7 @@ async def test_live_batch_persistence_marks_only_live_capture_and_keeps_tick_ids
     assert tick_payload["capture_mode"] == "live_stream"
     assert tick_payload["deriv_tick_id"] == "tick-123"
     assert tick_payload["deriv_stream_id"] == "subscription-456"
-    assert tick_payload["capture_id"] == tick["capture_id"] if "capture_id" in tick else tick_payload["capture_id"]
+    assert tick_payload["capture_id"]
     assert FakeAsyncClient.instances[1].posts[0]["url"].endswith("/even_odd_ticks")
+    assert FakeAsyncClient.instances[1].posts[0]["params"] == {"on_conflict": "capture_id"}
     assert FakeAsyncClient.instances[1].patches[0]["json"]["status"] == "partial"
