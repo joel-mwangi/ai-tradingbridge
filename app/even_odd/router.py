@@ -50,6 +50,7 @@ from app.even_odd.storage import (
     start_collection_run,
     start_even_odd_sequence,
     storage_is_configured,
+    save_payout_quote_snapshot,
 )
 
 
@@ -698,11 +699,24 @@ async def get_payout_quotes(
 ) -> dict:
     """Fetch read-only current Deriv DIGITEVEN and DIGITODD proposal prices."""
     try:
-        return await get_even_odd_payout_quote(
+        quote = await get_even_odd_payout_quote(
             symbol=symbol,
             currency=currency,
             stake=stake,
         )
+        quote["snapshot_persisted"] = False
+        if storage_is_configured():
+            try:
+                await save_payout_quote_snapshot(quote=quote)
+                quote["snapshot_persisted"] = True
+            except EvenOddStorageError:
+                quote["snapshot_warning"] = (
+                    "Live quote is available, but its historical snapshot could not be persisted. "
+                    "It will not be eligible for historical payout replay."
+                )
+        else:
+            quote["snapshot_warning"] = "Dedicated Database 2 is not configured; quote was not persisted."
+        return quote
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PayoutQuoteError as exc:
