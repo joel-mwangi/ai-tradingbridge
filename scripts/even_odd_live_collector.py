@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import websockets
 
-from app.even_odd.collector import DERIV_PUBLIC_WS_URL, normalize_tick
+from app.even_odd.collector import DERIV_PUBLIC_WS_URL, normalize_live_tick
 from app.even_odd.storage import (
     EvenOddStorageError,
     persist_live_tick_batch,
@@ -45,6 +45,8 @@ async def run_worker() -> None:
     last_heartbeat = 0.0
     backoff = 2
     request_symbols = {req_id: symbol for req_id, symbol in enumerate(symbols, start=5100)}
+    subscription_symbols: dict[str, str] = {}
+    subscription_ids: dict[str, str] = {}
 
     async def heartbeat(status: str, error: str | None = None) -> None:
         for symbol in symbols:
@@ -113,26 +115,30 @@ async def run_worker() -> None:
                     payload = message.get("tick")
                     if not isinstance(payload, dict):
                         continue
-                    symbol = payload.get("symbol")
-                    if symbol not in buffers:
-                        symbol = request_symbols.get(message.get("req_id"))
-                    if symbol not in buffers:
-                        continue
-
-                    try:
-                        normalized = normalize_tick({**payload, "symbol": symbol}, symbol)
-                    except ValueError:
-                        continue
-                    # Deriv's optional tick.id is kept separately from the
-                    # per-subscription stream identifier. Neither is assumed
-                    # globally unique by this collector.
-                    normalized["tick_id"] = normalized.pop("stream_id", None)
+                    req_symbol = request_symbols.get(message.get("req_id"))
                     subscription = message.get("subscription")
-                    normalized["stream_id"] = (
+                    subscription_id = (
                         str(subscription.get("id"))
                         if isinstance(subscription, dict) and subscription.get("id") is not None
                         else None
                     )
+                    symbol = payload.get("symbol") or req_symbol
+                    if symbol not in buffers and subscription_id:
+                        symbol = subscription_symbols.get(subscription_id)
+                    if symbol not in buffers:
+                        continue
+                    if subscription_id:
+                        subscription_symbols[subscription_id] = symbol
+                        subscription_ids[symbol] = subscription_id
+
+                    try:
+                        normalized = normalize_live_tick(
+                            {**payload, "symbol": symbol},
+                            symbol,
+                            subscription_id=subscription_ids.get(symbol),
+                        )
+                    except ValueError:
+                        continue
                     buffers[symbol].append(normalized)
                     last_tick_at[symbol] = datetime.now(timezone.utc)
 
