@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
-from app.even_odd.data_quality import (\n    canonicalize_overlapping_collection_ticks,\n    inspect_historical_ticks,\n)
+from app.even_odd.data_quality import (
+    canonicalize_overlapping_collection_ticks,
+    inspect_historical_ticks,
+)
 from app.even_odd.ml.features import build_next_tick_features
 from app.even_odd.ml.model import predict_even_probability
 from app.even_odd.ml.uncertainty import select_probability_interval
