@@ -54,7 +54,7 @@ Keep the process running while collecting. Stop it with Ctrl+C.
 ## Database migration
 
 Apply `supabase/migrations/20261120040000_even_odd_live_stream_only.sql` to Database 2 before starting the worker. The migration:
-- adds `capture_mode` to tick rows;
+- adds `capture_mode` and a unique ingestion `capture_id` to tick rows;
 - marks all existing rows as `historical` by default;
 - creates a service-role-only collector heartbeat table;
 - adds an index for live-captured observations.
@@ -63,6 +63,7 @@ The research read path filters to `capture_mode = 'live_stream'`. Existing histo
 
 ## Data integrity limits
 
+- Each received tick gets a stable capture ID so retrying a failed database batch does not insert it twice.
 - Deriv tick IDs and subscription IDs are stored separately when supplied.
 - No uniqueness assumption is made about optional tick IDs.
 - Repeated ticks with the same second and quote are retained; second-resolution timestamps are not sufficient to prove two observations are duplicates.
