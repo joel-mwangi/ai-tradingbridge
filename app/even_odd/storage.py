@@ -291,7 +291,7 @@ async def load_historical_ticks(
             snapshot_max_id = int(latest_rows[0]["id"])
             base_params: dict[str, str] = {
                 "select": (
-                    "id,collection_id,sequence_no,market_symbol,tick_epoch,quote,"
+                    "id,capture_id,collection_id,sequence_no,market_symbol,tick_epoch,quote,"
                     "pip_size,last_digit,parity,deriv_tick_id,deriv_stream_id,"
                     "capture_mode,received_at"
                 ),
