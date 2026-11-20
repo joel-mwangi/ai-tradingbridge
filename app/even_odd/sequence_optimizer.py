@@ -1,9 +1,9 @@
-"""Select a trade-sequence length from validated ML forecasts.
+"""Select a sequence length from validated ML forecasts and OOS survival evidence.
 
-This is a deterministic decision layer, not a trained ML model. A separately
-trained and validated model must supply one conditional forecast per potential
-trade. The optimizer refuses to recommend execution when model validation or
-forecast evidence is missing.
+The optimizer is a deterministic risk/policy layer, not a standalone trained
+sequence model. It combines conditional ML forecasts with fold-aware
+same-side opportunity-persistence bounds and realized payout replay evidence.
+It refuses to plan when any evidence gate is missing.
 """
 
 from dataclasses import dataclass
@@ -32,6 +32,8 @@ class CandidateTradeForecast:
     historical_oos_evidence_rows: int = 0
     historical_oos_positive_fold_rate: float = 0.0
     historical_oos_expected_value: float = 0.0
+    historical_oos_net_profit: float = 0.0
+    historical_oos_roi: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.trade_number) is not int or self.trade_number < 1:
@@ -80,12 +82,13 @@ class CandidateTradeForecast:
             or not 0 <= self.historical_oos_positive_fold_rate <= 1
         ):
             raise ValueError("historical_oos_positive_fold_rate must be a finite probability.")
-        if (
-            isinstance(self.historical_oos_expected_value, bool)
-            or not isinstance(self.historical_oos_expected_value, (int, float))
-            or not isfinite(self.historical_oos_expected_value)
+        for name, value in (
+            ("historical_oos_expected_value", self.historical_oos_expected_value),
+            ("historical_oos_net_profit", self.historical_oos_net_profit),
+            ("historical_oos_roi", self.historical_oos_roi),
         ):
-            raise ValueError("historical_oos_expected_value must be finite and numeric.")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+                raise ValueError(f"{name} must be finite and numeric.")
         if (
             type(self.signal_valid) is not bool
             or type(self.model_validated) is not bool
@@ -180,6 +183,8 @@ def select_sequence_length(
         if (
             forecast.historical_oos_positive_fold_rate < 0.6
             or forecast.historical_oos_expected_value <= 0
+            or forecast.historical_oos_net_profit <= 0
+            or forecast.historical_oos_roi <= 0
         ):
             stop_reason = "Historical out-of-sample payout performance is not consistently positive."
             break
