@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 
 import websockets
+from websockets.exceptions import WebSocketException
 
 from app.even_odd.collector import DERIV_PUBLIC_WS_URL, normalize_live_tick
 from app.even_odd.storage import (
@@ -158,7 +159,7 @@ async def run_worker() -> None:
             except EvenOddStorageError:
                 print("Live collector stopped but the final batch/heartbeat could not be persisted.")
             raise
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError, websockets.WebSocketException, EvenOddStorageError) as exc:
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError, WebSocketException, EvenOddStorageError) as exc:
             try:
                 for symbol in symbols:
                     await flush(symbol)
