@@ -54,7 +54,7 @@ def test_quality_audit_reports_duplicate_observations_without_dropping_rows():
     assert result["valid_rows"] == 2
     assert result["exact_market_observation_duplicates"] == 1
     assert result["quality_passed"] is False
-    assert "Raw records are retained" in result["duplicate_policy"]
+    assert "Raw historical records are retained" in result["duplicate_policy"]
 
 
 def test_quality_audit_detects_non_chronological_order():
