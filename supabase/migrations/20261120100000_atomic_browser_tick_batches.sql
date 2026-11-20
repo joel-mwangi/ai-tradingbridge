@@ -55,6 +55,7 @@ declare
     v_last_digit smallint;
     v_parity text;
     v_received_at timestamptz;
+    v_payload_hash text;
 begin
     if p_job_id is null or p_owner_user_id is null or p_batch_id is null then
         raise exception 'job, owner and batch identifiers are required' using errcode = '22023';
@@ -75,6 +76,12 @@ begin
         raise exception 'collection job not found' using errcode = 'P0002';
     end if;
 
+    -- Exclude backend-generated receive timestamps and random capture IDs:
+    -- those change when an identical raw browser batch is retried.
+    select md5(jsonb_agg(value - 'received_at' - 'capture_id' order by ordinality)::text)
+      into v_payload_hash
+      from jsonb_array_elements(p_ticks) with ordinality as item(value, ordinality);
+
     -- Idempotency is checked after taking the job lock so concurrent retries
     -- serialize and can only commit one receipt.
     select * into v_existing
@@ -84,7 +91,7 @@ begin
         if v_existing.owner_user_id <> p_owner_user_id then
             raise exception 'batch owner mismatch' using errcode = '42501';
         end if;
-        if v_existing.payload_hash <> md5(p_ticks::text) then
+        if v_existing.payload_hash <> v_payload_hash then
             raise exception 'batch_id was already used with a different payload' using errcode = '22023';
         end if;
         return jsonb_build_object(
@@ -178,7 +185,7 @@ begin
     insert into public.even_odd_collection_batch_receipts (
         job_id, batch_id, owner_user_id, collection_id, tick_count, payload_hash, response
     ) values (
-        p_job_id, p_batch_id, p_owner_user_id, v_collection_id, v_count, md5(p_ticks::text), v_result
+        p_job_id, p_batch_id, p_owner_user_id, v_collection_id, v_count, v_payload_hash, v_result
     );
 
     return v_result;
