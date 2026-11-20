@@ -1,4 +1,4 @@
-name: Even/Odd research experiment
+name: Even/Odd live-stream research experiment
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
           - 1HZ100V
           - 1HZ75V
       limit:
-        description: Maximum historical rows (the runner caps this at 5000)
+        description: Maximum live-captured observations used in research (runner caps at 5000)
         required: true
         default: "5000"
         type: choice
@@ -104,17 +104,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Collect enough historical ticks for the selected experiment
-        shell: bash
-        run: |
-          set -o pipefail
-          python -m scripts.even_odd_collect_history \
-            --symbol "$SYMBOL" \
-            --target-rows "$LIMIT" \
-            --batch-size 300 \
-            --timeout-seconds 80 \
-            --max-attempts 100 | tee even-odd-collection-report.json
-
       - name: Run chronological research and walk-forward evaluation
         shell: bash
         run: |
@@ -128,13 +117,12 @@ jobs:
             --max-epochs "$MAX_EPOCHS" \
             --walk-forward | tee even-odd-research-report.json
 
-      - name: Upload immutable collection and experiment reports
+      - name: Upload live-stream research report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: even-odd-research-${{ inputs.symbol }}-${{ github.run_id }}
           path: |
-            even-odd-collection-report.json
             even-odd-research-report.json
           if-no-files-found: ignore
           retention-days: 90
