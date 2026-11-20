@@ -34,6 +34,11 @@ def forecast(
         risk_budget_available=risk_budget_available,
         model_id=model_id,
         model_version=model_version,
+        opportunity_persistence_lower_bound=0.9,
+        opportunity_persistence_validated=True,
+        historical_oos_evidence_rows=500,
+        historical_oos_positive_fold_rate=0.8,
+        historical_oos_expected_value=0.12,
     )
 
 
@@ -201,3 +206,30 @@ def test_sequence_optimizer_rejects_insufficient_session_loss_budget():
     assert decision.approved is False
     assert decision.selected_trades == 0
     assert "loss budget" in decision.reason
+
+def test_sequence_optimizer_requires_historical_oos_payout_evidence():
+    decision = select_sequence_length([
+        forecast(1, historical_oos_evidence_rows=199),
+    ])
+    assert decision.selected_trades == 0
+    assert "Insufficient historical out-of-sample payout evidence" in decision.reason
+
+
+def test_sequence_optimizer_requires_validated_opportunity_persistence():
+    decision = select_sequence_length([
+        forecast(1, opportunity_persistence_validated=False),
+    ])
+    assert decision.selected_trades == 0
+    assert "persistence is not validated" in decision.reason
+
+
+def test_sequence_optimizer_adjusts_ev_by_conservative_persistence_bound():
+    decision = select_sequence_length([
+        forecast(1, opportunity_persistence_lower_bound=0.5),
+        forecast(2, opportunity_persistence_lower_bound=0.25),
+    ])
+    assert decision.selected_trades == 2
+    assert decision.persistence_lower_bound_by_trade == (0.5, 0.25)
+    assert decision.sequence_adjusted_conservative_ev_by_trade[1] == pytest.approx(
+        decision.conservative_ev_by_trade[1] * 0.25
+    )
