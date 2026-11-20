@@ -164,3 +164,5 @@ Configure only in the backend deployment:
 The Even/Odd storage adapter never falls back to the primary TradeBridge
 Supabase project. The dedicated project has RLS enabled and is accessible to
 the backend service role only.
+
+Sequence planning now also requires payout-replay evidence on the selected model: at least 200 historical OOS entries, at least five folds, positive replay net P&L and ROI, a positive-fold rate of at least 60%, and a validated same-side opportunity-persistence lower bound for each additional planned trade. The planner caps at seven and returns WAIT when any requirement is missing. It remains a planning upper bound, not an execution authorization.
