@@ -1,4 +1,3 @@
-import httpx
 import pytest
 
 from app.even_odd.storage import (
@@ -66,7 +65,7 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
             return [{"spot_time": 1795132800}]
 
     class Client:
-        call = None
+        last_call = None
 
         def __init__(self, **kwargs):
             pass
@@ -78,7 +77,7 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
             return False
 
         async def get(self, url, *, params, headers):
-            self.call = (url, params, headers)
+            Client.last_call = (url, params, headers)
             return Response()
 
     monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
@@ -91,7 +90,7 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
     )
 
     assert result == [{"spot_time": 1795132800}]
-    params = Client.call[1]
+    params = Client.last_call[1]
     assert params["market_symbol"] == "eq.R_50"
     assert params["currency"] == "eq.USD"
     assert params["stake"] == "eq.1.00"
