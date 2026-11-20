@@ -209,7 +209,7 @@ async def persist_browser_tick_batch(
             detail = str(result["error"])
             if "not found" in detail:
                 raise HTTPException(status_code=404, detail=detail)
-            if "no longer active" in detail or "already been used" in detail or "exceed" in detail:
+            if "no longer active" in detail or "already used" in detail or "exceed" in detail:
                 raise HTTPException(status_code=409, detail=detail)
             raise HTTPException(status_code=422, detail=detail)
         if not isinstance(result, dict) or not isinstance(result.get("job"), dict):
