@@ -18,6 +18,7 @@ create table if not exists public.even_odd_collection_batch_receipts (
     owner_user_id uuid not null,
     collection_id uuid not null references public.even_odd_collection_runs(id),
     tick_count integer not null check (tick_count between 1 and 100),
+    payload_hash text not null,
     response jsonb not null check (jsonb_typeof(response) = 'object'),
     created_at timestamptz not null default now(),
     primary key (job_id, batch_id)
@@ -83,7 +84,18 @@ begin
         if v_existing.owner_user_id <> p_owner_user_id then
             raise exception 'batch owner mismatch' using errcode = '42501';
         end if;
-        return v_existing.response || jsonb_build_object('duplicate', true);
+        if v_existing.payload_hash <> md5(p_ticks::text) then
+            raise exception 'batch_id was already used with a different payload' using errcode = '22023';
+        end if;
+        return jsonb_build_object(
+            'job', to_jsonb(v_job),
+            'persisted_ticks', v_existing.tick_count,
+            'collection_id', v_existing.collection_id,
+            'batch_id', p_batch_id,
+            'duplicate', true,
+            'live_only', true,
+            'provenance', 'browser_stream'
+        );
     end if;
 
     if v_job.status not in ('queued', 'collecting') then
@@ -164,9 +176,9 @@ begin
     );
 
     insert into public.even_odd_collection_batch_receipts (
-        job_id, batch_id, owner_user_id, collection_id, tick_count, response
+        job_id, batch_id, owner_user_id, collection_id, tick_count, payload_hash, response
     ) values (
-        p_job_id, p_batch_id, p_owner_user_id, v_collection_id, v_count, v_result
+        p_job_id, p_batch_id, p_owner_user_id, v_collection_id, v_count, md5(p_ticks::text), v_result
     );
 
     return v_result;
