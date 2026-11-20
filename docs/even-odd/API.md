@@ -59,15 +59,18 @@ snapshot boundary prevents concurrent inserts from shifting paged reads.
 | GET | `/even-odd/forecast?symbol=R_50&model_id=<uuid>` | Research-only next-parity forecast |
 | GET | `/even-odd/payouts?symbol=R_50&currency=USD&stake=1` | Read-only current Even/Odd Deriv proposal terms |
 
-The research runner is local, not a Vercel request:
+The research runner is local or hosted in GitHub Actions, not a Vercel request:
 
 ```powershell
 python -m scripts.even_odd_research --symbol R_50 --walk-forward
 ```
 
 It requires sufficient persisted history, audits data quality, trains and
-calibrates a candidate model, evaluates chronological holdout and expanding
-walk-forward folds, and persists the experiment and candidate artifact.
+calibrates logistic-regression and smoothed first-order parity Markov candidate
+families, evaluates a chronological holdout and expanding walk-forward folds,
+compares each family with constant and rolling-frequency baselines, and
+persists both candidate artifacts. Walk-forward confidence intervals for each
+fold use earlier OOS folds only; the first folds remain uncertainty-ineligible.
 Walk-forward output includes local calibration intervals and block-bootstrap
 log-loss comparisons against constant and rolling-frequency baselines.
 
