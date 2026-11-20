@@ -72,6 +72,7 @@ def test_normalize_live_tick_keeps_tick_and_subscription_ids_separate():
     )
     assert tick["tick_id"] == "tick-id-1"
     assert tick["stream_id"] == "subscription-id-1"
+    assert len(tick["capture_id"]) == 36
     assert tick["last_digit"] == 0
 
 
