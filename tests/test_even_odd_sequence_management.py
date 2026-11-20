@@ -48,8 +48,6 @@ def forecast(
         historical_oos_expected_value=historical_oos_expected_value,
         historical_oos_net_profit=historical_oos_net_profit,
         historical_oos_roi=historical_oos_roi,
-        historical_oos_net_profit=20.0,
-        historical_oos_roi=0.1,
     )
 
 
