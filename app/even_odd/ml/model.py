@@ -174,6 +174,60 @@ def train_logistic_model(
     }
 
 
+
+def train_markov_transition_model(train_rows: Sequence[dict]) -> dict:
+    """Fit a smoothed first-order parity transition model on training rows only.
+
+    This is a transparent statistical comparator to the multivariate logistic
+    model. It estimates P(next even | latest observed parity) with Beta(1, 1)
+    smoothing and never reads the target row when building its state.
+    """
+    if len(train_rows) < 20:
+        raise ValueError("At least 20 training rows are required.")
+    first_features = train_rows[0].get("features")
+    if not isinstance(first_features, dict) or not first_features:
+        raise ValueError("Every row must contain a non-empty features mapping.")
+    feature_names = sorted(first_features)
+    latest_candidates = [
+        name for name in feature_names
+        if name.startswith("w") and name.endswith("_latest_parity_even")
+    ]
+    if not latest_candidates:
+        raise ValueError("A latest-parity feature is required for the Markov model.")
+    latest_feature = max(
+        latest_candidates,
+        key=lambda name: int(name.split("_", 1)[0][1:]),
+    )
+    counts = {"0": {"even": 0, "total": 0}, "1": {"even": 0, "total": 0}}
+    for row in train_rows:
+        features = row.get("features")
+        label = row.get("target_parity")
+        if not isinstance(features, dict) or set(features) != set(feature_names):
+            raise ValueError("All rows must contain the same feature keys.")
+        if label not in {"even", "odd"}:
+            raise ValueError("Every target_parity must be even or odd.")
+        state = features[latest_feature]
+        if isinstance(state, bool) or not isinstance(state, (int, float)) or not isfinite(state) or state not in (0, 1):
+            raise ValueError("Latest parity state must be numeric 0 or 1.")
+        bucket = counts[str(int(state))]
+        bucket["total"] += 1
+        bucket["even"] += int(label == "even")
+    probabilities = {
+        state: (bucket["even"] + 1) / (bucket["total"] + 2)
+        for state, bucket in counts.items()
+    }
+    return {
+        "model_type": "laplace_smoothed_first_order_parity_markov",
+        "feature_names": feature_names,
+        "latest_parity_feature": latest_feature,
+        "transition_counts": counts,
+        "transition_probabilities": probabilities,
+        "training_rows": len(train_rows),
+        "calibrated": False,
+        "validated": False,
+        "execution_authorized": False,
+    }
+
 def calibrate_model_probabilities(
     model: dict,
     calibration_rows: Sequence[dict],
@@ -247,21 +301,30 @@ def predict_even_probability(
     required = model.get("feature_names")
     if not isinstance(features, dict) or not isinstance(required, list) or set(features) != set(required):
         raise ValueError("Prediction features do not match the trained model schema.")
-    means = model["means"]
-    scales = model["scales"]
-    weights = model["weights"]
-    if not (len(required) == len(means) == len(scales) == len(weights)):
-        raise ValueError("Trained model parameter dimensions are inconsistent.")
+    if model.get("model_type") == "laplace_smoothed_first_order_parity_markov":
+        state_feature = model.get("latest_parity_feature")
+        if state_feature not in features:
+            raise ValueError("Markov model state feature is missing.")
+        state = features[state_feature]
+        if isinstance(state, bool) or not isinstance(state, (int, float)) or not isfinite(state) or state not in (0, 1):
+            raise ValueError("Markov model state must be numeric 0 or 1.")
+        probability = float(model["transition_probabilities"][str(int(state))])
+    else:
+        means = model["means"]
+        scales = model["scales"]
+        weights = model["weights"]
+        if not (len(required) == len(means) == len(scales) == len(weights)):
+            raise ValueError("Trained model parameter dimensions are inconsistent.")
 
-    score = float(model["intercept"])
-    for index, name in enumerate(required):
-        value = features[name]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
-            raise ValueError("Prediction features must be finite numeric values.")
-        if not isfinite(means[index]) or not isfinite(scales[index]) or scales[index] <= 0:
-            raise ValueError("Trained model scaling parameters are invalid.")
-        score += weights[index] * ((float(value) - means[index]) / scales[index])
-    probability = _sigmoid(score)
+        score = float(model["intercept"])
+        for index, name in enumerate(required):
+            value = features[name]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+                raise ValueError("Prediction features must be finite numeric values.")
+            if not isfinite(means[index]) or not isfinite(scales[index]) or scales[index] <= 0:
+                raise ValueError("Trained model scaling parameters are invalid.")
+            score += weights[index] * ((float(value) - means[index]) / scales[index])
+        probability = _sigmoid(score)
     calibration = model.get("calibration") if apply_calibration else None
     if calibration:
         epsilon = 1e-12
