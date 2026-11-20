@@ -14,6 +14,7 @@ from app.even_odd.ml.model import (
 from app.even_odd.ml.uncertainty import (
     bootstrap_log_loss_improvement,
     estimate_local_probability_interval,
+    select_probability_interval,
 )
 from app.even_odd.ml.walk_forward import (
     chronological_research_split,
@@ -125,9 +126,17 @@ def run_walk_forward_evaluation(
     l2: float = 0.01,
     max_epochs: int = 100,
     patience: int = 15,
+    tick_epochs: Sequence[int] | None = None,
 ) -> dict:
     """Evaluate multiple candidate families on expanding, non-overlapping future blocks."""
     rows = build_supervised_rows(digits, windows=windows)
+    if tick_epochs is not None:
+        if len(tick_epochs) != len(digits) or any(type(epoch) is not int or epoch <= 0 for epoch in tick_epochs):
+            raise ValueError("tick_epochs must contain one positive integer epoch per digit.")
+        if list(tick_epochs) != sorted(tick_epochs):
+            raise ValueError("tick_epochs must be chronological.")
+        for row in rows:
+            row["target_epoch"] = tick_epochs[row["target_index"]]
     folds = expanding_walk_forward_splits(
         rows, minimum_train_rows=minimum_train_rows,
         test_rows=test_rows, maximum_folds=maximum_folds,
@@ -158,6 +167,15 @@ def run_walk_forward_evaluation(
             name: [predict_even_probability(model, row["features"]) for row in test_partition]
             for name, model in candidates.items()
         }
+        prior_intervals = {
+            name: [
+                estimate_local_probability_interval(
+                    oos_by_model[name], target_probability=target_probability,
+                )
+                for target_probability in (0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)
+            ] if oos_by_model[name] else []
+            for name in candidates
+        }
         constant = [0.5] * len(test_partition)
         rolling = [row["features"][rolling_key] for row in test_partition]
         all_actual.extend(actual)
@@ -165,17 +183,32 @@ def run_walk_forward_evaluation(
         all_rolling.extend(rolling)
         for name in candidates:
             all_probabilities[name].extend(probabilities[name])
-            oos_by_model[name].extend([
-                {
+            new_predictions = []
+            for row, probability in zip(test_partition, probabilities[name]):
+                interval = (
+                    select_probability_interval(
+                        prior_intervals[name], target_probability=probability,
+                    ) if prior_intervals[name] else {
+                        "validated": False, "lower_probability": None,
+                        "upper_probability": None,
+                        "reason": "No prior out-of-sample calibration folds are available.",
+                    }
+                )
+                prediction = {
                     "target_index": row["target_index"],
                     "fold": fold_number,
                     "probability_even": probability,
                     "constant_probability": 0.5,
                     "rolling_probability": row["features"][rolling_key],
                     "actual_parity": row["target_parity"],
+                    "uncertainty_validated": interval.get("validated") is True,
+                    "lower_even_probability": interval.get("lower_probability"),
+                    "upper_even_probability": interval.get("upper_probability"),
                 }
-                for row, probability in zip(test_partition, probabilities[name])
-            ])
+                if "target_epoch" in row:
+                    prediction["target_epoch"] = row["target_epoch"]
+                new_predictions.append(prediction)
+            oos_by_model[name].extend(new_predictions)
         fold_reports.append({
             "fold": fold_number,
             "training_rows": len(train_partition),
