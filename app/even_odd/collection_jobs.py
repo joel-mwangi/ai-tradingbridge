@@ -7,11 +7,11 @@ from typing import Annotated
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
-from app.even_odd.storage import _configuration, _headers, EvenOddStorageError
+from app.even_odd.storage import _configuration, _headers
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
 bearer = HTTPBearer(auto_error=False)
@@ -71,6 +71,8 @@ async def start_collection(
             json={"owner_user_id": str(owner), "market_symbol": request.symbol,
                   "target_ticks": request.target_ticks, "status": "queued"},
         )
+        if created.status_code == 409:
+            raise HTTPException(status_code=409, detail="A collection is already active for this market.")
         created.raise_for_status()
         rows = created.json()
         if not isinstance(rows, list) or not rows:
