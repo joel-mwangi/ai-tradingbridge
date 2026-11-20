@@ -69,6 +69,7 @@ async def _run_job(job: dict, client: httpx.AsyncClient, url: str, key: str) -> 
                     rows = state.json()
                     if not rows or rows[0]["status"] != "collecting":
                         break
+                    await _patch_job(client, url, key, job_id, {})
                     continue
 
                 msg = json.loads(raw)
@@ -103,6 +104,7 @@ async def _run_job(job: dict, client: httpx.AsyncClient, url: str, key: str) -> 
                     rows = state.json()
                     if not rows or rows[0]["status"] != "collecting":
                         break
+                    await _patch_job(client, url, key, job_id, {})
 
         if batch:
             await persist_live_tick_batch(symbol=symbol, ticks=batch, worker_id=WORKER_ID)
