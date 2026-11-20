@@ -17,3 +17,9 @@ def test_live_collector_rejects_empty_market_list(monkeypatch):
     monkeypatch.setenv("EVEN_ODD_LIVE_SYMBOLS", " , ")
     with pytest.raises(ValueError, match="at least one"):
         configured_symbols()
+
+
+def test_live_collector_rejects_invalid_market_symbol(monkeypatch):
+    monkeypatch.setenv("EVEN_ODD_LIVE_SYMBOLS", "R_50;DROP_TABLE")
+    with pytest.raises(ValueError, match="invalid Deriv symbol"):
+        configured_symbols()
