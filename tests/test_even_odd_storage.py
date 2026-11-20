@@ -191,7 +191,8 @@ async def test_persist_collection_uses_collection_start_and_stream_id(monkeypatc
     tick_payload = finish_client.posts[0]["json"][0]
     assert run_payload["started_at"] == started_at.isoformat()
     assert tick_payload["deriv_stream_id"] == "deriv-stream-abc"
-    assert "deriv_tick_id" not in tick_payload
+    assert tick_payload["deriv_tick_id"] is None
+    assert tick_payload["capture_mode"] == "historical"
     assert finish_client.patches[0]["json"]["status"] == "completed"
 
 
@@ -274,6 +275,7 @@ async def test_load_historical_ticks_uses_stable_snapshot_and_paginates(monkeypa
     assert len(client.calls) == 3
     data_call = client.calls[1]
     assert data_call["params"]["market_symbol"] == "eq.R_50"
+    assert data_call["params"]["capture_mode"] == "eq.live_stream"
     assert data_call["params"]["id"] == "lte.1002"
     assert data_call["params"]["order"] == "tick_epoch.desc,id.desc"
     assert data_call["params"]["and"] == (
