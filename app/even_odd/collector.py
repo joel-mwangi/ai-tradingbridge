@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 
 DERIV_PUBLIC_WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
@@ -75,4 +76,7 @@ def normalize_live_tick(
     normalized = normalize_tick(payload, expected_symbol)
     normalized["tick_id"] = normalized.pop("stream_id", None)
     normalized["stream_id"] = str(subscription_id) if subscription_id is not None else None
+    # Stable across retries because the worker retains this normalized object
+    # until the database confirms the batch.
+    normalized["capture_id"] = str(uuid4())
     return normalized
