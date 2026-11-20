@@ -253,31 +253,76 @@ def test_collect_endpoint_marks_zero_tick_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_collector_retains_valid_ticks_when_deriv_feed_errors(monkeypatch):
+async def test_collector_requests_and_normalizes_historical_tick_batch(monkeypatch):
+    import json
+    from app.even_odd.collector import collect_ticks
+
+    sent = []
+    response = {
+        "msg_type": "history",
+        "req_id": 4101,
+        "pip_size": 3,
+        "history": {
+            "prices": [f"123.45{i}" for i in range(10)],
+            "times": [1760000000 + i for i in range(10)],
+        },
+    }
+
+    class FakeSocket:
+        async def send(self, payload):
+            sent.append(json.loads(payload))
+
+        async def recv(self):
+            return json.dumps(response)
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return FakeSocket()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.even_odd.collector.websockets.connect",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+
+    ticks = await collect_ticks("R_50", 10, 5)
+    assert len(ticks) == 10
+    assert ticks[0]["epoch"] == 1760000000
+    assert ticks[-1]["epoch"] == 1760000009
+    assert ticks[0]["quote"] == "123.450"
+    assert ticks[0]["last_digit"] == 0
+    assert sent == [{
+        "ticks_history": "R_50",
+        "count": 10,
+        "end": "latest",
+        "style": "ticks",
+        "req_id": 4101,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_collector_preserves_partial_historical_response(monkeypatch):
     import json
     from app.even_odd.collector import TickCollectionError, collect_ticks
 
-    messages = [
-        json.dumps({
-            "msg_type": "tick",
-            "tick": {
-                "symbol": "R_50",
-                "quote": f"123.45{i}",
-                "epoch": 1760000000 + i,
-                "pip_size": 3,
-                "id": "stream-123",
-            },
-        })
-        for i in range(3)
-    ]
-    messages.append(json.dumps({"msg_type": "error", "error": {"message": "upstream detail"}}))
+    response = {
+        "msg_type": "history",
+        "req_id": 4101,
+        "pip_size": 3,
+        "history": {
+            "prices": ["123.450", "123.451", "123.452"],
+            "times": [1760000000, 1760000001, 1760000002],
+        },
+    }
 
     class FakeSocket:
         async def send(self, payload):
             return None
 
         async def recv(self):
-            return messages.pop(0)
+            return json.dumps(response)
 
     class FakeConnection:
         async def __aenter__(self):
@@ -298,32 +343,15 @@ async def test_collector_retains_valid_ticks_when_deriv_feed_errors(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_collector_retains_valid_ticks_when_timeout_occurs(monkeypatch):
+async def test_collector_reports_timeout_without_fabricating_partial_ticks(monkeypatch):
     import asyncio
-    import json
     from app.even_odd.collector import TickCollectionError, collect_ticks
-
-    messages = [
-        json.dumps({
-            "msg_type": "tick",
-            "tick": {
-                "symbol": "R_50",
-                "quote": f"123.45{i}",
-                "epoch": 1760000000 + i,
-                "pip_size": 3,
-                "id": "stream-123",
-            },
-        })
-        for i in range(4)
-    ]
 
     class FakeSocket:
         async def send(self, payload):
             return None
 
         async def recv(self):
-            if messages:
-                return messages.pop(0)
             raise asyncio.TimeoutError()
 
     class FakeConnection:
@@ -338,9 +366,8 @@ async def test_collector_retains_valid_ticks_when_timeout_occurs(monkeypatch):
         lambda *args, **kwargs: FakeConnection(),
     )
 
-    with pytest.raises(TickCollectionError) as error:
+    with pytest.raises(TickCollectionError, match="history response arrived"):
         await collect_ticks("R_50", 10, 5)
-    assert len(error.value.ticks) == 4
 
 
 
