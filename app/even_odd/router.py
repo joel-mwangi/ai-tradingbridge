@@ -11,7 +11,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.even_odd.collector import TickCollectionError, collect_ticks
 from app.even_odd.data_quality import (
     canonicalize_overlapping_collection_ticks,
     inspect_historical_ticks,
@@ -41,8 +40,6 @@ from app.even_odd.storage import (
     EvenOddPolicyError,
     EvenOddStorageError,
     create_even_odd_session,
-    fail_collection_run,
-    finish_collection_run,
     get_even_odd_model,
     get_even_odd_sequence_state,
     get_even_odd_session_state,
@@ -50,7 +47,6 @@ from app.even_odd.storage import (
     list_even_odd_models,
     list_even_odd_research_runs,
     record_even_odd_settlement,
-    start_collection_run,
     start_even_odd_sequence,
     storage_is_configured,
     save_payout_quote_snapshot,
