@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
-from app.even_odd.storage import _configuration, _headers
+from app.even_odd.storage import _configuration, _headers, persist_live_tick_batch
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
 bearer = HTTPBearer(auto_error=False)
@@ -118,3 +118,65 @@ async def stop_collection(
         if not rows:
             raise HTTPException(status_code=404, detail="Active collection job not found.")
         return {"job": rows[0], "stop_requested": True, "order_execution_enabled": False}
+
+
+class LiveTickBatchRequest(BaseModel):
+    ticks: list[dict] = Field(min_length=1, max_length=100)
+
+
+@router.post("/{job_id}/batch")
+async def persist_browser_tick_batch(
+    job_id: UUID,
+    request: LiveTickBatchRequest,
+    owner: Annotated[UUID, Depends(_auth)],
+) -> dict:
+    """Persist a bounded batch captured by the authenticated user's browser."""
+    url, key = await _client()
+    timeout = httpx.Timeout(30.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(
+            f"{url}/rest/v1/even_odd_collection_jobs",
+            params={"select": "id,market_symbol,target_ticks,received_ticks,status",
+                    "id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}", "limit": "1"},
+            headers=_headers(key),
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Collection job not found.")
+        job = rows[0]
+        if job["status"] not in {"queued", "collecting"}:
+            raise HTTPException(status_code=409, detail="Collection job is no longer active.")
+        symbol = str(job["market_symbol"])
+        for tick in request.ticks:
+            if tick.get("symbol") != symbol:
+                raise HTTPException(status_code=422, detail="Tick market does not match the collection job.")
+            if not isinstance(tick.get("last_digit"), int) or tick["last_digit"] not in range(10):
+                raise HTTPException(status_code=422, detail="Tick contains an invalid last digit.")
+            if not isinstance(tick.get("epoch"), int) or tick["epoch"] <= 0:
+                raise HTTPException(status_code=422, detail="Tick contains an invalid epoch.")
+        previous = int(job.get("received_ticks") or 0)
+        target = int(job["target_ticks"])
+        if previous + len(request.ticks) > target:
+            raise HTTPException(status_code=409, detail="Batch would exceed the collection target.")
+        try:
+            await persist_live_tick_batch(
+                symbol=symbol, ticks=request.ticks, worker_id=f"browser:{owner}", job_id=str(job_id)
+            )
+        except (ValueError, Exception) as exc:
+            raise HTTPException(status_code=502, detail="Could not persist the live tick batch.") from exc
+        received = previous + len(request.ticks)
+        new_status = "completed" if received == target else "collecting"
+        patch = await client.patch(
+            f"{url}/rest/v1/even_odd_collection_jobs",
+            params={"id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}",
+                    "status": "in.(queued,collecting)"},
+            headers=_headers(key, "return=representation"),
+            json={"received_ticks": received, "status": new_status,
+                  **({"completed_at": datetime.now(timezone.utc).isoformat()} if new_status == "completed" else {})},
+        )
+        patch.raise_for_status()
+        updated = patch.json()
+        if not updated:
+            raise HTTPException(status_code=409, detail="Collection job changed while saving the batch.")
+        return {"job": updated[0], "persisted_ticks": len(request.ticks), "live_only": True}
