@@ -167,7 +167,7 @@ def replay_payout_aware_strategy(
         "roi_on_staked": net_profit / total_staked if total_staked else None,
         "gross_profit": gross_wins,
         "gross_loss": gross_losses,
-        "profit_factor": gross_wins / gross_losses if gross_losses else (None if not gross_wins else float("inf")),
+        "profit_factor": gross_wins / gross_losses if gross_losses else None,
         "maximum_drawdown": max_drawdown if trade_count else None,
         "average_conservative_expected_value": sum(expected_values) / trade_count if trade_count else None,
         "minimum_trades_for_evidence": minimum_trades_for_evidence,
