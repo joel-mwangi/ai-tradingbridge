@@ -67,6 +67,17 @@ async def _run(args: argparse.Namespace) -> int:
             limit=args.limit,
         )
         raw_rows = snapshot["rows"]
+        if not raw_rows:
+            print(json.dumps({
+                "status": "blocked",
+                "reason": (
+                    "No live-captured observations are available yet. Start the "
+                    "always-on Deriv live collector and wait for data to accumulate."
+                ),
+                "historical_imports_enabled": False,
+                "order_execution_enabled": False,
+            }, indent=2))
+            return 2
         canonical = canonicalize_overlapping_collection_ticks(raw_rows)
         rows = canonical["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=args.symbol)
