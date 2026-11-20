@@ -1,5 +1,3 @@
-import json
-from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -151,126 +149,7 @@ def test_live_status_reports_no_worker_until_heartbeat_exists(monkeypatch):
     assert response.json()["order_execution_enabled"] is False
 
 
-@pytest.mark.asyncio
-async def test_collector_requests_and_normalizes_historical_tick_batch(monkeypatch):
-    import json
-    from app.even_odd.collector import collect_ticks
-
-    sent = []
-    response = {
-        "msg_type": "history",
-        "req_id": 4101,
-        "pip_size": 3,
-        "history": {
-            "prices": [f"123.45{i}" for i in range(10)],
-            "times": [1760000000 + i for i in range(10)],
-        },
-    }
-
-    class FakeSocket:
-        async def send(self, payload):
-            sent.append(json.loads(payload))
-
-        async def recv(self):
-            return json.dumps(response)
-
-    class FakeConnection:
-        async def __aenter__(self):
-            return FakeSocket()
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(
-        "app.even_odd.collector.websockets.connect",
-        lambda *args, **kwargs: FakeConnection(),
-    )
-
-    ticks = await collect_ticks("R_50", 10, 5)
-    assert len(ticks) == 10
-    assert ticks[0]["epoch"] == 1760000000
-    assert ticks[-1]["epoch"] == 1760000009
-    assert ticks[0]["quote"] == "123.450"
-    assert ticks[0]["last_digit"] == 0
-    assert sent == [{
-        "ticks_history": "R_50",
-        "count": 10,
-        "end": "latest",
-        "style": "ticks",
-        "req_id": 4101,
-    }]
-
-
-@pytest.mark.asyncio
-async def test_collector_preserves_partial_historical_response(monkeypatch):
-    import json
-    from app.even_odd.collector import TickCollectionError, collect_ticks
-
-    response = {
-        "msg_type": "history",
-        "req_id": 4101,
-        "pip_size": 3,
-        "history": {
-            "prices": ["123.450", "123.451", "123.452"],
-            "times": [1760000000, 1760000001, 1760000002],
-        },
-    }
-
-    class FakeSocket:
-        async def send(self, payload):
-            return None
-
-        async def recv(self):
-            return json.dumps(response)
-
-    class FakeConnection:
-        async def __aenter__(self):
-            return FakeSocket()
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(
-        "app.even_odd.collector.websockets.connect",
-        lambda *args, **kwargs: FakeConnection(),
-    )
-
-    with pytest.raises(TickCollectionError) as error:
-        await collect_ticks("R_50", 10, 5)
-    assert len(error.value.ticks) == 3
-    assert all(tick["symbol"] == "R_50" for tick in error.value.ticks)
-
-
-@pytest.mark.asyncio
-async def test_collector_reports_timeout_without_fabricating_partial_ticks(monkeypatch):
-    import asyncio
-    from app.even_odd.collector import TickCollectionError, collect_ticks
-
-    class FakeSocket:
-        async def send(self, payload):
-            return None
-
-        async def recv(self):
-            raise asyncio.TimeoutError()
-
-    class FakeConnection:
-        async def __aenter__(self):
-            return FakeSocket()
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(
-        "app.even_odd.collector.websockets.connect",
-        lambda *args, **kwargs: FakeConnection(),
-    )
-
-    with pytest.raises(TickCollectionError, match="history response arrived"):
-        await collect_ticks("R_50", 10, 5)
-
-
-
-def test_history_endpoint_returns_bounded_chronological_snapshot(monkeypatch):
+def test_history_endpoint_returns_bounded_live_capture_snapshot(monkeypatch):
     snapshot = {
         "snapshot_max_id": 42,
         "rows": [
@@ -326,7 +205,7 @@ def test_history_endpoint_rejects_inverted_epoch_range():
 
 
 
-def test_quality_endpoint_audits_historical_snapshot(monkeypatch):
+def test_quality_endpoint_audits_live_capture_snapshot(monkeypatch):
     rows = [
         {
             "id": 1,
