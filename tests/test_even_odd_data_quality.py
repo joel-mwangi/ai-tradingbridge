@@ -1,6 +1,9 @@
 import pytest
 
-from app.even_odd.data_quality import (\n    canonicalize_overlapping_collection_ticks,\n    inspect_historical_ticks,\n)
+from app.even_odd.data_quality import (
+    canonicalize_overlapping_collection_ticks,
+    inspect_historical_ticks,
+)
 
 
 def make_row(*, row_id=1, epoch=1760000000, digit=2, quote="123.452", parity="even", collection="run-a"):
