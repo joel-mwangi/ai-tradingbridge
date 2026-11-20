@@ -829,6 +829,12 @@ async def plan_adaptive_sequence(
         metrics = model.get("metrics") or {}
         walk_forward = metrics.get("walk_forward") or {}
         calibration_intervals = walk_forward.get("calibration_intervals") or []
+        payout_replay = metrics.get("payout_replay") or {}
+        sequence_persistence = payout_replay.get("sequence_persistence_by_horizon") or {}
+        historical_oos_evidence_rows = int(payout_replay.get("entry_count") or 0)
+        historical_oos_positive_fold_rate = float(payout_replay.get("positive_fold_rate") or 0.0)
+        historical_oos_expected_value = float(payout_replay.get("average_conservative_expected_value") or 0.0)
+
 
         observations: list[EntryObservation] = []
         entry_policy = EntryPolicy(minimum_sample_size=max(windows))
@@ -911,6 +917,21 @@ async def plan_adaptive_sequence(
                 and selected_side["edge_over_break_even"] >= entry_policy.minimum_edge_over_break_even
                 and selected_side["conservative_expected_value"] > entry_policy.minimum_conservative_expected_value
             )
+            persistence_entry = (
+                {"validated": True, "lower_confidence_bound_90": 1.0, "trials": historical_oos_evidence_rows}
+                if trade_number == 1
+                else sequence_persistence.get(str(trade_number - 1), {})
+            )
+            persistence_validated = (
+                persistence_entry.get("validated") is True
+                and payout_replay.get("evidence_sample_sufficient") is True
+                and historical_oos_positive_fold_rate >= 0.6
+                and historical_oos_expected_value > 0
+            )
+            persistence_lower_bound = (
+                float(persistence_entry.get("lower_confidence_bound_90") or 0.0)
+                if persistence_validated else 0.0
+            )
             forecasts.append(CandidateTradeForecast(
                 trade_number=trade_number,
                 win_probability=selected_side["win_probability"],
@@ -923,6 +944,11 @@ async def plan_adaptive_sequence(
                 risk_budget_available=risk_budget_available,
                 model_id=model_id,
                 model_version=request.model_version,
+                opportunity_persistence_lower_bound=persistence_lower_bound,
+                opportunity_persistence_validated=persistence_validated,
+                historical_oos_evidence_rows=historical_oos_evidence_rows,
+                historical_oos_positive_fold_rate=historical_oos_positive_fold_rate,
+                historical_oos_expected_value=historical_oos_expected_value,
             ))
             observations.append(EntryObservation(
                 tick_row_id=persisted_tick["id"],
@@ -957,6 +983,14 @@ async def plan_adaptive_sequence(
                 "edge_over_break_even": selected_side["edge_over_break_even"],
                 "uncertainty_validated": uncertainty_validated,
                 "signal_valid": signal_valid,
+                "opportunity_persistence_lower_bound": persistence_lower_bound,
+                "opportunity_persistence_validated": persistence_validated,
+                "historical_oos_evidence_rows": historical_oos_evidence_rows,
+                "historical_oos_positive_fold_rate": historical_oos_positive_fold_rate,
+                "historical_oos_expected_value": historical_oos_expected_value,
+                "persistence_adjusted_conservative_ev": (
+                    persistence_lower_bound * selected_side["conservative_expected_value"]
+                ),
             })
 
         if len(observations) < 3:
@@ -992,19 +1026,22 @@ async def plan_adaptive_sequence(
             "max_allowed_trades": decision.max_allowed_trades,
             "expected_value_by_trade": list(decision.expected_value_by_trade),
             "conservative_ev_by_trade": list(decision.conservative_ev_by_trade),
+            "sequence_adjusted_conservative_ev_by_trade": list(decision.sequence_adjusted_conservative_ev_by_trade),
+            "persistence_lower_bound_by_trade": list(decision.persistence_lower_bound_by_trade),
             "model_id": model_id,
             "model_version": request.model_version,
             "session_id": str(request.session_id),
-            "plan_basis": "recent_persisted_opportunity_persistence_proxy",
+            "plan_basis": "walk_forward_oos_opportunity_persistence_and_payout_replay",
             "plan_reason": decision.reason,
             "forecasts": forecast_details,
             "entry_check": entry_result,
             "payout_quote": payout_quote,
             "warning": (
-                "This plan applies the current payout quote to recent persisted "
-                "opportunities as a persistence proxy; it is not a historical payout "
-                "replay or a trained forward sequence-survival forecast. It is an "
-                "upper bound; revalidate after every completed trade. No order was placed."
+                "This plan requires prior-fold calibrated uncertainty, matched historical "
+                "payout replay, positive out-of-sample fold performance and a validated "
+                "same-side opportunity-persistence lower bound for each additional trade. "
+                "The count is an upper bound; revalidate after every completed trade. "
+                "No order was placed."
             ),
             "execution_authorized": False,
             "order_execution_enabled": False,
