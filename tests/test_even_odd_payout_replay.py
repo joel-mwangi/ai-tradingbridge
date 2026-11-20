@@ -44,7 +44,7 @@ def test_replay_uses_only_prior_matched_quote_and_reports_realized_metrics():
     assert result["losses"] == 0
     assert result["net_profit"] == pytest.approx(1.9)
     assert result["entry_coverage"] == pytest.approx(2 / 3)
-    assert result["evidence_sample_sufficient"] is True
+    assert result["evidence_sample_sufficient"] is False
     assert result["validated"] is False
     assert result["execution_authorized"] is False
 
