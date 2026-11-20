@@ -391,11 +391,12 @@ async def load_payout_quote_snapshots(
         "order": "spot_time.asc",
         "limit": str(limit),
     }
-    if from_epoch is not None:
+    if from_epoch is not None and to_epoch is not None:
+        params["and"] = f"(spot_time.gte.{from_epoch},spot_time.lte.{to_epoch})"
+    elif from_epoch is not None:
         params["spot_time"] = f"gte.{from_epoch}"
-    if to_epoch is not None:
-        existing = params.get("spot_time")
-        params["spot_time"] = f"{existing},lte.{to_epoch}" if existing else f"lte.{to_epoch}"
+    elif to_epoch is not None:
+        params["spot_time"] = f"lte.{to_epoch}"
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
     try:
