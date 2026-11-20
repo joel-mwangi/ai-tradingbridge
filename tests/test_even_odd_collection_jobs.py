@@ -195,3 +195,74 @@ async def test_live_tick_batch_metadata_links_back_to_manual_job(monkeypatch):
     assert metadata["job_id"] == JOB_ID
     assert calls["finish"]["capture_mode"] == "live_stream"
     assert calls["finish"]["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_browser_tick_batch_calls_atomic_rpc_with_owner_and_stable_batch_id(monkeypatch):
+    batch_id = UUID("00000000-0000-0000-0000-000000000444")
+    job = {
+        "id": JOB_ID, "market_symbol": "R_50", "target_ticks": 500,
+        "received_ticks": 1, "status": "collecting",
+    }
+    result_payload = {
+        "job": job, "persisted_ticks": 1, "batch_id": str(batch_id),
+        "duplicate": False, "provenance": "browser_stream",
+    }
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, rows):
+            self.rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.rows
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.rpc_url = None
+            self.rpc_payload = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return Response([{"id": JOB_ID, "market_symbol": "R_50"}])
+
+        async def post(self, url, **kwargs):
+            self.rpc_url = url
+            self.rpc_payload = kwargs["json"]
+            return Response(result_payload)
+
+    fake = FakeClient()
+    monkeypatch.setattr(collection_jobs, "_configuration", lambda: ("https://db.example", "secret"))
+    monkeypatch.setattr(collection_jobs.httpx, "AsyncClient", lambda **kwargs: fake)
+
+    request = collection_jobs.LiveTickBatchRequest(
+        batch_id=batch_id,
+        ticks=[{
+            "tick": {
+                "symbol": "R_50", "quote": "83.2081", "epoch": 1795037706,
+                "pip_size": 4, "id": "deriv-tick-1",
+            },
+            "subscription_id": "subscription-1",
+        }],
+    )
+    result = await collection_jobs.persist_browser_tick_batch(
+        UUID(JOB_ID), request, USER_ID
+    )
+
+    assert result["duplicate"] is False
+    assert result["provenance"] == "browser_stream"
+    assert fake.rpc_url.endswith("/rpc/even_odd_persist_browser_tick_batch")
+    assert fake.rpc_payload["p_job_id"] == JOB_ID
+    assert fake.rpc_payload["p_owner_user_id"] == str(USER_ID)
+    assert fake.rpc_payload["p_batch_id"] == str(batch_id)
+    assert fake.rpc_payload["p_ticks"][0]["tick_id"] == "deriv-tick-1"
+    assert fake.rpc_payload["p_ticks"][0]["stream_id"] == "subscription-1"

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import os
 from typing import Annotated
+from datetime import datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -12,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.even_odd.storage import _configuration, _headers
+from app.even_odd.collector import normalize_live_tick
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
 bearer = HTTPBearer(auto_error=False)
@@ -96,7 +98,28 @@ async def active_collection(
         )
         response.raise_for_status()
         rows = response.json()
-        return {"job": rows[0] if rows else None, "live_only": True}
+        job = rows[0] if rows else None
+        if job and job.get("status") in {"queued", "collecting"}:
+            timestamp = job.get("updated_at") or job.get("created_at")
+            if timestamp:
+                try:
+                    last_seen = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                    stale = (datetime.now(timezone.utc) - last_seen).total_seconds() > 120
+                except ValueError:
+                    stale = False
+                if stale:
+                    recovered = await client.patch(
+                        f"{url}/rest/v1/even_odd_collection_jobs",
+                        params={"id": f"eq.{job['id']}", "owner_user_id": f"eq.{owner}",
+                                "status": "in.(queued,collecting)"},
+                        headers=_headers(key, "return=representation"),
+                        json={"status": "failed", "last_error": "Browser heartbeat expired; collection was interrupted."},
+                    )
+                    recovered.raise_for_status()
+                    recovered_rows = recovered.json()
+                    if recovered_rows:
+                        job = recovered_rows[0]
+        return {"job": job, "live_only": True}
 
 
 @router.post("/{job_id}/stop")
@@ -118,3 +141,90 @@ async def stop_collection(
         if not rows:
             raise HTTPException(status_code=404, detail="Active collection job not found.")
         return {"job": rows[0], "stop_requested": True, "order_execution_enabled": False}
+
+
+class LiveTickBatchRequest(BaseModel):
+    batch_id: UUID
+    ticks: list[dict] = Field(min_length=1, max_length=100)
+
+
+@router.post("/{job_id}/batch")
+async def persist_browser_tick_batch(
+    job_id: UUID,
+    request: LiveTickBatchRequest,
+    owner: Annotated[UUID, Depends(_auth)],
+) -> dict:
+    """Atomically persist one idempotent browser-captured batch and job progress."""
+    url, key = await _client()
+    normalized_ticks: list[dict] = []
+    # Read the owner-scoped job only to validate the incoming Deriv payload's
+    # symbol. The database RPC repeats ownership/status/target checks under a
+    # row lock and is the sole authority for progress updates.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
+        response = await client.get(
+            f"{url}/rest/v1/even_odd_collection_jobs",
+            params={"select": "id,market_symbol", "id": f"eq.{job_id}",
+                    "owner_user_id": f"eq.{owner}", "limit": "1"},
+            headers=_headers(key),
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Collection job not found.")
+        symbol = str(rows[0]["market_symbol"])
+        try:
+            for item in request.ticks:
+                raw_tick = item.get("tick")
+                subscription = item.get("subscription_id")
+                normalized_ticks.append(
+                    normalize_live_tick(
+                        raw_tick,
+                        symbol,
+                        subscription_id=str(subscription) if subscription is not None else None,
+                    )
+                )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="Batch contains an invalid Deriv tick.") from exc
+
+        rpc = await client.post(
+            f"{url}/rest/v1/rpc/even_odd_persist_browser_tick_batch",
+            headers=_headers(key),
+            json={
+                "p_job_id": str(job_id),
+                "p_owner_user_id": str(owner),
+                "p_batch_id": str(request.batch_id),
+                "p_ticks": normalized_ticks,
+            },
+        )
+        if rpc.status_code in {404, 409}:
+            raise HTTPException(status_code=409, detail="Collection job is no longer active or batch is invalid.")
+        if rpc.status_code == 400:
+            raise HTTPException(status_code=422, detail="Database rejected the tick batch.")
+        try:
+            rpc.raise_for_status()
+            result = rpc.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail="Could not atomically persist the live tick batch.") from exc
+        if not isinstance(result, dict) or not isinstance(result.get("job"), dict):
+            raise HTTPException(status_code=502, detail="Database returned an invalid batch receipt.")
+        return result
+
+@router.post("/{job_id}/heartbeat")
+async def collection_heartbeat(
+    job_id: UUID,
+    owner: Annotated[UUID, Depends(_auth)],
+) -> dict:
+    """Record browser liveness so abandoned jobs can be recovered safely."""
+    url, key = await _client()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        response = await client.patch(
+            f"{url}/rest/v1/even_odd_collection_jobs",
+            params={"id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}", "status": "in.(queued,collecting)"},
+            headers=_headers(key, "return=representation"),
+            json={"status": "collecting", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not rows:
+            raise HTTPException(status_code=409, detail="Collection job is no longer active.")
+        return {"job": rows[0], "heartbeat": True}

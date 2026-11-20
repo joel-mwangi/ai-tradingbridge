@@ -100,9 +100,10 @@ def even_odd_status(
     return {
         "module": "even-odd-lab",
         "status": "available",
-        "data_source": "continuous_deriv_live_tick_stream",
+        "data_source": "browser_managed_deriv_live_tick_stream",
         "historical_imports_enabled": False,
-        "live_collector_required": True,
+        "live_collector_required": False,
+        "browser_collection_supported": True,
         "storage_configured": storage_is_configured(),
         "execution_enabled": False,
         "predictive_model_available": False,
@@ -176,8 +177,9 @@ async def get_even_odd_history(
     from_epoch: int | None = Query(default=None, ge=1),
     to_epoch: int | None = Query(default=None, ge=1),
     collection_id: UUID | None = None,
+    capture_mode: str = Query(default="browser_stream", pattern="^(browser_stream|live_stream)$"),
 ) -> dict:
-    """Return only live-captured observations in chronological order."""
+    """Return one explicitly selected live-capture provenance in chronological order."""
     if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
         raise HTTPException(
             status_code=422,
@@ -195,6 +197,7 @@ async def get_even_odd_history(
             from_epoch=from_epoch,
             to_epoch=to_epoch,
             collection_id=str(collection_id) if collection_id else None,
+            capture_mode=capture_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -236,8 +239,9 @@ async def audit_even_odd_history(
     from_epoch: int | None = Query(default=None, ge=1),
     to_epoch: int | None = Query(default=None, ge=1),
     collection_id: UUID | None = None,
+    capture_mode: str = Query(default="browser_stream", pattern="^(browser_stream|live_stream)$"),
 ) -> dict:
-    """Audit structural integrity of the live-captured research dataset."""
+    """Audit structural integrity of one selected live-capture provenance."""
     if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
         raise HTTPException(
             status_code=422,
@@ -255,6 +259,7 @@ async def audit_even_odd_history(
             from_epoch=from_epoch,
             to_epoch=to_epoch,
             collection_id=str(collection_id) if collection_id else None,
+            capture_mode=capture_mode,
         )
         quality = inspect_historical_ticks(
             snapshot["rows"],

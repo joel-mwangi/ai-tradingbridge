@@ -116,7 +116,7 @@ def inspect_historical_ticks(
 
     potential_repeated_fingerprints = sum(count - 1 for count in fingerprints.values() if count > 1)
     live_only_sample = bool(rows) and all(
-        isinstance(row, dict) and row.get("capture_mode") == "live_stream"
+        isinstance(row, dict) and row.get("capture_mode") in {"live_stream", "browser_stream"}
         for row in rows
     )
     # In a live tick stream, multiple genuine ticks can share the same
