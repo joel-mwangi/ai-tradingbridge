@@ -53,3 +53,34 @@ async def test_research_cli_blocks_duplicate_samples_without_explicit_opt_in(mon
     assert output["research_run_id"] == "research-run-id"
     assert output["quality"]["exact_market_observation_duplicates"] == 1
     assert failed == ["research-run-id"]
+
+
+@pytest.mark.asyncio
+async def test_research_cli_blocks_when_no_live_observations_exist(monkeypatch, capsys):
+    async def fake_load(**kwargs):
+        return {"rows": [], "snapshot_max_id": None}
+
+    async def unexpected_start(**kwargs):
+        raise AssertionError("A research run must not start without live observations.")
+
+    monkeypatch.setattr(even_odd_research, "load_historical_ticks", fake_load)
+    monkeypatch.setattr(even_odd_research, "start_research_run", unexpected_start)
+
+    args = argparse.Namespace(
+        symbol="R_50",
+        limit=5000,
+        windows=[50],
+        max_epochs=10,
+        walk_forward=False,
+        allow_duplicates=False,
+        minimum_train_rows=100,
+        test_rows=50,
+        maximum_folds=2,
+    )
+    result = await even_odd_research._run(args)
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == 2
+    assert output["status"] == "blocked"
+    assert "No live-captured observations" in output["reason"]
+    assert output["historical_imports_enabled"] is False
