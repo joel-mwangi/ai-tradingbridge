@@ -116,6 +116,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             # Persist compact metrics and calibrated intervals, not every raw OOS row.
             walk_forward.pop("out_of_sample_predictions", None)
+            walk_forward.pop("out_of_sample_predictions_by_model", None)
 
         model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
@@ -127,14 +128,29 @@ async def _run(args: argparse.Namespace) -> int:
             "promotion_status": experiment["promotion_status"],
             "walk_forward": walk_forward,
         }
-        model_id = await save_candidate_model(
-            symbol=args.symbol,
-            model_version=model_version,
-            model_artifact=experiment["model"],
-            metrics=evaluation,
-            snapshot_max_id=snapshot["snapshot_max_id"],
-            partition_sizes=experiment["partitions"],
-        )
+        candidate_ids: dict[str, str] = {}
+        for candidate_name, candidate_artifact in experiment["model_candidates"].items():
+            candidate_metrics = {
+                "holdout_metrics": experiment["candidate_metrics"][candidate_name],
+                "constant_baseline_metrics": evaluation["constant_baseline_metrics"],
+                "rolling_frequency_baseline_metrics": evaluation["rolling_frequency_baseline_metrics"],
+                "walk_forward": None,
+                "promotion_status": experiment["promotion_status"],
+            }
+            if walk_forward:
+                candidate_metrics["walk_forward"] = {
+                    "aggregate_metrics": walk_forward["aggregate_model_metrics_by_model"][candidate_name],
+                    "calibration_intervals": walk_forward["calibration_intervals_by_model"][candidate_name],
+                    "statistical_comparisons": walk_forward["statistical_comparisons_by_model"][candidate_name],
+                    "folds": [{**fold, "model_metrics": fold["model_metrics"][candidate_name]} for fold in walk_forward["folds"]],
+                }
+            candidate_ids[candidate_name] = await save_candidate_model(
+                symbol=args.symbol, model_version=model_version,
+                model_artifact=candidate_artifact, metrics=candidate_metrics,
+                snapshot_max_id=snapshot["snapshot_max_id"],
+                partition_sizes=experiment["partitions"],
+            )
+        model_id = candidate_ids["logistic"]
         await complete_research_run(
             research_run_id=research_run_id,
             model_id=model_id,
@@ -146,6 +162,7 @@ async def _run(args: argparse.Namespace) -> int:
             "status": "research_complete",
             "research_run_id": research_run_id,
             "model_id": model_id,
+            "candidate_model_ids": candidate_ids,
             "model_version": model_version,
             "symbol": args.symbol,
             "snapshot_max_id": snapshot["snapshot_max_id"],
@@ -155,6 +172,7 @@ async def _run(args: argparse.Namespace) -> int:
             "experiment": experiment,
             "walk_forward": walk_forward,
             "model_persisted_as": "candidate",
+            "candidate_families": sorted(candidate_ids),
             "execution_authorized": False,
         }, indent=2, allow_nan=False))
         return 0
