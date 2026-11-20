@@ -111,9 +111,10 @@ coverage rather than inventing returns. A replay with fewer than 200 entries
 is explicitly marked as insufficient evidence. Replay metrics remain
 unvalidated research evidence and never enable broker execution.
 
-Apply the migration
-`20261120002608_even_odd_historical_payout_snapshots.sql` to the dedicated
-Database 2 project only. Continue collecting payout snapshots over time; the
+Apply the migrations
+`20261120002608_even_odd_historical_payout_snapshots.sql` and
+`20261120002811_even_odd_payout_snapshot_sequence_privileges.sql` to the
+ dedicated Database 2 project only. Continue collecting payout snapshots over time; the
 migration cannot reconstruct historical payout prices that were never stored.
 
 ## Promotion gate
