@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -146,6 +146,7 @@ async def finish_collection_run(
         try:
             tick_rows = [
                 {
+                    "capture_id": tick.get("capture_id") or str(uuid4()),
                     "collection_id": collection_id,
                     "sequence_no": index,
                     "market_symbol": symbol,
@@ -164,7 +165,8 @@ async def finish_collection_run(
             if tick_rows:
                 tick_response = await client.post(
                     f"{url}/rest/v1/even_odd_ticks",
-                    headers=_headers(key, "return=minimal"),
+                    params={"on_conflict": "capture_id"},
+                    headers=_headers(key, "resolution=ignore-duplicates,return=minimal"),
                     json=tick_rows,
                 )
                 tick_response.raise_for_status()
