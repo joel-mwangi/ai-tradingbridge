@@ -77,6 +77,59 @@ itself. The interval selector refuses extrapolation outside the calibrated
 probability band. Regime drift and long-memory dependence remain risks that
 must be assessed before demo use.
 
+## Candidate model comparison and payout replay
+
+Each experiment fits two candidate families using only past observations:
+- standardized multivariate logistic regression;
+- a Laplace-smoothed first-order parity Markov transition model.
+
+Both candidates use the same chronological train, validation, calibration and
+untouched holdout partitions. Walk-forward folds report each model separately
+against the constant 50% and rolling-frequency baselines. Candidate selection
+and promotion are not based on the final test partition. Both artifacts remain
+`candidate`; neither family is automatically marked validated.
+
+Walk-forward uncertainty for a test fold is estimated only from earlier
+out-of-sample folds. The first folds therefore have no validated uncertainty
+interval and cannot produce replay entries. The hosted workflow defaults to
+eight folds so later folds can accumulate prior calibration evidence. The
+aggregate intervals retained in the model registry are for future live
+research forecasts; they must not be retroactively applied to the same rows
+that produced them in a backtest.
+
+The read-only `GET /even-odd/payouts` endpoint records matched Even and Odd
+proposal terms in `even_odd_payout_quote_snapshots` when Database 2 is
+configured and the migration has been applied. A historical replay uses only
+a quote snapshot at or before the target tick, within the configured age
+limit, and matching the exact market, currency and stake. It computes
+payout-adjusted conservative EV, entry coverage, win/loss counts, net P&L,
+ROI on stake, profit factor and maximum drawdown from out-of-sample forecasts.
+No current quote is substituted for a missing historical quote.
+
+The payout replay also estimates same-side opportunity persistence for
+horizons 1–6 using only consecutive, fold-local out-of-sample opportunity
+records. It reports a one-sided 90% Wilson lower bound and marks each horizon
+validated only after at least 200 qualifying trials across at least five folds.
+These bounds are not inferred from in-sample streaks and are not extrapolated
+across fold boundaries.
+
+The sequence planner consumes these persistence bounds together with
+validated parity forecasts, conservative EV, session loss budget, historical
+replay net P&L / ROI and positive-fold rate. It caps plans at seven trades and
+requires fresh revalidation after every completed trade. Missing OOS payout
+evidence or persistence coverage results in WAIT rather than a guessed count.
+
+If quote snapshots are absent or sparse, replay reports unavailable or low
+coverage rather than inventing returns. A replay with fewer than 200 entries
+is explicitly marked as insufficient evidence. Replay metrics remain
+unvalidated research evidence and never enable broker execution.
+
+Apply the migrations
+`20261120002608_even_odd_historical_payout_snapshots.sql` and
+`20261120002811_even_odd_payout_snapshot_sequence_privileges.sql` to the
+ dedicated Database 2 project only. Continue collecting payout snapshots over time; the
+migration cannot reconstruct historical payout prices that were never stored.
+
 ## Promotion gate
 
 Before any model can be marked validated:

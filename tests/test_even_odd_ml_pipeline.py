@@ -28,6 +28,9 @@ def test_research_pipeline_uses_disjoint_periods_and_keeps_execution_disabled():
     assert result["model"]["validated"] is False
     assert result["model"]["execution_authorized"] is False
     assert result["promotion_status"]["validated"] is False
+    assert set(result["model_candidates"]) == {"logistic", "markov"}
+    assert set(result["candidate_metrics"]) == {"logistic", "markov"}
+    assert result["candidate_metrics"]["markov"]["sample_size"] == partitions["test"]
 
 
 def test_research_pipeline_rejects_insufficient_history():
@@ -55,6 +58,8 @@ def test_walk_forward_pipeline_evaluates_multiple_future_blocks():
     assert all(fold["validation_rows"] >= 20 for fold in result["folds"])
     assert all(fold["calibration_rows"] >= 50 for fold in result["folds"])
     assert result["aggregate_model_metrics"]["sample_size"] == 300
+    assert set(result["aggregate_model_metrics_by_model"]) == {"logistic", "markov"}
+    assert all(set(fold["model_metrics"]) == {"logistic", "markov"} for fold in result["folds"])
     assert len(result["out_of_sample_predictions"]) == 300
     assert len(result["calibration_intervals"]) == 9
     assert all(interval["validated"] is False for interval in result["calibration_intervals"])
@@ -86,3 +91,28 @@ def test_walk_forward_default_training_rows_provide_calibration_minimum():
     first_fold = result["folds"][0]
     assert first_fold["calibration_rows"] >= 50
     assert first_fold["validation_rows"] >= 20
+
+def test_walk_forward_uncertainty_for_each_fold_uses_only_prior_oos_folds():
+    digits = [0, 1] * 500
+    epochs = list(range(1_700_000_000, 1_700_001_000))
+    result = run_walk_forward_evaluation(
+        digits,
+        windows=(20,),
+        minimum_train_rows=400,
+        test_rows=50,
+        maximum_folds=8,
+        max_epochs=20,
+        patience=5,
+        tick_epochs=epochs,
+    )
+    first_fold_predictions = [
+        row for row in result["out_of_sample_predictions"]
+        if row["fold"] == 1
+    ]
+    assert first_fold_predictions
+    assert all(row["uncertainty_validated"] is False for row in first_fold_predictions)
+    assert all("target_epoch" in row for row in result["out_of_sample_predictions"])
+    assert all(
+        row["target_epoch"] == epochs[row["target_index"]]
+        for row in result["out_of_sample_predictions"]
+    )

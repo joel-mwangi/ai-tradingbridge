@@ -1,9 +1,9 @@
-"""Select a trade-sequence length from validated ML forecasts.
+"""Select a sequence length from validated ML forecasts and OOS survival evidence.
 
-This is a deterministic decision layer, not a trained ML model. A separately
-trained and validated model must supply one conditional forecast per potential
-trade. The optimizer refuses to recommend execution when model validation or
-forecast evidence is missing.
+The optimizer is a deterministic risk/policy layer, not a standalone trained
+sequence model. It combines conditional ML forecasts with fold-aware
+same-side opportunity-persistence bounds and realized payout replay evidence.
+It refuses to plan when any evidence gate is missing.
 """
 
 from dataclasses import dataclass
@@ -27,6 +27,13 @@ class CandidateTradeForecast:
     risk_budget_available: bool
     model_id: str
     model_version: str
+    opportunity_persistence_lower_bound: float = 0.0
+    opportunity_persistence_validated: bool = False
+    historical_oos_evidence_rows: int = 0
+    historical_oos_positive_fold_rate: float = 0.0
+    historical_oos_expected_value: float = 0.0
+    historical_oos_net_profit: float = 0.0
+    historical_oos_roi: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.trade_number) is not int or self.trade_number < 1:
@@ -60,14 +67,37 @@ class CandidateTradeForecast:
         if not isinstance(self.model_version, str) or not self.model_version.strip():
             raise ValueError("A model version is required.")
         if (
+            isinstance(self.opportunity_persistence_lower_bound, bool)
+            or not isinstance(self.opportunity_persistence_lower_bound, (int, float))
+            or not isfinite(self.opportunity_persistence_lower_bound)
+            or not 0 <= self.opportunity_persistence_lower_bound <= 1
+        ):
+            raise ValueError("opportunity_persistence_lower_bound must be a finite probability.")
+        if type(self.historical_oos_evidence_rows) is not int or self.historical_oos_evidence_rows < 0:
+            raise ValueError("historical_oos_evidence_rows must be a non-negative integer.")
+        if (
+            isinstance(self.historical_oos_positive_fold_rate, bool)
+            or not isinstance(self.historical_oos_positive_fold_rate, (int, float))
+            or not isfinite(self.historical_oos_positive_fold_rate)
+            or not 0 <= self.historical_oos_positive_fold_rate <= 1
+        ):
+            raise ValueError("historical_oos_positive_fold_rate must be a finite probability.")
+        for name, value in (
+            ("historical_oos_expected_value", self.historical_oos_expected_value),
+            ("historical_oos_net_profit", self.historical_oos_net_profit),
+            ("historical_oos_roi", self.historical_oos_roi),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+                raise ValueError(f"{name} must be finite and numeric.")
+        if (
             type(self.signal_valid) is not bool
             or type(self.model_validated) is not bool
             or type(self.uncertainty_validated) is not bool
             or type(self.risk_budget_available) is not bool
+            or type(self.opportunity_persistence_validated) is not bool
         ):
             raise ValueError(
-                "signal_valid, model_validated, uncertainty_validated and "
-                "risk_budget_available must be booleans."
+                "signal, model, uncertainty, persistence and risk flags must be booleans."
             )
 
     @property
@@ -95,6 +125,8 @@ class SequenceDecision:
     model_version: str | None
     approved: bool
     reason: str
+    sequence_adjusted_conservative_ev_by_trade: tuple[float, ...] = ()
+    persistence_lower_bound_by_trade: tuple[float, ...] = ()
 
 
 def select_sequence_length(
@@ -127,6 +159,8 @@ def select_sequence_length(
     selected = 0
     point_evs: list[float] = []
     conservative_evs: list[float] = []
+    sequence_adjusted_evs: list[float] = []
+    persistence_bounds: list[float] = []
     selected_model: CandidateTradeForecast | None = None
     stop_reason = "Maximum permitted sequence length reached."
 
@@ -143,6 +177,20 @@ def select_sequence_length(
         if not forecast.risk_budget_available:
             stop_reason = "The remaining session loss budget is insufficient."
             break
+        if forecast.historical_oos_evidence_rows < 200:
+            stop_reason = "Insufficient historical out-of-sample payout evidence."
+            break
+        if (
+            forecast.historical_oos_positive_fold_rate < 0.6
+            or forecast.historical_oos_expected_value <= 0
+            or forecast.historical_oos_net_profit <= 0
+            or forecast.historical_oos_roi <= 0
+        ):
+            stop_reason = "Historical out-of-sample payout performance is not consistently positive."
+            break
+        if not forecast.opportunity_persistence_validated:
+            stop_reason = "Opportunity persistence is not validated for this sequence horizon."
+            break
         if selected_model and (
             forecast.model_id != selected_model.model_id
             or forecast.model_version != selected_model.model_version
@@ -157,10 +205,19 @@ def select_sequence_length(
                 f"Candidate trade {index} has non-positive conservative expected value."
             )
             break
+        sequence_adjusted_ev = (
+            forecast.opportunity_persistence_lower_bound
+            * forecast.conservative_expected_value
+        )
+        if sequence_adjusted_ev <= 0:
+            stop_reason = f"Candidate trade {index} has non-positive persistence-adjusted EV."
+            break
 
         selected += 1
         point_evs.append(forecast.expected_value)
         conservative_evs.append(forecast.conservative_expected_value)
+        sequence_adjusted_evs.append(sequence_adjusted_ev)
+        persistence_bounds.append(forecast.opportunity_persistence_lower_bound)
         selected_model = forecast
 
     if selected == 0:
@@ -168,7 +225,7 @@ def select_sequence_length(
             0, cap, tuple(point_evs), tuple(conservative_evs),
             selected_model.model_id if selected_model else None,
             selected_model.model_version if selected_model else None,
-            False, stop_reason,
+            False, stop_reason, tuple(sequence_adjusted_evs), tuple(persistence_bounds),
         )
 
     return SequenceDecision(
@@ -180,4 +237,6 @@ def select_sequence_length(
         model_version=selected_model.model_version if selected_model else None,
         approved=True,
         reason=stop_reason,
+        sequence_adjusted_conservative_ev_by_trade=tuple(sequence_adjusted_evs),
+        persistence_lower_bound_by_trade=tuple(persistence_bounds),
     )
