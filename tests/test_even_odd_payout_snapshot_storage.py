@@ -95,3 +95,39 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
     assert params["currency"] == "eq.USD"
     assert params["stake"] == "eq.1.00"
     assert params["and"] == "(spot_time.gte.1795130000,spot_time.lte.1795139999)"
+
+@pytest.mark.asyncio
+async def test_save_payout_snapshot_anchors_pair_to_older_side_when_spot_times_differ(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        payload = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, params, headers, json):
+            Client.payload = json
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", Client)
+    quote = {
+        "symbol": "R_50", "currency": "USD", "requested_stake": "1.00",
+        "quoted_at": "2026-11-20T00:00:00+00:00",
+        "even": {"contract_type": "DIGITEVEN", "ask_price": "1.00", "payout": "1.95", "spot_time": 1795132802},
+        "odd": {"contract_type": "DIGITODD", "ask_price": "1.00", "payout": "1.95", "spot_time": 1795132800},
+    }
+    await save_payout_quote_snapshot(quote=quote)
+    assert Client.payload["spot_time"] == 1795132800
+    assert Client.payload["metadata"]["even_spot_time"] == 1795132802
+    assert Client.payload["metadata"]["odd_spot_time"] == 1795132800
