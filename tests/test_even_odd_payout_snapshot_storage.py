@@ -94,7 +94,7 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
         from_epoch=1795130000, to_epoch=1795139999,
     )
 
-    assert result == [{"spot_time": 1795132800}]
+    assert result == [{"id": 7, "spot_time": 1795132800}]
     params = Client.last_call[1]
     assert params["market_symbol"] == "eq.R_50"
     assert params["currency"] == "eq.USD"
