@@ -348,6 +348,7 @@ async def load_historical_ticks(
 
 async def persist_live_tick_batch(
     *, symbol: str, ticks: list[dict[str, Any]], worker_id: str,
+    job_id: str | None = None,
 ) -> str | None:
     """Persist only observations received from the live Deriv subscription."""
     if not ticks:
@@ -363,7 +364,8 @@ async def persist_live_tick_batch(
         metadata={
             "capture_mode": "live_stream",
             "worker_id": worker_id,
-            "batch_kind": "live_subscription",
+            "batch_kind": "manual_job_batch" if job_id else "live_subscription",
+            **({"job_id": job_id} if job_id else {}),
         },
     )
     await finish_collection_run(
