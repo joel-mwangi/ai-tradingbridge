@@ -386,40 +386,78 @@ async def load_payout_quote_snapshots(
     to_epoch: int | None = None,
     limit: int = 10000,
 ) -> list[dict[str, Any]]:
-    """Load only quote snapshots matching the exact contract economics."""
+    """Load exact-contract quote snapshots with stable, bounded pagination."""
     if type(limit) is not int or not 1 <= limit <= 50000:
         raise ValueError("Payout snapshot limit must be from 1 to 50000.")
-    params: dict[str, str] = {
-        "select": "market_symbol,currency,stake,quoted_at,spot_time,even_ask_price,even_payout,odd_ask_price,odd_payout,source",
-        "market_symbol": f"eq.{symbol}",
-        "currency": f"eq.{currency}",
-        "stake": f"eq.{stake}",
-        "order": "spot_time.asc",
-        "limit": str(limit),
-    }
-    if from_epoch is not None and to_epoch is not None:
-        params["and"] = f"(spot_time.gte.{from_epoch},spot_time.lte.{to_epoch})"
-    elif from_epoch is not None:
-        params["spot_time"] = f"gte.{from_epoch}"
-    elif to_epoch is not None:
-        params["spot_time"] = f"lte.{to_epoch}"
+    if from_epoch is not None and (type(from_epoch) is not int or from_epoch <= 0):
+        raise ValueError("from_epoch must be a positive integer.")
+    if to_epoch is not None and (type(to_epoch) is not int or to_epoch <= 0):
+        raise ValueError("to_epoch must be a positive integer.")
+    if from_epoch is not None and to_epoch is not None and from_epoch > to_epoch:
+        raise ValueError("from_epoch cannot exceed to_epoch.")
+
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
+    headers = _headers(key)
+    page_size = 1000
+    rows: list[dict[str, Any]] = []
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(
+            latest_response = await client.get(
                 f"{url}/rest/v1/even_odd_payout_quote_snapshots",
-                params=params,
-                headers=_headers(key),
+                params={"select": "id", "order": "id.desc", "limit": "1"},
+                headers=headers,
             )
-            response.raise_for_status()
-            rows = response.json()
-            if not isinstance(rows, list):
+            latest_response.raise_for_status()
+            latest_rows = latest_response.json()
+            if not isinstance(latest_rows, list):
                 raise EvenOddStorageError("Payout snapshot query returned an invalid response.")
-            return rows
+            if not latest_rows:
+                return []
+            snapshot_max_id = int(latest_rows[0]["id"])
+
+            params: dict[str, str] = {
+                "select": (
+                    "id,market_symbol,currency,stake,quoted_at,spot_time,"
+                    "even_ask_price,even_payout,odd_ask_price,odd_payout,source,metadata"
+                ),
+                "market_symbol": f"eq.{symbol}",
+                "currency": f"eq.{currency}",
+                "stake": f"eq.{stake}",
+                "id": f"lte.{snapshot_max_id}",
+                "order": "spot_time.asc,id.asc",
+            }
+            if from_epoch is not None and to_epoch is not None:
+                params["and"] = f"(spot_time.gte.{from_epoch},spot_time.lte.{to_epoch})"
+            elif from_epoch is not None:
+                params["spot_time"] = f"gte.{from_epoch}"
+            elif to_epoch is not None:
+                params["spot_time"] = f"lte.{to_epoch}"
+
+            while len(rows) < limit:
+                page_start = len(rows)
+                page_end = min(page_start + page_size, limit) - 1
+                expected_page_size = page_end - page_start + 1
+                response = await client.get(
+                    f"{url}/rest/v1/even_odd_payout_quote_snapshots",
+                    params=params,
+                    headers={
+                        **headers,
+                        "Range-Unit": "items",
+                        "Range": f"{page_start}-{page_end}",
+                    },
+                )
+                response.raise_for_status()
+                page = response.json()
+                if not isinstance(page, list):
+                    raise EvenOddStorageError("Payout snapshot query returned an invalid response.")
+                rows.extend(page)
+                if len(page) < expected_page_size:
+                    break
+            return rows[:limit]
     except EvenOddStorageError:
         raise
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise EvenOddStorageError(
             "Could not load historical payout quote snapshots."
         ) from exc
