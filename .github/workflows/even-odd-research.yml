@@ -43,7 +43,7 @@ on:
       maximum_folds:
         description: Number of chronological future folds
         required: true
-        default: "5"
+        default: "8"
         type: choice
         options:
           - "5"
