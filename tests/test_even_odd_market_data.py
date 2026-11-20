@@ -938,7 +938,20 @@ def entry_model(*, status="validated", interval_validated=True, version="v1"):
                     "method": "walk_forward_moving_block_bootstrap_local_calibration",
                     "confidence_level": 0.9,
                 }]
-            }
+            },
+            "payout_replay": {
+                "evidence_sample_sufficient": True,
+                "entry_count": 500,
+                "positive_fold_rate": 0.8,
+                "average_conservative_expected_value": 0.12,
+                "net_profit": 50.0,
+                "roi_on_staked": 0.1,
+                "sequence_persistence_by_horizon": {
+                    "1": {"validated": True, "lower_confidence_bound_90": 0.7},
+                    "2": {"validated": True, "lower_confidence_bound_90": 0.6},
+                    "3": {"validated": True, "lower_confidence_bound_90": 0.5},
+                },
+            },
         },
     }
 
@@ -1223,7 +1236,9 @@ def test_sequence_plan_uses_server_forecasts_and_selects_bounded_recent_persiste
     assert payload["status"] == "plan"
     assert payload["planned_trades"] == 4
     assert payload["max_allowed_trades"] <= 7
-    assert payload["plan_basis"] == "recent_persisted_opportunity_persistence_proxy"
+    assert payload["plan_basis"] == "walk_forward_oos_opportunity_persistence_and_payout_replay"
+    assert payload["persistence_lower_bound_by_trade"] == [1.0, 0.7, 0.6, 0.5]
+    assert payload["sequence_adjusted_conservative_ev_by_trade"]
     assert payload["execution_authorized"] is False
     assert payload["order_execution_enabled"] is False
 
