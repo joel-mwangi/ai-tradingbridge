@@ -80,6 +80,19 @@ def normalize_tick(payload: Any, expected_symbol: str) -> dict:
     }
 
 
+def normalize_live_tick(
+    payload: Any,
+    expected_symbol: str,
+    *,
+    subscription_id: str | None = None,
+) -> dict:
+    """Normalize a live tick while keeping tick and subscription IDs distinct."""
+    normalized = normalize_tick(payload, expected_symbol)
+    normalized["tick_id"] = normalized.pop("stream_id", None)
+    normalized["stream_id"] = str(subscription_id) if subscription_id is not None else None
+    return normalized
+
+
 async def collect_ticks(
     symbol: str,
     tick_count: int,
