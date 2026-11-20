@@ -185,3 +185,24 @@ async def persist_browser_tick_batch(
         if not updated:
             raise HTTPException(status_code=409, detail="Collection job changed while saving the batch.")
         return {"job": updated[0], "persisted_ticks": len(normalized_ticks), "live_only": True}
+
+
+@router.post("/{job_id}/heartbeat")
+async def collection_heartbeat(
+    job_id: UUID,
+    owner: Annotated[UUID, Depends(_auth)],
+) -> dict:
+    """Record browser liveness so abandoned jobs can be recovered safely."""
+    url, key = await _client()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        response = await client.patch(
+            f"{url}/rest/v1/even_odd_collection_jobs",
+            params={"id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}", "status": "in.(queued,collecting)"},
+            headers=_headers(key, "return=representation"),
+            json={"status": "collecting", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not rows:
+            raise HTTPException(status_code=409, detail="Collection job is no longer active.")
+        return {"job": rows[0], "heartbeat": True}
