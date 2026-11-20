@@ -98,7 +98,8 @@ begin
         id, market_symbol, status, requested_ticks, received_ticks,
         started_at, completed_at, metadata
     ) values (
-        v_collection_id, v_job.market_symbol, 'completed',
+        v_collection_id, v_job.market_symbol,
+        case when v_count >= 10 then 'completed' else 'partial' end,
         greatest(10, v_count), v_count, now(), now(),
         jsonb_build_object(
             'capture_mode', 'browser_stream',
