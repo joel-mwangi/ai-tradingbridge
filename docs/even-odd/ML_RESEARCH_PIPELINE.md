@@ -112,7 +112,7 @@ is explicitly marked as insufficient evidence. Replay metrics remain
 unvalidated research evidence and never enable broker execution.
 
 Apply the migration
-`20261120100000_even_odd_historical_payout_snapshots.sql` to the dedicated
+`20261120002608_even_odd_historical_payout_snapshots.sql` to the dedicated
 Database 2 project only. Continue collecting payout snapshots over time; the
 migration cannot reconstruct historical payout prices that were never stored.
 
