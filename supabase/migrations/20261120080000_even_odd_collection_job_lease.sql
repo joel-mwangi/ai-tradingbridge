@@ -3,7 +3,7 @@
 create or replace function public.even_odd_claim_collection_job(p_worker_id text)
 returns setof public.even_odd_collection_jobs
 language plpgsql
-security definer
+security invoker
 set search_path = public
 as $$
 declare
