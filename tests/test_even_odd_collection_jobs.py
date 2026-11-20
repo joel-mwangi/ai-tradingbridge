@@ -156,3 +156,42 @@ async def test_stop_collection_is_scoped_to_job_and_owner(monkeypatch):
     assert fake.call["params"]["id"] == f"eq.{JOB_ID}"
     assert fake.call["params"]["owner_user_id"] == f"eq.{USER_ID}"
     assert fake.call["json"]["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_live_tick_batch_metadata_links_back_to_manual_job(monkeypatch):
+    from app.even_odd import storage
+
+    calls = {}
+
+    async def fake_start(**kwargs):
+        calls["start"] = kwargs
+        return "00000000-0000-0000-0000-000000000333"
+
+    async def fake_finish(**kwargs):
+        calls["finish"] = kwargs
+
+    monkeypatch.setattr(storage, "start_collection_run", fake_start)
+    monkeypatch.setattr(storage, "finish_collection_run", fake_finish)
+
+    tick = {
+        "epoch": 1795037706,
+        "quote": "83.2081",
+        "pip_size": 4,
+        "last_digit": 1,
+        "parity": "odd",
+        "received_at": "2026-11-20T00:00:01+00:00",
+    }
+    await storage.persist_live_tick_batch(
+        symbol="R_50",
+        ticks=[tick],
+        worker_id="worker-test",
+        job_id=JOB_ID,
+    )
+
+    metadata = calls["start"]["metadata"]
+    assert metadata["capture_mode"] == "live_stream"
+    assert metadata["batch_kind"] == "manual_job_batch"
+    assert metadata["job_id"] == JOB_ID
+    assert calls["finish"]["capture_mode"] == "live_stream"
+    assert calls["finish"]["status"] == "partial"
