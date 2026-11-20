@@ -323,6 +323,101 @@ async def load_historical_ticks(
         ) from exc
 
 
+async def save_payout_quote_snapshot(*, quote: dict) -> None:
+    """Persist a matched read-only Deriv proposal pair for later replay."""
+    try:
+        symbol = quote["symbol"]
+        currency = quote["currency"]
+        stake = quote["requested_stake"]
+        quoted_at = quote["quoted_at"]
+        even = quote["even"]
+        odd = quote["odd"]
+        spot_time = int(even["spot_time"])
+        if int(odd["spot_time"]) != spot_time:
+            raise ValueError("Even and Odd quote spot times do not match.")
+        payload = {
+            "market_symbol": symbol,
+            "currency": currency,
+            "stake": str(stake),
+            "quoted_at": quoted_at,
+            "spot_time": spot_time,
+            "even_ask_price": str(even["ask_price"]),
+            "even_payout": str(even["payout"]),
+            "odd_ask_price": str(odd["ask_price"]),
+            "odd_payout": str(odd["payout"]),
+            "source": quote.get("source", "deriv_public_websocket"),
+            "metadata": {
+                "duration": quote.get("duration"),
+                "duration_unit": quote.get("duration_unit"),
+                "even_contract_type": even.get("contract_type"),
+                "odd_contract_type": odd.get("contract_type"),
+            },
+        }
+        url, key = _configuration()
+        timeout = httpx.Timeout(15.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{url}/rest/v1/even_odd_payout_quote_snapshots",
+                params={"on_conflict": "market_symbol,currency,stake,spot_time"},
+                headers=_headers(key, "resolution=ignore-duplicates,return=minimal"),
+                json=payload,
+            )
+            response.raise_for_status()
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise EvenOddStorageError(
+            "Could not persist the historical payout quote snapshot."
+        ) from exc
+
+
+async def load_payout_quote_snapshots(
+    *,
+    symbol: str,
+    currency: str,
+    stake: str,
+    from_epoch: int | None = None,
+    to_epoch: int | None = None,
+    limit: int = 10000,
+) -> list[dict[str, Any]]:
+    """Load only quote snapshots matching the exact contract economics."""
+    if type(limit) is not int or not 1 <= limit <= 50000:
+        raise ValueError("Payout snapshot limit must be from 1 to 50000.")
+    params: dict[str, str] = {
+        "select": "market_symbol,currency,stake,quoted_at,spot_time,even_ask_price,even_payout,odd_ask_price,odd_payout,source",
+        "market_symbol": f"eq.{symbol}",
+        "currency": f"eq.{currency}",
+        "stake": f"eq.{stake}",
+        "order": "spot_time.asc",
+        "limit": str(limit),
+    }
+    if from_epoch is not None:
+        params["spot_time"] = f"gte.{from_epoch}"
+    if to_epoch is not None:
+        existing = params.get("spot_time")
+        params["spot_time"] = f"{existing},lte.{to_epoch}" if existing else f"lte.{to_epoch}"
+    url, key = _configuration()
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{url}/rest/v1/even_odd_payout_quote_snapshots",
+                params=params,
+                headers=_headers(key),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise EvenOddStorageError("Payout snapshot query returned an invalid response.")
+            return rows
+    except EvenOddStorageError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError(
+            "Could not load historical payout quote snapshots."
+        ) from exc
+
+
 async def start_research_run(
     *,
     symbol: str,
