@@ -155,9 +155,13 @@ async def _run(args: argparse.Namespace) -> int:
                 for name in experiment["model_candidates"]
             }
 
+        payout_replay_summary_by_model = {
+            name: {key: value for key, value in report.items() if key != "trades"}
+            for name, report in payout_replay_by_model.items()
+        }
         if walk_forward:
             # Keep full OOS predictions in memory for replay, but omit them from
-            # the persisted summary and console artifact.
+            # the persisted report; the workflow artifact contains the detailed output.
             walk_forward.pop("out_of_sample_predictions", None)
             walk_forward.pop("out_of_sample_predictions_by_model", None)
 
@@ -170,7 +174,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "rolling_frequency_baseline_metrics"
             ],
             "promotion_status": experiment["promotion_status"],
-            "payout_replay_by_model": payout_replay_by_model,
+            "payout_replay_by_model": payout_replay_summary_by_model,
             "walk_forward": walk_forward,
         }
         candidate_ids: dict[str, str] = {}
@@ -181,7 +185,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "rolling_frequency_baseline_metrics": evaluation["rolling_frequency_baseline_metrics"],
                 "walk_forward": None,
                 "promotion_status": experiment["promotion_status"],
-                "payout_replay": payout_replay_by_model.get(candidate_name),
+                "payout_replay": payout_replay_summary_by_model.get(candidate_name),
             }
             if walk_forward:
                 candidate_metrics["walk_forward"] = {
