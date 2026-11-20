@@ -61,8 +61,11 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
         def raise_for_status(self):
             return None
 
+        def __init__(self, rows):
+            self.rows = rows
+
         def json(self):
-            return [{"spot_time": 1795132800}]
+            return self.rows
 
     class Client:
         last_call = None
@@ -77,8 +80,10 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
             return False
 
         async def get(self, url, *, params, headers):
+            if params.get("select") == "id":
+                return Response([{"id": 42}])
             Client.last_call = (url, params, headers)
-            return Response()
+            return Response([{"id": 7, "spot_time": 1795132800}])
 
     monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
     monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
@@ -95,6 +100,8 @@ async def test_load_payout_snapshots_filters_exact_contract_and_time_range(monke
     assert params["currency"] == "eq.USD"
     assert params["stake"] == "eq.1.00"
     assert params["and"] == "(spot_time.gte.1795130000,spot_time.lte.1795139999)"
+    assert params["id"] == "lte.42"
+    assert Client.last_call[2]["Range"] == "0-999"
 
 @pytest.mark.asyncio
 async def test_save_payout_snapshot_anchors_pair_to_older_side_when_spot_times_differ(monkeypatch):
