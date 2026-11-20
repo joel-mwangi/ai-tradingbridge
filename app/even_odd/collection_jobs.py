@@ -104,7 +104,7 @@ async def active_collection(
             if timestamp:
                 try:
                     last_seen = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-                    stale = (datetime.now(timezone.utc) - last_seen).total_seconds() > 60
+                    stale = (datetime.now(timezone.utc) - last_seen).total_seconds() > 120
                 except ValueError:
                     stale = False
                 if stale:
