@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StrictInt
 
 from app.even_odd.storage import _configuration, _headers, persist_live_tick_batch
+from app.even_odd.collector import normalize_live_tick
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
 bearer = HTTPBearer(auto_error=False)
@@ -149,20 +150,23 @@ async def persist_browser_tick_batch(
         if job["status"] not in {"queued", "collecting"}:
             raise HTTPException(status_code=409, detail="Collection job is no longer active.")
         symbol = str(job["market_symbol"])
-        for tick in request.ticks:
-            if tick.get("symbol") != symbol:
-                raise HTTPException(status_code=422, detail="Tick market does not match the collection job.")
-            if not isinstance(tick.get("last_digit"), int) or tick["last_digit"] not in range(10):
-                raise HTTPException(status_code=422, detail="Tick contains an invalid last digit.")
-            if not isinstance(tick.get("epoch"), int) or tick["epoch"] <= 0:
-                raise HTTPException(status_code=422, detail="Tick contains an invalid epoch.")
+        normalized_ticks: list[dict] = []
+        try:
+            for item in request.ticks:
+                raw_tick = item.get("tick")
+                subscription = item.get("subscription_id")
+                normalized_ticks.append(
+                    normalize_live_tick(raw_tick, symbol, subscription_id=str(subscription) if subscription is not None else None)
+                )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="Batch contains an invalid Deriv tick.") from exc
         previous = int(job.get("received_ticks") or 0)
         target = int(job["target_ticks"])
         if previous + len(request.ticks) > target:
             raise HTTPException(status_code=409, detail="Batch would exceed the collection target.")
         try:
             await persist_live_tick_batch(
-                symbol=symbol, ticks=request.ticks, worker_id=f"browser:{owner}", job_id=str(job_id)
+                symbol=symbol, ticks=normalized_ticks, worker_id=f"browser:{owner}", job_id=str(job_id)
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Could not persist the live tick batch.") from exc
@@ -180,4 +184,4 @@ async def persist_browser_tick_batch(
         updated = patch.json()
         if not updated:
             raise HTTPException(status_code=409, detail="Collection job changed while saving the batch.")
-        return {"job": updated[0], "persisted_ticks": len(request.ticks), "live_only": True}
+        return {"job": updated[0], "persisted_ticks": len(normalized_ticks), "live_only": True}
