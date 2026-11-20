@@ -9,6 +9,21 @@ alter table public.even_odd_ticks
     add constraint even_odd_ticks_capture_mode_check
     check (capture_mode in ('historical', 'live_stream'));
 
+-- capture_id is generated once by the collector and reused for any
+-- persistence retry of the same in-memory tick batch.
+alter table public.even_odd_ticks
+    add column if not exists capture_id uuid default gen_random_uuid();
+
+update public.even_odd_ticks
+set capture_id = gen_random_uuid()
+where capture_id is null;
+
+alter table public.even_odd_ticks
+    alter column capture_id set not null;
+
+create unique index if not exists even_odd_ticks_capture_id_uidx
+    on public.even_odd_ticks (capture_id);
+
 create index if not exists even_odd_ticks_live_market_epoch_idx
     on public.even_odd_ticks (market_symbol, tick_epoch desc, id desc)
     where capture_mode = 'live_stream';
@@ -30,6 +45,8 @@ alter table public.even_odd_live_heartbeats enable row level security;
 revoke all on table public.even_odd_live_heartbeats from anon, authenticated;
 grant select, insert, update on table public.even_odd_live_heartbeats to service_role;
 
+comment on column public.even_odd_ticks.capture_id is
+    'Stable ingestion idempotency key generated once per captured observation and reused for persistence retries.';
 comment on column public.even_odd_ticks.capture_mode is
     'historical rows are legacy/imported and excluded from Even/Odd research; live_stream rows were captured after a Deriv ticks subscription began.';
 comment on table public.even_odd_live_heartbeats is
