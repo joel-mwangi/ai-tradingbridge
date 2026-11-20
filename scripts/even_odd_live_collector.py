@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +34,8 @@ def configured_symbols() -> list[str]:
     symbols = list(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
     if not symbols:
         raise ValueError("Set EVEN_ODD_LIVE_SYMBOLS to at least one Deriv symbol.")
+    if any(not re.fullmatch(r"[A-Za-z0-9_]{2,32}", symbol) for symbol in symbols):
+        raise ValueError("EVEN_ODD_LIVE_SYMBOLS contains an invalid Deriv symbol.")
     return symbols
 
 
