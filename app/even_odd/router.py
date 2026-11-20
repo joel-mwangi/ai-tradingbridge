@@ -821,7 +821,7 @@ async def plan_adaptive_sequence(
             raise EvenOddStorageError("Stored model does not declare valid feature windows.")
 
         snapshot = await load_historical_ticks(symbol=model["market_symbol"], limit=5000)
-        market_rows = snapshot["rows"]
+        market_rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(market_rows, expected_symbol=model["market_symbol"])
         if (
             not quality["quality_passed"]
@@ -1173,7 +1173,7 @@ async def check_hybrid_entry(
             symbol=model["market_symbol"],
             limit=5000,
         )
-        market_rows = snapshot["rows"]
+        market_rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(
             market_rows,
             expected_symbol=model["market_symbol"],
