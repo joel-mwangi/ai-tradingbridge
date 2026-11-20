@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.even_odd.collector import TickCollectionError, collect_ticks
-from app.even_odd.data_quality import inspect_historical_ticks
+from app.even_odd.data_quality import (
+    canonicalize_overlapping_collection_ticks,
+    inspect_historical_ticks,
+)
 from app.even_odd.ml.features import build_next_tick_features
 from app.even_odd.ml.model import predict_even_probability
 from app.even_odd.ml.uncertainty import select_probability_interval
@@ -287,18 +290,24 @@ async def get_even_odd_history(
             detail="Could not load historical ticks from the dedicated database.",
         ) from exc
 
-    rows = snapshot["rows"]
+    raw_rows = snapshot["rows"]
+    canonical = canonicalize_overlapping_collection_ticks(raw_rows)
+    rows = canonical["rows"]
     return {
         "symbol": symbol,
         "returned_ticks": len(rows),
+        "raw_observation_count": canonical["raw_rows"],
+        "overlap_duplicates_excluded": canonical["overlap_duplicates_excluded"],
+        "deduplication_policy": canonical["policy"],
         "limit": limit,
         "snapshot_max_id": snapshot["snapshot_max_id"],
-        "limit_reached": len(rows) == limit,
+        "limit_reached": len(raw_rows) == limit,
         "ordering": "tick_epoch_asc_then_id_asc",
         "rows": rows,
         "warning": (
-            "Historical observations are research data, not proof of predictive "
-            "edge. Overlapping collection windows may contain repeated market ticks."
+            "This canonical view excludes exact market fingerprints repeated "
+            "across collection runs. Raw records remain persisted and available "
+            "to the quality audit. This does not establish predictive edge."
         ),
     }
 
@@ -612,7 +621,7 @@ async def forecast_next_parity(
             symbol=symbol,
             limit=max(windows),
         )
-        rows = snapshot["rows"]
+        rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=symbol)
         if (
             not quality["quality_passed"]
@@ -812,7 +821,7 @@ async def plan_adaptive_sequence(
             raise EvenOddStorageError("Stored model does not declare valid feature windows.")
 
         snapshot = await load_historical_ticks(symbol=model["market_symbol"], limit=5000)
-        market_rows = snapshot["rows"]
+        market_rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(market_rows, expected_symbol=model["market_symbol"])
         if (
             not quality["quality_passed"]
@@ -1164,7 +1173,7 @@ async def check_hybrid_entry(
             symbol=model["market_symbol"],
             limit=5000,
         )
-        market_rows = snapshot["rows"]
+        market_rows = canonicalize_overlapping_collection_ticks(snapshot["rows"])["rows"]
         quality = inspect_historical_ticks(
             market_rows,
             expected_symbol=model["market_symbol"],

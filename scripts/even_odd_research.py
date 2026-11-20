@@ -14,7 +14,10 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from app.even_odd.data_quality import inspect_historical_ticks
+from app.even_odd.data_quality import (
+    canonicalize_overlapping_collection_ticks,
+    inspect_historical_ticks,
+)
 from app.even_odd.ml.payout_replay import replay_payout_aware_strategy
 from app.even_odd.ml.pipeline import (
     run_research_experiment,
@@ -63,8 +66,13 @@ async def _run(args: argparse.Namespace) -> int:
             symbol=args.symbol,
             limit=args.limit,
         )
-        rows = snapshot["rows"]
+        raw_rows = snapshot["rows"]
+        canonical = canonicalize_overlapping_collection_ticks(raw_rows)
+        rows = canonical["rows"]
         quality = inspect_historical_ticks(rows, expected_symbol=args.symbol)
+        quality["raw_observation_count"] = canonical["raw_rows"]
+        quality["overlap_duplicates_excluded"] = canonical["overlap_duplicates_excluded"]
+        quality["canonical_sample_size"] = canonical["canonical_rows"]
         research_run_id = await start_research_run(
             symbol=args.symbol,
             snapshot_max_id=snapshot["snapshot_max_id"],
@@ -77,7 +85,7 @@ async def _run(args: argparse.Namespace) -> int:
             print(json.dumps({
                 "status": "blocked",
                 "research_run_id": research_run_id,
-                "reason": "Historical dataset failed structural quality checks.",
+                "reason": "Canonical historical dataset failed structural quality checks.",
                 "snapshot_max_id": snapshot["snapshot_max_id"],
                 "quality": quality,
             }, indent=2))

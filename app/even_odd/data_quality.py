@@ -139,14 +139,72 @@ def inspect_historical_ticks(
             and ordering_violations == 0
             and duplicate_sequence_numbers == 0
             and sequence_order_violations == 0
+            and duplicate_rows == 0
         ),
         "duplicate_policy": (
-            "Duplicates are reported but retained. Identical quote and epoch "
-            "values can represent repeated genuine ticks or overlapping collection "
-            "windows; automatic removal would risk discarding valid observations."
+            "Raw records are retained for auditability. Exact market fingerprints "
+            "repeated across different collection runs are treated as overlapping "
+            "window contamination in the canonical research view; they block "
+            "research readiness until reviewed."
         ),
         "interpretation": (
             "Structural quality checks only. Passing this audit does not establish "
             "independence, stationarity, statistical significance, or predictive edge."
+        ),
+    }
+
+
+def canonicalize_overlapping_collection_ticks(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Build a research view without mutating raw persisted rows.
+
+    Exact fingerprints repeated across different collection runs are emitted
+    once. Same-collection repeats are retained because they may be genuine ticks.
+    """
+    if not isinstance(rows, (list, tuple)):
+        raise ValueError("rows must be a list or tuple of tick records.")
+
+    selected: dict[tuple, dict[str, Any]] = {}
+    duplicate_rows = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            symbol = row["market_symbol"]
+            epoch = row["tick_epoch"]
+            quote = Decimal(str(row["quote"]))
+            pip_size = row["pip_size"]
+            collection_id = str(row["collection_id"])
+            row_id = row["id"]
+            if (not isinstance(symbol, str) or type(epoch) is not int
+                    or type(pip_size) is not int or type(row_id) is not int
+                    or not quote.is_finite()):
+                continue
+            fingerprint = (symbol, epoch, format(quote, f".{pip_size}f"), pip_size)
+        except (KeyError, TypeError, ValueError, InvalidOperation):
+            continue
+
+        existing = selected.get(fingerprint)
+        if existing is None:
+            selected[fingerprint] = {"row": dict(row), "collections": {collection_id}}
+            continue
+        if collection_id in existing["collections"]:
+            selected[(fingerprint, row_id)] = {
+                "row": dict(row), "collections": {collection_id}
+            }
+            continue
+        duplicate_rows += 1
+        existing["collections"].add(collection_id)
+
+    canonical_rows = [entry["row"] for entry in selected.values()]
+    canonical_rows.sort(key=lambda row: (row["tick_epoch"], row["id"]))
+    return {
+        "rows": canonical_rows,
+        "raw_rows": len(rows),
+        "canonical_rows": len(canonical_rows),
+        "overlap_duplicates_excluded": duplicate_rows,
+        "policy": (
+            "Exact symbol/epoch/quote/precision fingerprints repeated across "
+            "different collection runs are emitted once. Raw persisted records "
+            "remain unchanged; same-collection repeats are retained."
         ),
     }
