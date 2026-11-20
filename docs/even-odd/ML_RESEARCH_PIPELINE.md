@@ -106,6 +106,19 @@ payout-adjusted conservative EV, entry coverage, win/loss counts, net P&L,
 ROI on stake, profit factor and maximum drawdown from out-of-sample forecasts.
 No current quote is substituted for a missing historical quote.
 
+The payout replay also estimates same-side opportunity persistence for
+horizons 1–6 using only consecutive, fold-local out-of-sample opportunity
+records. It reports a one-sided 90% Wilson lower bound and marks each horizon
+validated only after at least 200 qualifying trials across at least five folds.
+These bounds are not inferred from in-sample streaks and are not extrapolated
+across fold boundaries.
+
+The sequence planner consumes these persistence bounds together with
+validated parity forecasts, conservative EV, session loss budget, historical
+replay net P&L / ROI and positive-fold rate. It caps plans at seven trades and
+requires fresh revalidation after every completed trade. Missing OOS payout
+evidence or persistence coverage results in WAIT rather than a guessed count.
+
 If quote snapshots are absent or sparse, replay reports unavailable or low
 coverage rather than inventing returns. A replay with fewer than 200 entries
 is explicitly marked as insufficient evidence. Replay metrics remain
