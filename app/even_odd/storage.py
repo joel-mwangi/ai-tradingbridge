@@ -131,7 +131,7 @@ async def finish_collection_run(
     """Persist the collected ticks and transition the run to a terminal state."""
     if status not in {"completed", "partial"}:
         raise ValueError("Collection terminal status must be completed or partial.")
-    if capture_mode not in {"historical", "live_stream"}:
+    if capture_mode not in {"historical", "live_stream", "browser_stream"}:
         raise ValueError("Unsupported tick capture mode.")
     if len(ticks) > requested_ticks:
         raise ValueError("Received tick count cannot exceed requested tick count.")
@@ -242,7 +242,7 @@ async def load_historical_ticks(
     from_epoch: int | None = None,
     to_epoch: int | None = None,
     collection_id: str | None = None,
-    capture_mode: str = "live_stream",
+    capture_mode: str = "browser_stream",
 ) -> dict[str, Any]:
     """Read the latest bounded history snapshot, returned in chronological order.
 
