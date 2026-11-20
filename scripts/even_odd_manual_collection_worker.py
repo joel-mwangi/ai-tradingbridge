@@ -88,7 +88,7 @@ async def _run_job(job: dict, client: httpx.AsyncClient, url: str, key: str) -> 
                 received += 1
 
                 if len(batch) >= BATCH_SIZE or received >= target:
-                    await persist_live_tick_batch(symbol=symbol, ticks=batch, worker_id=WORKER_ID)
+                    await persist_live_tick_batch(symbol=symbol, ticks=batch, worker_id=WORKER_ID, job_id=job_id)
                     batch = []
                     await _patch_job(client, url, key, job_id, {"received_ticks": received})
 
