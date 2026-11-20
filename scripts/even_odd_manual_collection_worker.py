@@ -111,7 +111,7 @@ async def _run_job(job: dict, client: httpx.AsyncClient, url: str, key: str) -> 
                     await _patch_job(client, url, key, job_id, {})
 
         if batch:
-            await persist_live_tick_batch(symbol=symbol, ticks=batch, worker_id=WORKER_ID)
+            await persist_live_tick_batch(symbol=symbol, ticks=batch, worker_id=WORKER_ID, job_id=job_id)
         state = await client.get(
             f"{url}/rest/v1/even_odd_collection_jobs",
             params={"select": "status", "id": f"eq.{job_id}", "worker_id": f"eq.{WORKER_ID}", "limit": "1"},
