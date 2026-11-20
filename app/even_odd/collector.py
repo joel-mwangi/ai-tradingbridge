@@ -85,7 +85,7 @@ async def collect_ticks(
     tick_count: int,
     timeout_seconds: int = 60,
 ) -> list[dict]:
-    """Collect a finite sample, preserving valid partial data on upstream failure."""
+    """Fetch a finite historical tick window in one request (not a live stream)."""
     if not SYMBOL_PATTERN.fullmatch(symbol):
         raise ValueError("Invalid Deriv symbol.")
     if not 10 <= tick_count <= 300:
@@ -93,8 +93,14 @@ async def collect_ticks(
     if not 5 <= timeout_seconds <= 80:
         raise ValueError("timeout_seconds must be between 5 and 80.")
 
-    collected: list[dict] = []
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    request_id = 4101
+    request = {
+        "ticks_history": symbol,
+        "count": tick_count,
+        "end": "latest",
+        "style": "ticks",
+        "req_id": request_id,
+    }
     try:
         async with websockets.connect(
             DERIV_PUBLIC_WS_URL,
@@ -104,53 +110,75 @@ async def collect_ticks(
             close_timeout=5,
             max_size=1_000_000,
         ) as websocket:
-            await websocket.send(json.dumps({
-                "ticks": symbol,
-                "subscribe": 1,
-                "req_id": 1,
-            }))
-            while len(collected) < tick_count:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    break
-                raw_message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            await websocket.send(json.dumps(request))
+            raw_message = await asyncio.wait_for(
+                websocket.recv(), timeout=timeout_seconds
+            )
+            try:
+                message = json.loads(raw_message)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise TickCollectionError("Deriv returned an invalid history response.") from exc
+
+            if not isinstance(message, dict):
+                raise TickCollectionError("Deriv returned an invalid history response.")
+            if message.get("req_id") not in (None, request_id):
+                raise TickCollectionError("Deriv response did not match the history request.")
+            if message.get("error"):
+                error = message["error"]
+                code = error.get("code") if isinstance(error, dict) else None
+                detail = f"Deriv rejected the historical tick request{f' ({code})' if code else ''}."
+                raise TickCollectionError(detail)
+            if message.get("msg_type") != "history":
+                raise TickCollectionError("Deriv did not return historical tick data.")
+
+            history = message.get("history")
+            prices = history.get("prices") if isinstance(history, dict) else None
+            times = history.get("times") if isinstance(history, dict) else None
+            pip_size = message.get("pip_size")
+            if (
+                not isinstance(prices, list)
+                or not isinstance(times, list)
+                or len(prices) != len(times)
+                or not prices
+                or pip_size is None
+            ):
+                raise TickCollectionError("Deriv historical response is missing aligned prices, times, or pip_size.")
+
+            collected: list[dict] = []
+            for price, epoch in zip(prices, times):
                 try:
-                    message = json.loads(raw_message)
-                except (TypeError, json.JSONDecodeError):
-                    continue
-                if not isinstance(message, dict):
-                    continue
-                if message.get("error"):
-                    raise TickCollectionError(
-                        "Deriv returned an API error.", ticks=collected
-                    )
-                if message.get("msg_type") != "tick":
-                    continue
-                try:
-                    normalized = normalize_tick(message.get("tick"), symbol)
+                    collected.append(normalize_tick(
+                        {
+                            "symbol": symbol,
+                            "quote": price,
+                            "epoch": epoch,
+                            "pip_size": pip_size,
+                        },
+                        symbol,
+                    ))
                 except ValueError:
                     continue
-                collected.append(normalized)
-    except asyncio.TimeoutError:
-        pass
-    except TickCollectionError as exc:
-        if not exc.ticks:
-            exc.ticks = list(collected)
+
+            if len(collected) < 10:
+                raise TickCollectionError(
+                    f"Insufficient valid historical ticks received: {len(collected)} of {tick_count} requested.",
+                    ticks=collected,
+                )
+            if len(collected) < tick_count:
+                raise TickCollectionError(
+                    f"Deriv returned {len(collected)} of {tick_count} requested historical ticks.",
+                    ticks=collected,
+                )
+            if len(collected) > tick_count:
+                collected = collected[-tick_count:]
+            return collected
+    except TickCollectionError:
         raise
+    except asyncio.TimeoutError as exc:
+        raise TickCollectionError(
+            "Deriv historical tick request timed out before the history response arrived."
+        ) from exc
     except Exception as exc:
         raise TickCollectionError(
-            "Unable to collect ticks from the Deriv public feed.",
-            ticks=collected,
+            "Unable to retrieve historical ticks from the Deriv public API."
         ) from exc
-
-    if len(collected) < 10:
-        raise TickCollectionError(
-            f"Insufficient valid ticks received: {len(collected)} of {tick_count} requested.",
-            ticks=collected,
-        )
-    if len(collected) < tick_count:
-        raise TickCollectionError(
-            f"Collection timed out after receiving {len(collected)} of {tick_count} requested ticks.",
-            ticks=collected,
-        )
-    return collected
