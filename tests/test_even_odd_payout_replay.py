@@ -67,3 +67,14 @@ def test_replay_rejects_invalid_quote_economics_and_probability_intervals():
             [quote(100, payout=0.9)],
             stake=1.0,
         )
+
+def test_replay_excludes_multiple_ticks_sharing_second_resolution_quote_time():
+    result = replay_payout_aware_strategy(
+        [prediction(100), prediction(100), prediction(101)],
+        [quote(100), quote(101)],
+        stake=1.0,
+    )
+    assert result["opportunities"] == 3
+    assert result["ambiguous_timestamp_opportunities"] == 2
+    assert result["unambiguous_timestamp_opportunities"] == 1
+    assert result["entry_count"] == 1
