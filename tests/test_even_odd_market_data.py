@@ -109,147 +109,29 @@ def test_even_odd_analyze_endpoint():
     assert response.json()["analysis"]["sample"]["even"]["percentage"] == 50.0
 
 
-def test_collect_endpoint_uses_dedicated_collector_and_persists(monkeypatch):
-    sample = [
-        {
-            "received_at": "2026-11-18T00:00:00+00:00",
-            "epoch": 1760000000 + i,
-            "symbol": "R_50",
-            "quote": f"123.45{i % 10}",
-            "pip_size": 3,
-            "last_digit": i % 10,
-            "parity": "even" if i % 2 == 0 else "odd",
-            "stream_id": "stream-123",
-        }
-        for i in range(10)
-    ]
-
-    collection_started_at = []
-
-    async def fake_collect(symbol, tick_count, timeout_seconds):
-        assert collection_started_at[0] <= datetime.now(timezone.utc)
-        assert symbol == "R_50"
-        assert tick_count == 10
-        return sample
-
-    async def fake_start_collection_run(*, symbol, requested_ticks, started_at):
-        assert symbol == "R_50"
-        assert requested_ticks == 10
-        assert isinstance(started_at, datetime)
-        assert started_at.tzinfo == timezone.utc
-        collection_started_at.append(started_at)
-        return "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-
-    async def fake_finish_collection_run(**kwargs):
-        assert kwargs["collection_id"] == "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-        assert kwargs["symbol"] == "R_50"
-        assert kwargs["requested_ticks"] == 10
-        assert kwargs["ticks"] == sample
-        assert kwargs["status"] == "completed"
-
-    monkeypatch.setattr("app.even_odd.router.collect_ticks", fake_collect)
-    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
-    monkeypatch.setattr("app.even_odd.router.start_collection_run", fake_start_collection_run)
-    monkeypatch.setattr("app.even_odd.router.finish_collection_run", fake_finish_collection_run)
+def test_historical_collection_endpoint_is_retired():
     response = client.post(
         "/even-odd/collect",
         headers=auth(),
         json={"symbol": "R_50", "tick_count": 10},
     )
+    assert response.status_code == 410
+    assert "Historical tick collection is disabled" in response.json()["detail"]
+
+
+def test_live_status_reports_no_worker_until_heartbeat_exists(monkeypatch):
+    async def no_heartbeat(*, symbol):
+        assert symbol == "R_50"
+        return None
+
+    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
+    monkeypatch.setattr("app.even_odd.router.get_live_collector_heartbeat", no_heartbeat)
+    response = client.get("/even-odd/live-status?symbol=R_50", headers=auth())
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["returned_ticks"] == 10
-    assert payload["persisted"] is True
-    assert payload["collection_id"] == "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-    assert payload["analysis"]["sample"]["sample_size"] == 10
-    assert payload["predictive_edge_established"] is False
-
-
-def test_collect_endpoint_fails_closed_without_dedicated_storage(monkeypatch):
-    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: False)
-    response = client.post(
-        "/even-odd/collect",
-        headers=auth(),
-        json={"symbol": "R_50", "tick_count": 10},
-    )
-    assert response.status_code == 503
-
-
-
-def test_collect_endpoint_persists_partial_ticks_and_returns_auditable_failure(monkeypatch):
-    from app.even_odd.collector import TickCollectionError
-
-    partial = [
-        {
-            "received_at": "2026-11-19T00:00:01+00:00",
-            "epoch": 1760000000 + i,
-            "symbol": "R_50",
-            "quote": f"123.45{i}",
-            "pip_size": 3,
-            "last_digit": i,
-            "parity": "even" if i % 2 == 0 else "odd",
-            "stream_id": "stream-123",
-        }
-        for i in range(3)
-    ]
-    saved = {}
-
-    async def fake_start_collection_run(**kwargs):
-        return "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-
-    async def fake_collect(**kwargs):
-        raise TickCollectionError("Deriv feed disconnected.", ticks=partial)
-
-    async def fake_finish_collection_run(**kwargs):
-        saved.update(kwargs)
-
-    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
-    monkeypatch.setattr("app.even_odd.router.start_collection_run", fake_start_collection_run)
-    monkeypatch.setattr("app.even_odd.router.collect_ticks", fake_collect)
-    monkeypatch.setattr("app.even_odd.router.finish_collection_run", fake_finish_collection_run)
-
-    response = client.post(
-        "/even-odd/collect",
-        headers=auth(),
-        json={"symbol": "R_50", "tick_count": 10},
-    )
-    assert response.status_code == 502
-    assert saved["ticks"] == partial
-    assert saved["status"] == "partial"
-    assert saved["error_message"] == "Deriv feed disconnected."
-    assert response.json()["detail"]["status"] == "partial"
-    assert response.json()["detail"]["received_ticks"] == 3
-
-
-def test_collect_endpoint_marks_zero_tick_failure(monkeypatch):
-    from app.even_odd.collector import TickCollectionError
-
-    failed = {}
-
-    async def fake_start_collection_run(**kwargs):
-        return "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-
-    async def fake_collect(**kwargs):
-        raise TickCollectionError("Unable to connect.")
-
-    async def fake_fail_collection_run(**kwargs):
-        failed.update(kwargs)
-
-    monkeypatch.setattr("app.even_odd.router.storage_is_configured", lambda: True)
-    monkeypatch.setattr("app.even_odd.router.start_collection_run", fake_start_collection_run)
-    monkeypatch.setattr("app.even_odd.router.collect_ticks", fake_collect)
-    monkeypatch.setattr("app.even_odd.router.fail_collection_run", fake_fail_collection_run)
-
-    response = client.post(
-        "/even-odd/collect",
-        headers=auth(),
-        json={"symbol": "R_50", "tick_count": 10},
-    )
-    assert response.status_code == 502
-    assert failed["collection_id"] == "b7b6a6d0-4f49-4d5b-90f5-6e7a7e0e7f10"
-    assert failed["received_ticks"] == 0
-    assert response.json()["detail"]["status"] == "failed"
-
+    assert response.json()["collector"] is None
+    assert response.json()["live_only"] is True
+    assert response.json()["historical_imports_enabled"] is False
+    assert response.json()["order_execution_enabled"] is False
 
 
 @pytest.mark.asyncio
