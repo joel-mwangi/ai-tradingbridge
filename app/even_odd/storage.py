@@ -80,7 +80,8 @@ async def _mark_collection_failed(
 
 
 async def start_collection_run(
-    *, symbol: str, requested_ticks: int, started_at: datetime
+    *, symbol: str, requested_ticks: int, started_at: datetime,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
     """Create the durable audit record before opening the market-data socket."""
     url, key = _configuration()
@@ -96,7 +97,10 @@ async def start_collection_run(
                     "requested_ticks": requested_ticks,
                     "received_ticks": 0,
                     "started_at": started_at.isoformat(),
-                    "metadata": {"collector": "dedicated_deriv_public_websocket"},
+                    "metadata": {
+                        "collector": "dedicated_deriv_public_websocket",
+                        **(metadata or {}),
+                    },
                 },
             )
             response.raise_for_status()
@@ -122,10 +126,13 @@ async def finish_collection_run(
     ticks: list[dict[str, Any]],
     status: str,
     error_message: str | None = None,
+    capture_mode: str = "historical",
 ) -> None:
     """Persist the collected ticks and transition the run to a terminal state."""
     if status not in {"completed", "partial"}:
         raise ValueError("Collection terminal status must be completed or partial.")
+    if capture_mode not in {"historical", "live_stream"}:
+        raise ValueError("Unsupported tick capture mode.")
     if len(ticks) > requested_ticks:
         raise ValueError("Received tick count cannot exceed requested tick count.")
     if status == "completed" and len(ticks) != requested_ticks:
@@ -147,7 +154,9 @@ async def finish_collection_run(
                     "pip_size": tick["pip_size"],
                     "last_digit": tick["last_digit"],
                     "parity": tick["parity"],
+                    "deriv_tick_id": tick.get("tick_id"),
                     "deriv_stream_id": tick.get("stream_id"),
+                    "capture_mode": capture_mode,
                     "received_at": tick["received_at"],
                 }
                 for index, tick in enumerate(ticks, start=1)
@@ -231,6 +240,7 @@ async def load_historical_ticks(
     from_epoch: int | None = None,
     to_epoch: int | None = None,
     collection_id: str | None = None,
+    capture_mode: str = "live_stream",
 ) -> dict[str, Any]:
     """Read the latest bounded history snapshot, returned in chronological order.
 
@@ -241,6 +251,8 @@ async def load_historical_ticks(
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000.")
+    if capture_mode not in {"historical", "live_stream"}:
+        raise ValueError("Unsupported tick capture mode.")
     if from_epoch is not None and from_epoch <= 0:
         raise ValueError("from_epoch must be positive.")
     if to_epoch is not None and to_epoch <= 0:
@@ -258,7 +270,13 @@ async def load_historical_ticks(
         async with httpx.AsyncClient(timeout=timeout) as client:
             latest_response = await client.get(
                 f"{url}/rest/v1/even_odd_ticks",
-                params={"select": "id", "order": "id.desc", "limit": "1"},
+                params={
+                    "select": "id",
+                    "market_symbol": f"eq.{symbol}",
+                    "capture_mode": f"eq.{capture_mode}",
+                    "order": "id.desc",
+                    "limit": "1",
+                },
                 headers=headers,
             )
             latest_response.raise_for_status()
@@ -272,9 +290,11 @@ async def load_historical_ticks(
             base_params: dict[str, str] = {
                 "select": (
                     "id,collection_id,sequence_no,market_symbol,tick_epoch,quote,"
-                    "pip_size,last_digit,parity,deriv_stream_id,received_at"
+                    "pip_size,last_digit,parity,deriv_tick_id,deriv_stream_id,"
+                    "capture_mode,received_at"
                 ),
                 "market_symbol": f"eq.{symbol}",
+                "capture_mode": f"eq.{capture_mode}",
                 "id": f"lte.{snapshot_max_id}",
                 "order": "tick_epoch.desc,id.desc",
             }
@@ -321,6 +341,91 @@ async def load_historical_ticks(
         raise EvenOddStorageError(
             "Could not load historical ticks from the dedicated database."
         ) from exc
+
+
+
+async def persist_live_tick_batch(
+    *, symbol: str, ticks: list[dict[str, Any]], worker_id: str,
+) -> str | None:
+    """Persist only observations received from the live Deriv subscription."""
+    if not ticks:
+        return None
+    if len(ticks) > 300:
+        raise ValueError("Live tick batch cannot exceed 300 observations.")
+    requested = max(10, len(ticks))
+    started_at = datetime.now(timezone.utc)
+    collection_id = await start_collection_run(
+        symbol=symbol,
+        requested_ticks=requested,
+        started_at=started_at,
+        metadata={
+            "capture_mode": "live_stream",
+            "worker_id": worker_id,
+            "batch_kind": "live_subscription",
+        },
+    )
+    await finish_collection_run(
+        collection_id=collection_id,
+        symbol=symbol,
+        requested_ticks=requested,
+        ticks=ticks,
+        status="completed" if len(ticks) == requested else "partial",
+        capture_mode="live_stream",
+    )
+    return collection_id
+
+
+async def update_live_collector_heartbeat(
+    *, symbol: str, worker_id: str, status: str,
+    started_at: datetime, last_tick_at: datetime | None,
+    ticks_received: int, last_error: str | None = None,
+) -> None:
+    """Upsert operational health for the independent live collector."""
+    if status not in {"connecting", "connected", "reconnecting", "stopped", "error"}:
+        raise ValueError("Invalid live collector status.")
+    url, key = _configuration()
+    payload = {
+        "market_symbol": symbol,
+        "worker_id": worker_id,
+        "status": status,
+        "started_at": started_at.isoformat(),
+        "last_tick_at": last_tick_at.isoformat() if last_tick_at else None,
+        "ticks_received": ticks_received,
+        "last_error": last_error[:500] if last_error else None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            response = await client.post(
+                f"{url}/rest/v1/even_odd_live_heartbeats",
+                params={"on_conflict": "market_symbol"},
+                headers=_headers(key, "resolution=merge-duplicates,return=minimal"),
+                json=payload,
+            )
+            response.raise_for_status()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not update live collector heartbeat.") from exc
+
+
+async def get_live_collector_heartbeat(*, symbol: str) -> dict[str, Any] | None:
+    """Read the latest live collector health record for a market."""
+    url, key = _configuration()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            response = await client.get(
+                f"{url}/rest/v1/even_odd_live_heartbeats",
+                params={
+                    "select": "market_symbol,worker_id,status,started_at,last_tick_at,ticks_received,last_error,updated_at",
+                    "market_symbol": f"eq.{symbol}",
+                    "limit": "1",
+                },
+                headers=_headers(key),
+            )
+            response.raise_for_status()
+            rows = response.json()
+            return rows[0] if isinstance(rows, list) and rows else None
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise EvenOddStorageError("Could not read live collector heartbeat.") from exc
 
 
 async def save_payout_quote_snapshot(*, quote: dict) -> None:
