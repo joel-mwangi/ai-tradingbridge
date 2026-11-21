@@ -138,6 +138,7 @@ def _window_features(
     features[f"{prefix}_even_rate_momentum"] = (
         recent_even_rate - previous_even_rate
     )
+    features[f"{prefix}_odd_rate_momentum"] = -features[f"{prefix}_even_rate_momentum"]
     # Individual digit momentum uses the same chronological half-window split.
     for digit in range(10):
         previous_rate = _rate(previous_half, lambda value, d=digit: value == d)
