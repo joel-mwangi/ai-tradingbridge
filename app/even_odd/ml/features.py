@@ -6,10 +6,10 @@ model feature matrix.
 
 Feature groups include:
 - rolling parity and individual-digit frequencies;
-- frequency momentum and acceleration;
+- frequency momentum and parity acceleration;
 - parity and latest-digit-conditioned transitions;
 - repeated suffix-pattern frequencies;
-- cross-window frequency and momentum divergence.
+- cross-window parity and digit-frequency divergence.
 """
 
 from collections import Counter
@@ -54,7 +54,6 @@ def _window_features(
 
     counts = Counter(window)
     even_count = sum(1 for digit in window if digit % 2 == 0)
-    odd_count = total - even_count
     even_rate = even_count / total
     odd_rate = odd_count / total
 
@@ -65,10 +64,8 @@ def _window_features(
     }
 
     entropy = 0.0
-    digit_rates: dict[int, float] = {}
     for digit in range(10):
         rate = counts[digit] / total
-        digit_rates[digit] = rate
         features[f"{prefix}_digit_{digit}_rate"] = rate
         if rate > 0:
             entropy -= rate * log2(rate)
@@ -113,7 +110,7 @@ def _window_features(
                 count / latest_source_count if latest_source_count else 0.0
             )
 
-    # Current and longest runs expose both parity and exact-digit sequence state.
+    # Current parity and exact-digit runs expose the latest sequence state.
     latest_parity = latest_digit % 2
     parity_streak = 0
     digit_streak = 0
@@ -193,7 +190,7 @@ def _add_cross_window_features(
     features: dict[str, float],
     windows: Sequence[int],
 ) -> None:
-    """Add short-versus-long divergence without using any future observations."""
+    """Add short-versus-long frequency divergence using past-only features."""
     ordered_windows = sorted(windows)
     for short_window, long_window in zip(ordered_windows, ordered_windows[1:]):
         short_prefix = f"w{short_window}"
