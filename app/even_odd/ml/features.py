@@ -55,7 +55,7 @@ def _window_features(
     counts = Counter(window)
     even_count = sum(1 for digit in window if digit % 2 == 0)
     even_rate = even_count / total
-    odd_rate = odd_count / total
+    odd_rate = 1.0 - even_rate
 
     features: dict[str, float] = {
         f"{prefix}_even_rate": even_rate,
