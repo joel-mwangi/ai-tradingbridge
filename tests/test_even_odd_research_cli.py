@@ -57,7 +57,10 @@ async def test_research_cli_blocks_duplicate_samples_without_explicit_opt_in(mon
 
 @pytest.mark.asyncio
 async def test_research_cli_blocks_when_no_live_observations_exist(monkeypatch, capsys):
+    load_kwargs = {}
+
     async def fake_load(**kwargs):
+        load_kwargs.update(kwargs)
         return {"rows": [], "snapshot_max_id": None}
 
     async def unexpected_start(**kwargs):
@@ -81,6 +84,7 @@ async def test_research_cli_blocks_when_no_live_observations_exist(monkeypatch, 
     output = json.loads(capsys.readouterr().out)
 
     assert result == 2
+    assert load_kwargs["capture_mode"] == "all_live"
     assert output["status"] == "blocked"
     assert "No live-captured observations" in output["reason"]
     assert output["historical_imports_enabled"] is False
