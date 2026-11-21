@@ -30,10 +30,14 @@ def _movement_summary(digits: Sequence[int]) -> dict:
 
     previous_even = _percentage(previous_half, lambda digit: digit % 2 == 0)
     recent_even = _percentage(recent_half, lambda digit: digit % 2 == 0)
+    has_comparison_period = bool(previous_half)
+    even_momentum = recent_even - previous_even if has_comparison_period else 0.0
     digit_momentum = {
         str(digit): round(
-            _percentage(recent_half, lambda value, d=digit: value == d)
-            - _percentage(previous_half, lambda value, d=digit: value == d),
+            (
+                _percentage(recent_half, lambda value, d=digit: value == d)
+                - _percentage(previous_half, lambda value, d=digit: value == d)
+            ) if has_comparison_period else 0.0,
             2,
         )
         for digit in range(10)
@@ -66,8 +70,8 @@ def _movement_summary(digits: Sequence[int]) -> dict:
         digit_acceleration = {str(digit): 0.0 for digit in range(10)}
 
     return {
-        "even_percentage_momentum_pp": round(recent_even - previous_even, 2),
-        "odd_percentage_momentum_pp": round(previous_even - recent_even, 2),
+        "even_percentage_momentum_pp": round(even_momentum, 2),
+        "odd_percentage_momentum_pp": round(-even_momentum, 2),
         "digit_percentage_momentum_pp": digit_momentum,
         "even_percentage_acceleration_pp": round(even_acceleration, 2),
         "digit_percentage_acceleration_pp": digit_acceleration,
