@@ -188,6 +188,7 @@ def _summarize_matches(
             {"odd_count": value, "probability": odd_counts[value] / total}
             for value in range(horizon + 1)
         ]
+        digit_detail_horizon = min(5, max_horizon)
         digit_occurrence = [
             {
                 "digit": digit,
@@ -195,7 +196,7 @@ def _summarize_matches(
                 "mean_occurrences": sum(item["digit_counts"][digit] for item in outcomes) / total,
             }
             for digit in range(10)
-        ]
+        ] if horizon == digit_detail_horizon else []
         p_three_odd = event("three_or_more_odd")
         p_three_consecutive_odd = event("three_consecutive_odd")
         results.append({
@@ -274,7 +275,7 @@ def _holdout_horizon_selection(
         "training_matches": len(train_matches),
         "holdout_matches": len(test_matches),
         "selected_horizon_by_event": selected,
-        "all_horizon_comparisons": comparisons,
+        "candidate_horizons_evaluated": list(range(3, max_horizon + 1)),
         "selection_method": "Chronological 70/30 split of matching occurrences; compare each event's holdout Brier score with an unconditional-rate baseline.",
         "warning": (
             "Horizon selection is exploratory. Searching multiple patterns and horizons "
@@ -413,8 +414,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
         best_holdout_improvement = max(
             (
                 item["brier_improvement"]
-                for event_items in holdout.get("all_horizon_comparisons", {}).values()
-                for item in event_items
+                for item in holdout.get("selected_horizon_by_event", {}).values()
             ),
             default=None,
         )
@@ -452,7 +452,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
         },
         "patterns_examined": len(candidates),
         "patterns_with_historical_matches": len(patterns),
-        "patterns": patterns[:100],
+        "patterns": patterns[:50],
         "latest_context": {
             "latest_digit": values[-1],
             "latest_parity": "even" if values[-1] % 2 == 0 else "odd",

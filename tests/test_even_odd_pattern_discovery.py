@@ -37,7 +37,7 @@ def test_horizon_selection_uses_chronological_holdout_and_reports_status():
     ]
     assert selections
     assert all(item["training_matches"] >= 10 and item["holdout_matches"] >= 10 for item in selections)
-    assert all("all_horizon_comparisons" in item for item in selections)
+    assert all("candidate_horizons_evaluated" in item for item in selections)
 
 
 def test_insufficient_data_is_explicit():
