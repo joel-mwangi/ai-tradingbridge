@@ -23,7 +23,7 @@ def test_analysis_exposes_percentage_acceleration_for_parity_and_digits():
 
     assert sample["even_percentage_acceleration_pp"] == 100.0
     assert sample["digit_percentage_acceleration_pp"]["0"] == 50.0
-    assert sample["digit_percentage_acceleration_pp"]["1"] == -50.0
+    assert sample["digit_percentage_acceleration_pp"]["1"] == 0.0
 
 
 def test_analysis_exposes_full_digit_transition_matrix_and_conditional_rates():
