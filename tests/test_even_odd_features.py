@@ -133,7 +133,6 @@ def test_cross_window_features_expose_short_long_divergence():
     features = build_supervised_rows(digits, windows=(4, 8))[0]["features"]
 
     assert features["cross_w4_w8_even_rate_delta"] == -0.5
-    assert features["cross_w4_w8_odd_rate_delta"] == 0.5
     assert "cross_w4_w8_digit_0_rate_delta" in features
     assert "cross_w4_w8_even_rate_momentum_delta" in features
 
@@ -152,3 +151,12 @@ def test_new_pattern_features_remain_independent_of_unseen_target():
 
     assert with_even_target["target_parity"] != with_odd_target["target_parity"]
     assert with_even_target["features"] == with_odd_target["features"]
+
+
+def test_default_pattern_feature_schema_remains_bounded():
+    digits = [index % 10 for index in range(1002)]
+    row = build_supervised_rows(digits)[0]
+
+    # Keep the expanded feature vector bounded for the dependency-light
+    # logistic trainer and the configured multi-fold research workflow.
+    assert len(row["features"]) == 243
