@@ -1,14 +1,23 @@
 """Adaptive, leakage-aware conditional pattern discovery for Even/Odd research.
 
 This is a descriptive pattern miner, not a next-tick classifier. It searches
-multiple data-driven context lengths and pattern families, then estimates
-future-horizon outcome distributions from prior matching contexts only.
+multiple data-driven context lengths and pattern families, estimates outcome
+distributions over future horizons, and checks candidate horizons on a later
+chronological slice of historical pattern occurrences.
 """
 from __future__ import annotations
 
 from collections import Counter
 from math import sqrt
 from typing import Sequence
+
+
+EVENT_KEYS = (
+    "three_or_more_odd",
+    "three_or_more_even",
+    "three_consecutive_odd",
+    "three_consecutive_even",
+)
 
 
 def _wilson(successes: int, total: int) -> dict:
@@ -56,34 +65,64 @@ def _bucket_momentum(momentum: float) -> int:
     return max(-10, min(10, int(round(momentum / 0.05))))
 
 
-def _parity_regime(values: Sequence[int]) -> tuple[int, int, int, int]:
-    half = len(values) // 2
-    prior = values[:half]
-    recent = values[half:]
-    even_rate = sum(value % 2 == 0 for value in values) / len(values)
-    prior_rate = sum(value % 2 == 0 for value in prior) / len(prior)
-    recent_rate = sum(value % 2 == 0 for value in recent) / len(recent)
-    streak = _streak_length(values)
-    streak_bucket = min(8, streak)  # 8 means 8 or more
+def _build_prefixes(values: Sequence[int]) -> tuple[list[int], list[list[int]], list[int]]:
+    count = len(values)
+    even_prefix = [0] * (count + 1)
+    digit_prefix = [[0] * (count + 1) for _ in range(10)]
+    streak_lengths = [0] * count
+    for index, value in enumerate(values):
+        even_prefix[index + 1] = even_prefix[index] + int(value % 2 == 0)
+        for digit in range(10):
+            digit_prefix[digit][index + 1] = digit_prefix[digit][index] + int(value == digit)
+        streak_lengths[index] = (
+            streak_lengths[index - 1] + 1
+            if index and values[index - 1] % 2 == value % 2
+            else 1
+        )
+    return even_prefix, digit_prefix, streak_lengths
+
+
+def _parity_signature_at(
+    values: Sequence[int],
+    even_prefix: Sequence[int],
+    streak_lengths: Sequence[int],
+    end: int,
+    window: int,
+) -> tuple[int, int, int, int]:
+    start = end - window + 1
+    half_start = start + window // 2
+    prior_size = half_start - start
+    recent_size = end + 1 - half_start
+    even_rate = (even_prefix[end + 1] - even_prefix[start]) / window
+    prior_rate = (even_prefix[half_start] - even_prefix[start]) / prior_size
+    recent_rate = (even_prefix[end + 1] - even_prefix[half_start]) / recent_size
     return (
         _bucket_rate(even_rate),
         _bucket_momentum(recent_rate - prior_rate),
-        streak_bucket,
-        values[-1] % 2,
+        min(8, streak_lengths[end]),
+        values[end] % 2,
     )
 
 
-def _digit_regime(values: Sequence[int], digit: int) -> tuple[int, int, int]:
-    half = len(values) // 2
-    prior = values[:half]
-    recent = values[half:]
-    rate = sum(value == digit for value in values) / len(values)
-    prior_rate = sum(value == digit for value in prior) / len(prior)
-    recent_rate = sum(value == digit for value in recent) / len(recent)
+def _digit_signature_at(
+    values: Sequence[int],
+    digit_prefix: Sequence[int],
+    end: int,
+    window: int,
+    digit: int,
+) -> tuple[int, int, int]:
+    start = end - window + 1
+    half_start = start + window // 2
+    prior_size = half_start - start
+    recent_size = end + 1 - half_start
+    counts = digit_prefix
+    rate = (counts[end + 1] - counts[start]) / window
+    prior_rate = (counts[half_start] - counts[start]) / prior_size
+    recent_rate = (counts[end + 1] - counts[half_start]) / recent_size
     return (
         _bucket_rate(rate),
         _bucket_momentum(recent_rate - prior_rate),
-        values[-1] % 2,
+        values[end] % 2,
     )
 
 
@@ -133,12 +172,11 @@ def _summarize_matches(
 
         def event(key: str) -> dict:
             successes = sum(bool(item[key]) for item in outcomes)
-            interval = _wilson(successes, total)
             return {
                 "probability": successes / total,
                 "successes": successes,
                 "sample_size": total,
-                "confidence_95": interval,
+                "confidence_95": _wilson(successes, total),
             }
 
         odd_counts = Counter(item["odd_count"] for item in outcomes)
@@ -147,8 +185,8 @@ def _summarize_matches(
         base_three_odd = sum(item["three_or_more_odd"] for item in base) / base_total
         base_three_consecutive_odd = sum(item["three_consecutive_odd"] for item in base) / base_total
         odd_count_distribution = [
-            {"odd_count": count, "probability": odd_counts[count] / total}
-            for count in range(horizon + 1)
+            {"odd_count": value, "probability": odd_counts[value] / total}
+            for value in range(horizon + 1)
         ]
         digit_occurrence = [
             {
@@ -178,13 +216,80 @@ def _summarize_matches(
     return results
 
 
+def _holdout_horizon_selection(
+    digits: Sequence[int],
+    matches: Sequence[int],
+    max_horizon: int,
+    last_complete_end: int,
+) -> dict:
+    """Select candidate horizons using later pattern occurrences only."""
+    split = int(len(matches) * 0.7)
+    train_matches = list(matches[:split])
+    test_matches = list(matches[split:])
+    if len(train_matches) < 10 or len(test_matches) < 10:
+        return {
+            "status": "insufficient_occurrences",
+            "training_matches": len(train_matches),
+            "holdout_matches": len(test_matches),
+            "selected_horizon_by_event": {},
+            "warning": "At least 10 earlier and 10 later matching occurrences are required for horizon comparison.",
+        }
+
+    baseline_end = min(train_matches[-1], last_complete_end)
+    baseline_indices = range(0, baseline_end + 1)
+    selected = {}
+    comparisons = {key: [] for key in EVENT_KEYS}
+
+    for horizon in range(3, max_horizon + 1):
+        train_outcomes = [_future_summary(digits, index, horizon) for index in train_matches]
+        test_outcomes = [_future_summary(digits, index, horizon) for index in test_matches]
+        baseline_outcomes = [_future_summary(digits, index, horizon) for index in baseline_indices]
+        if not baseline_outcomes:
+            continue
+        for event_key in EVENT_KEYS:
+            pattern_probability = sum(item[event_key] for item in train_outcomes) / len(train_outcomes)
+            baseline_probability = sum(item[event_key] for item in baseline_outcomes) / len(baseline_outcomes)
+            model_brier = sum((pattern_probability - int(item[event_key])) ** 2 for item in test_outcomes) / len(test_outcomes)
+            baseline_brier = sum((baseline_probability - int(item[event_key])) ** 2 for item in test_outcomes) / len(test_outcomes)
+            comparisons[event_key].append({
+                "horizon_ticks": horizon,
+                "training_probability": pattern_probability,
+                "baseline_probability": baseline_probability,
+                "holdout_brier_score": model_brier,
+                "baseline_holdout_brier_score": baseline_brier,
+                "brier_improvement": baseline_brier - model_brier,
+                "training_matches": len(train_matches),
+                "holdout_matches": len(test_matches),
+            })
+
+    for event_key, items in comparisons.items():
+        if not items:
+            continue
+        best = max(items, key=lambda item: item["brier_improvement"])
+        if best["brier_improvement"] > 0:
+            selected[event_key] = best
+
+    return {
+        "status": "positive_holdout_brier_improvement" if selected else "no_positive_holdout_brier_improvement",
+        "training_matches": len(train_matches),
+        "holdout_matches": len(test_matches),
+        "selected_horizon_by_event": selected,
+        "all_horizon_comparisons": comparisons,
+        "selection_method": "Chronological 70/30 split of matching occurrences; compare each event's holdout Brier score with an unconditional-rate baseline.",
+        "warning": (
+            "Horizon selection is exploratory. Searching multiple patterns and horizons "
+            "can create false discoveries; no multiple-testing correction or independent "
+            "approval is implied."
+        ),
+    }
+
+
 def discover_patterns(digits: Sequence[int]) -> dict:
     """Discover currently active parity, digit, frequency and momentum patterns.
 
-    Context lengths and forecast horizons are selected from the amount of
-    available history. Future horizons are probability distributions over
-    occurrence counts and streak events, not a single next-tick class label.
-    All historical matches end before the latest complete outcome horizon.
+    Context lengths and future horizons adapt to the available history. The
+    report estimates future event distributions after prior matching contexts
+    and uses a later chronological slice to compare candidate horizons.
     """
     if any(type(value) is not int or not 0 <= value <= 9 for value in digits):
         raise ValueError("Every last digit must be an integer from 0 to 9.")
@@ -204,6 +309,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
     max_digit_suffix = min(4, max(1, count // 100))
     candidate_windows = _adaptive_lengths(count)
     last_complete_end = count - max_horizon - 1
+    even_prefix, digit_prefixes, streak_lengths = _build_prefixes(values)
 
     baseline_matches = list(range(0, last_complete_end + 1))
     baseline = {
@@ -214,7 +320,6 @@ def discover_patterns(digits: Sequence[int]) -> dict:
     candidates: list[dict] = []
     parity = [value % 2 for value in values]
 
-    # Exact parity suffixes: every available candidate length, not just 2–5.
     for length in range(2, max_suffix + 1):
         current = tuple(parity[-length:])
         matches = [
@@ -229,7 +334,6 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "matches": matches,
         })
 
-    # Exact digit suffixes discover recurring multi-digit sequences.
     for length in range(1, max_digit_suffix + 1):
         current = tuple(values[-length:])
         matches = [
@@ -244,41 +348,43 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "matches": matches,
         })
 
-    # Adaptive rolling windows: parity rate, momentum and current streak.
     for window in candidate_windows:
-        current_signature = _parity_regime(values[-window:])
-        matches = []
-        for end in range(window - 1, last_complete_end + 1):
-            if _parity_regime(values[end - window + 1:end + 1]) == current_signature:
-                matches.append(end)
+        current_parity_signature = _parity_signature_at(
+            values, even_prefix, streak_lengths, count - 1, window,
+        )
+        parity_matches = [
+            end for end in range(window - 1, last_complete_end + 1)
+            if _parity_signature_at(values, even_prefix, streak_lengths, end, window) == current_parity_signature
+        ]
         candidates.append({
             "family": "parity_frequency_momentum",
             "context_ticks": window,
             "pattern": {
-                "even_rate_bucket_10pp": current_signature[0],
-                "even_momentum_bucket_5pp": current_signature[1],
-                "current_streak_bucket": current_signature[2],
-                "latest_parity": "even" if current_signature[3] == 0 else "odd",
+                "even_rate_bucket_10pp": current_parity_signature[0],
+                "even_momentum_bucket_5pp": current_parity_signature[1],
+                "current_streak_bucket": current_parity_signature[2],
+                "latest_parity": "even" if current_parity_signature[3] == 0 else "odd",
             },
             "description": f"Parity frequency, momentum and streak regime over {window} observations",
-            "matches": matches,
+            "matches": parity_matches,
         })
 
-        # Individual digit rate and momentum regimes for every digit 0–9.
         for digit in range(10):
-            signature = _digit_regime(values[-window:], digit)
+            current_digit_signature = _digit_signature_at(
+                values, digit_prefixes[digit], count - 1, window, digit,
+            )
             digit_matches = [
                 end for end in range(window - 1, last_complete_end + 1)
-                if _digit_regime(values[end - window + 1:end + 1], digit) == signature
+                if _digit_signature_at(values, digit_prefixes[digit], end, window, digit) == current_digit_signature
             ]
             candidates.append({
                 "family": "individual_digit_frequency_momentum",
                 "context_ticks": window,
                 "pattern": {
                     "digit": digit,
-                    "frequency_bucket_10pp": signature[0],
-                    "momentum_bucket_5pp": signature[1],
-                    "latest_parity": "even" if signature[2] == 0 else "odd",
+                    "frequency_bucket_10pp": current_digit_signature[0],
+                    "momentum_bucket_5pp": current_digit_signature[1],
+                    "latest_parity": "even" if current_digit_signature[2] == 0 else "odd",
                 },
                 "description": f"Digit {digit} frequency and momentum regime over {window} observations",
                 "matches": digit_matches,
@@ -303,6 +409,15 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             (abs(item.get("lift_at_least_3_odd", 0.0)) for item in horizons if item.get("sample_size")),
             default=0.0,
         )
+        holdout = _holdout_horizon_selection(values, matches, max_horizon, last_complete_end)
+        best_holdout_improvement = max(
+            (
+                item["brier_improvement"]
+                for event_items in holdout.get("all_horizon_comparisons", {}).values()
+                for item in event_items
+            ),
+            default=None,
+        )
         patterns.append({
             "family": candidate["family"],
             "context_ticks": candidate["context_ticks"],
@@ -311,14 +426,17 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "historical_matches": support,
             "support_status": support_status,
             "exploratory_lift_score": largest_lift * sqrt(support / (support + 50)),
+            "holdout_horizon_selection": holdout,
+            "best_holdout_brier_improvement": best_holdout_improvement,
             "horizons": horizons,
         })
 
     patterns.sort(
         key=lambda item: (
+            item["best_holdout_brier_improvement"] is not None,
+            item["best_holdout_brier_improvement"] or 0.0,
             item["exploratory_lift_score"],
             item["historical_matches"],
-            item["context_ticks"],
         ),
         reverse=True,
     )
@@ -330,7 +448,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "digit_sequence_lengths_tested": list(range(1, max_digit_suffix + 1)),
             "frequency_windows_tested": candidate_windows,
             "future_horizons_tested": list(range(1, max_horizon + 1)),
-            "selection_method": "Data-volume-adaptive geometric context windows plus all supported suffix lengths and future horizons",
+            "selection_method": "Data-volume-adaptive context lengths and future horizons; candidate horizons compared on later matching occurrences",
         },
         "patterns_examined": len(candidates),
         "patterns_with_historical_matches": len(patterns),
@@ -338,7 +456,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
         "latest_context": {
             "latest_digit": values[-1],
             "latest_parity": "even" if values[-1] % 2 == 0 else "odd",
-            "current_parity_streak": _streak_length(values),
+            "current_parity_streak": streak_lengths[-1],
             "latest_parity_suffix": "".join("E" if value == 0 else "O" for value in parity[-max_suffix:]),
         },
         "interpretation": {
@@ -348,10 +466,10 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "support_threshold_for_evidence": 50,
             "warning": (
                 "Exploratory conditional frequencies are vulnerable to sparse samples, "
-                "overlapping observations and multiple-pattern selection. Confidence "
-                "intervals quantify binomial sampling uncertainty only; they do not "
-                "correct for dependence or multiple testing. No pattern is validated "
-                "or authorized for trading by this report."
+                "overlapping observations and multiple-pattern selection. Wilson intervals "
+                "quantify binomial sampling uncertainty only; they do not correct for "
+                "dependence or multiple testing. Horizon selection is exploratory and "
+                "does not validate a pattern or authorize trading."
             ),
         },
     }

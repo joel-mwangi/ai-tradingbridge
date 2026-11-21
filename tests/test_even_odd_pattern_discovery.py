@@ -2,7 +2,6 @@ from app.even_odd.ml.pattern_discovery import discover_patterns
 
 
 def sample_digits(size=1200):
-    # Deterministic, varied sample with repeated sequence structure.
     return [int((index * 7 + index // 9 + (index // 37) % 3) % 10) for index in range(size)]
 
 
@@ -12,7 +11,6 @@ def test_discovery_adapts_context_lengths_and_horizons_to_sample_size():
     assert report["adaptive_search"]["parity_sequence_lengths_tested"]
     assert report["adaptive_search"]["digit_sequence_lengths_tested"]
     assert report["adaptive_search"]["frequency_windows_tested"]
-    assert report["adaptive_search"]["future_horizons_tested"]
     assert report["adaptive_search"]["future_horizons_tested"][-1] == 20
     assert report["interpretation"]["not_a_next_tick_classifier"] is True
 
@@ -27,16 +25,19 @@ def test_pattern_probabilities_include_future_occurrence_distributions():
     assert "probability_3_consecutive_odd" in horizon
     assert len(horizon["digit_occurrence_probabilities"]) == 10
     assert len(horizon["odd_count_distribution"]) == 4
+    assert "holdout_horizon_selection" in pattern
 
 
-def test_pattern_matches_use_only_complete_historical_future_horizons():
-    values = sample_digits(300)
-    report = discover_patterns(values)
-    max_horizon = report["adaptive_search"]["future_horizons_tested"][-1]
-    # The number of examined candidates is bounded by the adaptive context search.
-    assert report["patterns_examined"] > 0
-    assert max_horizon <= 20
-    assert all(item["historical_matches"] > 0 for item in report["patterns"])
+def test_horizon_selection_uses_chronological_holdout_and_reports_status():
+    report = discover_patterns(sample_digits(1200))
+    selections = [
+        pattern["holdout_horizon_selection"]
+        for pattern in report["patterns"]
+        if pattern["holdout_horizon_selection"]["status"] != "insufficient_occurrences"
+    ]
+    assert selections
+    assert all(item["training_matches"] >= 10 and item["holdout_matches"] >= 10 for item in selections)
+    assert all("all_horizon_comparisons" in item for item in selections)
 
 
 def test_insufficient_data_is_explicit():
