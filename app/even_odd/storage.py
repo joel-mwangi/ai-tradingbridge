@@ -253,7 +253,7 @@ async def load_historical_ticks(
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000.")
-    if capture_mode not in {"historical", "live_stream"}:
+    if capture_mode not in {"historical", "live_stream", "browser_stream"}:
         raise ValueError("Unsupported tick capture mode.")
     if from_epoch is not None and from_epoch <= 0:
         raise ValueError("from_epoch must be positive.")
