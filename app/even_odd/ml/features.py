@@ -295,6 +295,7 @@ def chronological_split(
 def build_next_tick_features(
     digits: Sequence[int],
     windows: Sequence[int] = DEFAULT_WINDOWS,
+    feature_names: Sequence[str] | None = None,
 ) -> dict[str, float]:
     """Build pre-target features for the next unseen tick without inventing a label."""
     _validate_digits(digits)
@@ -307,4 +308,39 @@ def build_next_tick_features(
     prediction_rows = build_supervised_rows([*digits, 0], windows=windows)
     if not prediction_rows:
         raise ValueError("Unable to build next-tick prediction features.")
-    return prediction_rows[-1]["features"]
+    features = prediction_rows[-1]["features"]
+    if feature_names is None:
+        return features
+    if (
+        not feature_names
+        or any(not isinstance(name, str) or not name for name in feature_names)
+        or len(set(feature_names)) != len(feature_names)
+    ):
+        raise ValueError("feature_names must contain unique non-empty strings.")
+
+    # Older persisted candidates included latest-digit one-hot fields for every
+    # window. Reconstruct those fields on demand so their exact saved feature
+    # schema remains usable while newly trained candidates use the expanded
+    # bounded schema.
+    selected = {}
+    for name in feature_names:
+        if name in features:
+            selected[name] = features[name]
+            continue
+        parts = name.split("_")
+        if (
+            len(parts) == 4
+            and parts[0].startswith("w")
+            and parts[0][1:].isdigit()
+            and int(parts[0][1:]) in windows
+            and parts[1] == "latest"
+            and parts[2] == "digit"
+            and parts[3].isdigit()
+            and 0 <= int(parts[3]) <= 9
+        ):
+            selected[name] = float(digits[-1] == int(parts[3]))
+            continue
+        raise ValueError(
+            f"Stored model feature schema is incompatible with current features: {name}."
+        )
+    return selected
