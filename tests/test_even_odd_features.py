@@ -159,3 +159,34 @@ def test_default_pattern_feature_schema_remains_bounded():
     # Keep the expanded feature vector bounded for the dependency-light
     # logistic trainer and the configured multi-fold research workflow.
     assert len(row["features"]) == 248
+
+
+def test_next_tick_features_can_reconstruct_legacy_latest_digit_schema():
+    digits = [0, 2, 4, 6, 8, 1, 3, 5]
+    legacy_names = [
+        "w4_even_rate",
+        "w8_even_rate",
+        "w4_latest_digit_0",
+        "w4_latest_digit_5",
+        "w8_latest_digit_5",
+    ]
+
+    features = build_next_tick_features(
+        digits,
+        windows=(4, 8),
+        feature_names=legacy_names,
+    )
+
+    assert list(features) == legacy_names
+    assert features["w4_latest_digit_0"] == 0.0
+    assert features["w4_latest_digit_5"] == 1.0
+    assert features["w8_latest_digit_5"] == 1.0
+
+
+def test_next_tick_features_reject_unknown_stored_feature_schema():
+    with pytest.raises(ValueError, match="feature schema is incompatible"):
+        build_next_tick_features(
+            [0, 1, 2, 3],
+            windows=(4,),
+            feature_names=["w4_unknown_pattern_feature"],
+        )
