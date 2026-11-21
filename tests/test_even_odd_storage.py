@@ -288,6 +288,50 @@ async def test_load_historical_ticks_uses_stable_snapshot_and_paginates(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_load_browser_stream_ticks_filters_browser_capture_mode(monkeypatch):
+    from app.even_odd.storage import load_historical_ticks
+
+    class Response:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.rows
+
+    class FakeAsyncClient:
+        calls = []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params, headers):
+            self.calls.append(params)
+            if params.get("order") == "id.desc":
+                return Response([{"id": 42}])
+            return Response([{"id": 42, "market_symbol": "R_50", "capture_mode": "browser_stream"}])
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    result = await load_historical_ticks(symbol="R_50", limit=1, capture_mode="browser_stream")
+
+    assert result["snapshot_max_id"] == 42
+    assert result["rows"][0]["capture_mode"] == "browser_stream"
+    assert FakeAsyncClient.calls[0]["capture_mode"] == "eq.browser_stream"
+    assert FakeAsyncClient.calls[1]["capture_mode"] == "eq.browser_stream"
+
+
+@pytest.mark.asyncio
 async def test_load_historical_ticks_returns_empty_when_database_has_no_ticks(monkeypatch):
     from app.even_odd.storage import load_historical_ticks
 
