@@ -39,8 +39,15 @@ def _rate(values: Sequence[int], predicate) -> float:
     return sum(1 for value in values if predicate(value)) / len(values)
 
 
-def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
-    """Calculate descriptive features using only the supplied past window."""
+def _window_features(
+    window: Sequence[int],
+    prefix: str,
+    *,
+    include_latest_digit_identity: bool = False,
+    include_latest_digit_transitions: bool = False,
+    include_sequence_features: bool = False,
+) -> dict[str, float]:
+    """Calculate bounded descriptive features using only the supplied past window."""
     total = len(window)
     if total < 2:
         raise ValueError("A feature window must contain at least two digits.")
@@ -75,7 +82,8 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
         source_parity = "even" if previous % 2 == 0 else "odd"
         target_parity = "even" if current % 2 == 0 else "odd"
         transition_counts[(source_parity, target_parity)] += 1
-        digit_transition_counts[(previous, current)] += 1
+        if include_latest_digit_transitions:
+            digit_transition_counts[(previous, current)] += 1
 
     transition_total = max(1, total - 1)
     for source in ("even", "odd"):
@@ -87,21 +95,23 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
             features[f"{prefix}_{source}_to_{target}_rate"] = (
                 count / transition_total
             )
-            features[f"{prefix}_{source}_to_{target}_conditional_rate"] = (
-                count / source_count if source_count else 0.0
-            )
+            if target == "even":
+                features[f"{prefix}_{source}_to_even_conditional_rate"] = (
+                    count / source_count if source_count else 0.0
+                )
 
     # Conditional next-digit distribution after the latest observed digit.
     # These are historical transitions wholly contained in the past window.
     latest_digit = window[-1]
-    latest_source_count = sum(
-        digit_transition_counts[(latest_digit, target)] for target in range(10)
-    )
-    for target in range(10):
-        count = digit_transition_counts[(latest_digit, target)]
-        features[f"{prefix}_latest_digit_next_{target}_rate"] = (
-            count / latest_source_count if latest_source_count else 0.0
+    if include_latest_digit_transitions:
+        latest_source_count = sum(
+            digit_transition_counts[(latest_digit, target)] for target in range(10)
         )
+        for target in range(10):
+            count = digit_transition_counts[(latest_digit, target)]
+            features[f"{prefix}_latest_digit_next_{target}_rate"] = (
+                count / latest_source_count if latest_source_count else 0.0
+            )
 
     # Current and longest runs expose both parity and exact-digit sequence state.
     latest_parity = latest_digit % 2
@@ -115,11 +125,12 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
         if digit != latest_digit:
             break
         digit_streak += 1
-    features[f"{prefix}_current_parity_streak_length"] = float(parity_streak)
+    features[f"{prefix}_current_streak_length"] = float(parity_streak)
     features[f"{prefix}_current_digit_streak_length"] = float(digit_streak)
     features[f"{prefix}_latest_parity_even"] = float(latest_parity == 0)
-    for digit in range(10):
-        features[f"{prefix}_latest_digit_{digit}"] = float(latest_digit == digit)
+    if include_latest_digit_identity:
+        for digit in range(10):
+            features[f"{prefix}_latest_digit_{digit}"] = float(latest_digit == digit)
 
     # Compare the most recent half-window with the preceding half-window.
     midpoint = total // 2
@@ -130,10 +141,6 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
     features[f"{prefix}_even_rate_momentum"] = (
         recent_even_rate - previous_even_rate
     )
-    features[f"{prefix}_odd_rate_momentum"] = (
-        (1.0 - recent_even_rate) - (1.0 - previous_even_rate)
-    )
-
     # Individual digit momentum uses the same chronological half-window split.
     for digit in range(10):
         previous_rate = _rate(previous_half, lambda value, d=digit: value == d)
@@ -158,36 +165,26 @@ def _window_features(window: Sequence[int], prefix: str) -> dict[str, float]:
             (even_segment_rates[3] - even_segment_rates[2])
             - (even_segment_rates[1] - even_segment_rates[0])
         )
-        for digit in range(10):
-            segment_rates = [
-                _rate(segment, lambda value, d=digit: value == d)
-                for segment in segments
-            ]
-            features[f"{prefix}_digit_{digit}_rate_acceleration"] = (
-                (segment_rates[3] - segment_rates[2])
-                - (segment_rates[1] - segment_rates[0])
-            )
     else:
         features[f"{prefix}_even_rate_acceleration"] = 0.0
-        for digit in range(10):
-            features[f"{prefix}_digit_{digit}_rate_acceleration"] = 0.0
 
     # Frequency of the exact parity suffix currently ending the window.
     # Overlapping occurrences are counted; all are historical, not future.
-    parity_values = tuple(digit % 2 for digit in window)
-    for length in PARITY_SEQUENCE_LENGTHS:
-        if total < length:
-            features[f"{prefix}_latest_parity_sequence_{length}_rate"] = 0.0
-            continue
-        suffix = parity_values[-length:]
-        occurrences = sum(
-            1
-            for index in range(total - length + 1)
-            if parity_values[index:index + length] == suffix
-        )
-        features[f"{prefix}_latest_parity_sequence_{length}_rate"] = (
-            occurrences / (total - length + 1)
-        )
+    if include_sequence_features:
+        parity_values = tuple(digit % 2 for digit in window)
+        for length in PARITY_SEQUENCE_LENGTHS:
+            if total < length:
+                features[f"{prefix}_latest_parity_sequence_{length}_rate"] = 0.0
+                continue
+            suffix = parity_values[-length:]
+            occurrences = sum(
+                1
+                for index in range(total - length + 1)
+                if parity_values[index:index + length] == suffix
+            )
+            features[f"{prefix}_latest_parity_sequence_{length}_rate"] = (
+                occurrences / (total - length + 1)
+            )
 
     return features
 
@@ -203,12 +200,11 @@ def _add_cross_window_features(
         long_prefix = f"w{long_window}"
         cross_prefix = f"cross_w{short_window}_w{long_window}"
 
-        base_keys = ["even_rate", "odd_rate", "parity_imbalance",
-                     "even_rate_momentum", "odd_rate_momentum"]
+        # Odd rate is the complement of even rate, and momentum deltas are
+        # derivable from the window-level inputs. Keep only independent rate
+        # divergences to avoid inflating the logistic feature matrix.
+        base_keys = ["even_rate"]
         base_keys.extend(f"digit_{digit}_rate" for digit in range(10))
-        base_keys.extend(
-            f"digit_{digit}_rate_momentum" for digit in range(10)
-        )
         for key in base_keys:
             features[f"{cross_prefix}_{key}_delta"] = (
                 features[f"{short_prefix}_{key}"]
@@ -241,8 +237,15 @@ def build_supervised_rows(
         history = digits[:target_index]
         features: dict[str, float] = {}
         for size in windows:
+            is_largest_window = size == minimum_history
             features.update(
-                _window_features(history[-size:], f"w{size}")
+                _window_features(
+                    history[-size:],
+                    f"w{size}",
+                    include_latest_digit_identity=is_largest_window,
+                    include_latest_digit_transitions=is_largest_window,
+                    include_sequence_features=is_largest_window,
+                )
             )
         _add_cross_window_features(features, windows)
 
