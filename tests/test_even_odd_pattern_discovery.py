@@ -23,8 +23,10 @@ def test_pattern_probabilities_include_future_occurrence_distributions():
     assert horizon["horizon_ticks"] == 3
     assert "probability_at_least_3_odd" in horizon
     assert "probability_3_consecutive_odd" in horizon
-    assert len(horizon["digit_occurrence_probabilities"]) == 10
     assert len(horizon["odd_count_distribution"]) == 4
+    digit_horizon = pattern["horizons"][4]
+    assert digit_horizon["horizon_ticks"] == 5
+    assert len(digit_horizon["digit_occurrence_probabilities"]) == 10
     assert "holdout_horizon_selection" in pattern
 
 
