@@ -253,7 +253,7 @@ async def load_historical_ticks(
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000.")
-    if capture_mode not in {"historical", "live_stream", "browser_stream"}:
+    if capture_mode not in {"historical", "live_stream", "browser_stream", "all_live"}:
         raise ValueError("Unsupported tick capture mode.")
     if from_epoch is not None and from_epoch <= 0:
         raise ValueError("from_epoch must be positive.")
@@ -267,6 +267,11 @@ async def load_historical_ticks(
     headers = _headers(key)
     page_size = 1000
     rows: list[dict[str, Any]] = []
+    capture_filter = (
+        "in.(live_stream,browser_stream)"
+        if capture_mode == "all_live"
+        else f"eq.{capture_mode}"
+    )
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -275,7 +280,7 @@ async def load_historical_ticks(
                 params={
                     "select": "id",
                     "market_symbol": f"eq.{symbol}",
-                    "capture_mode": f"eq.{capture_mode}",
+                    "capture_mode": capture_filter,
                     "order": "id.desc",
                     "limit": "1",
                 },
@@ -296,7 +301,7 @@ async def load_historical_ticks(
                     "capture_mode,received_at"
                 ),
                 "market_symbol": f"eq.{symbol}",
-                "capture_mode": f"eq.{capture_mode}",
+                "capture_mode": capture_filter,
                 "id": f"lte.{snapshot_max_id}",
                 "order": "tick_epoch.desc,id.desc",
             }
