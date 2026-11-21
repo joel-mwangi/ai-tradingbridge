@@ -131,7 +131,7 @@ async def finish_collection_run(
     """Persist the collected ticks and transition the run to a terminal state."""
     if status not in {"completed", "partial"}:
         raise ValueError("Collection terminal status must be completed or partial.")
-    if capture_mode not in {"historical", "live_stream", "browser_stream", "all_live"}:
+    if capture_mode not in {"historical", "live_stream", "browser_stream"}:
         raise ValueError("Unsupported tick capture mode.")
     if len(ticks) > requested_ticks:
         raise ValueError("Received tick count cannot exceed requested tick count.")
@@ -253,7 +253,7 @@ async def load_historical_ticks(
     """
     if not 1 <= limit <= 5000:
         raise ValueError("limit must be between 1 and 5000.")
-    if capture_mode not in {"historical", "live_stream", "browser_stream"}:
+    if capture_mode not in {"historical", "live_stream", "browser_stream", "all_live"}:
         raise ValueError("Unsupported tick capture mode.")
     if from_epoch is not None and from_epoch <= 0:
         raise ValueError("from_epoch must be positive.")
