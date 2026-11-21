@@ -662,11 +662,11 @@ async def save_candidate_model(
 async def complete_research_run(
     *,
     research_run_id: str,
-    model_id: str,
+    model_id: str | None,
     partition_sizes: dict[str, int],
     evaluation: dict[str, Any],
 ) -> None:
-    """Mark a research run completed only after its candidate model is saved."""
+    """Persist a completed research report; model_id is nullable for pattern-only runs."""
     url, key = _configuration()
     timeout = httpx.Timeout(20.0, connect=10.0)
     try:
