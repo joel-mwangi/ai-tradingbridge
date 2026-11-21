@@ -17,7 +17,7 @@ from app.even_odd.collector import normalize_live_tick
 
 router = APIRouter(prefix="/even-odd/collection-jobs", tags=["even-odd-lab"])
 bearer = HTTPBearer(auto_error=False)
-ALLOWED_TARGETS = {500, 1000, 2500, 5000}
+ALLOWED_TARGETS = {100, 500, 1000, 2500, 5000}
 
 
 def _auth(
@@ -52,7 +52,7 @@ async def start_collection(
     owner: Annotated[UUID, Depends(_auth)],
 ) -> dict:
     if request.target_ticks not in ALLOWED_TARGETS:
-        raise HTTPException(status_code=422, detail="target_ticks must be 500, 1000, 2500, or 5000.")
+        raise HTTPException(status_code=422, detail="target_ticks must be 100, 500, 1000, 2500, or 5000.")
     url, key = await _client()
     timeout = httpx.Timeout(15.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -113,7 +113,8 @@ async def active_collection(
                         params={"id": f"eq.{job['id']}", "owner_user_id": f"eq.{owner}",
                                 "status": "in.(queued,collecting)"},
                         headers=_headers(key, "return=representation"),
-                        json={"status": "failed", "last_error": "Browser heartbeat expired; collection was interrupted."},
+                        json={"status": "failed", "last_error": "Browser heartbeat expired; collection was interrupted.",
+                              "completed_at": datetime.now(timezone.utc).isoformat()},
                     )
                     recovered.raise_for_status()
                     recovered_rows = recovered.json()
@@ -134,7 +135,7 @@ async def stop_collection(
             params={"id": f"eq.{job_id}", "owner_user_id": f"eq.{owner}",
                     "status": "in.(queued,collecting)"},
             headers=_headers(key, "return=representation"),
-            json={"status": "stopped"},
+            json={"status": "stopped", "completed_at": datetime.now(timezone.utc).isoformat()},
         )
         response.raise_for_status()
         rows = response.json()
