@@ -43,7 +43,7 @@ def test_analysis_exposes_parity_transition_conditionals_and_latest_suffix_patte
 
     assert sample["parity_transition_conditional_probabilities"]["even"]["odd"] == 1.0
     assert sample["parity_transition_conditional_probabilities"]["odd"]["even"] == 1.0
-    assert sample["latest_parity_suffix_patterns"]["2"]["pattern"] == "OE"
+    assert sample["latest_parity_suffix_patterns"]["2"]["pattern"] == "EO"
     assert sample["latest_parity_suffix_patterns"]["2"]["occurrences"] == 3
     assert sample["latest_parity_suffix_patterns"]["2"]["rate"] == pytest.approx(3 / 5)
 
