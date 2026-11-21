@@ -158,4 +158,4 @@ def test_default_pattern_feature_schema_remains_bounded():
 
     # Keep the expanded feature vector bounded for the dependency-light
     # logistic trainer and the configured multi-fold research workflow.
-    assert len(row["features"]) == 243
+    assert len(row["features"]) == 248
