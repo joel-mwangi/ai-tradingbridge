@@ -307,7 +307,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
 
     max_horizon = min(20, max(3, count // 25))
     max_suffix = min(20, max(2, count // 20))
-    max_digit_suffix = min(4, max(1, count // 100))
+    max_digit_suffix = min(20, max(1, count // 20))
     candidate_windows = _adaptive_lengths(count)
     last_complete_end = count - max_horizon - 1
     even_prefix, digit_prefixes, streak_lengths = _build_prefixes(values)
