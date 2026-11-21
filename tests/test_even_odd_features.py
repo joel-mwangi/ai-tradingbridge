@@ -98,3 +98,95 @@ def test_next_tick_features_do_not_depend_on_placeholder_target_value():
 def test_next_tick_features_require_complete_history():
     with pytest.raises(ValueError, match="Not enough historical digits"):
         build_next_tick_features([0, 1, 2], windows=(4,))
+
+
+def test_individual_digit_momentum_tracks_recent_frequency_change():
+    digits = [1, 3, 5, 7, 0, 2, 4, 6, 8]
+    features = build_supervised_rows(digits, windows=(8,))[0]["features"]
+
+    assert features["w8_even_rate_momentum"] == 1.0
+    assert features["w8_odd_rate_momentum"] == -1.0
+    assert features["w8_digit_0_rate_momentum"] == 0.25
+    assert features["w8_digit_1_rate_momentum"] == -0.25
+
+
+def test_digit_transition_features_are_conditioned_on_latest_past_digit():
+    digits = [1, 4, 2, 4, 3, 4, 5, 4, 9]
+    features = build_supervised_rows(digits, windows=(8,))[0]["features"]
+
+    assert features["w8_latest_digit_next_2_rate"] == pytest.approx(1 / 3)
+    assert features["w8_latest_digit_next_3_rate"] == pytest.approx(1 / 3)
+    assert features["w8_latest_digit_next_5_rate"] == pytest.approx(1 / 3)
+    assert features["w8_latest_digit_next_4_rate"] == 0.0
+
+
+def test_parity_sequence_features_measure_repeated_latest_suffix():
+    digits = [0, 1, 0, 1, 0, 1, 8]
+    features = build_supervised_rows(digits, windows=(6,))[0]["features"]
+
+    assert features["w6_latest_parity_sequence_2_rate"] == pytest.approx(3 / 5)
+    assert features["w6_latest_parity_sequence_3_rate"] == pytest.approx(2 / 4)
+
+
+def test_cross_window_features_expose_short_long_divergence():
+    digits = [0, 2, 4, 6, 1, 3, 5, 7, 9]
+    features = build_supervised_rows(digits, windows=(4, 8))[0]["features"]
+
+    assert features["cross_w4_w8_even_rate_delta"] == -0.5
+    assert "cross_w4_w8_digit_0_rate_delta" in features
+
+
+def test_acceleration_features_capture_change_in_rate_momentum():
+    digits = [1, 3, 5, 7, 1, 3, 0, 2, 9]
+    features = build_supervised_rows(digits, windows=(8,))[0]["features"]
+
+    assert features["w8_even_rate_acceleration"] == pytest.approx(1.0)
+
+
+def test_new_pattern_features_remain_independent_of_unseen_target():
+    history = [1, 4, 2, 4, 3, 4, 5, 4]
+    with_even_target = build_supervised_rows([*history, 2], windows=(8,))[0]
+    with_odd_target = build_supervised_rows([*history, 9], windows=(8,))[0]
+
+    assert with_even_target["target_parity"] != with_odd_target["target_parity"]
+    assert with_even_target["features"] == with_odd_target["features"]
+
+
+def test_default_pattern_feature_schema_remains_bounded():
+    digits = [index % 10 for index in range(1002)]
+    row = build_supervised_rows(digits)[0]
+
+    # Keep the expanded feature vector bounded for the dependency-light
+    # logistic trainer and the configured multi-fold research workflow.
+    assert len(row["features"]) == 248
+
+
+def test_next_tick_features_can_reconstruct_legacy_latest_digit_schema():
+    digits = [0, 2, 4, 6, 8, 1, 3, 5]
+    legacy_names = [
+        "w4_even_rate",
+        "w8_even_rate",
+        "w4_latest_digit_0",
+        "w4_latest_digit_5",
+        "w8_latest_digit_5",
+    ]
+
+    features = build_next_tick_features(
+        digits,
+        windows=(4, 8),
+        feature_names=legacy_names,
+    )
+
+    assert list(features) == legacy_names
+    assert features["w4_latest_digit_0"] == 0.0
+    assert features["w4_latest_digit_5"] == 1.0
+    assert features["w8_latest_digit_5"] == 1.0
+
+
+def test_next_tick_features_reject_unknown_stored_feature_schema():
+    with pytest.raises(ValueError, match="feature schema is incompatible"):
+        build_next_tick_features(
+            [0, 1, 2, 3],
+            windows=(4,),
+            feature_names=["w4_unknown_pattern_feature"],
+        )

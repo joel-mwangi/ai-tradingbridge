@@ -553,7 +553,11 @@ async def forecast_next_parity(
                 detail="Latest market-data snapshot is insufficient or failed quality checks.",
             )
         digits = [row["last_digit"] for row in rows]
-        features = build_next_tick_features(digits, windows=tuple(windows))
+        features = build_next_tick_features(
+            digits,
+            windows=tuple(windows),
+            feature_names=feature_names,
+        )
         probability_even = predict_even_probability(artifact, features)
 
         latest_epoch = rows[-1]["tick_epoch"]
@@ -806,6 +810,7 @@ async def plan_adaptive_sequence(
             features = build_next_tick_features(
                 [row["last_digit"] for row in prior_rows],
                 windows=tuple(windows),
+                feature_names=artifact["feature_names"],
             )
             probability_even = predict_even_probability(artifact, features)
             uncertainty = select_probability_interval(
