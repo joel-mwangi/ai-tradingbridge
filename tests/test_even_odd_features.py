@@ -139,7 +139,7 @@ def test_cross_window_features_expose_short_long_divergence():
 
 
 def test_acceleration_features_capture_change_in_rate_momentum():
-    digits = [1, 3, 5, 7, 9, 1, 3, 5, 0]
+    digits = [1, 3, 5, 7, 1, 3, 0, 2, 9]
     features = build_supervised_rows(digits, windows=(8,))[0]["features"]
 
     assert features["w8_even_rate_acceleration"] == pytest.approx(1.0)
