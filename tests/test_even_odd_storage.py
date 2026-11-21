@@ -500,6 +500,46 @@ async def test_complete_research_run_links_candidate_model_and_stores_metrics(mo
 
 
 @pytest.mark.asyncio
+async def test_complete_research_run_supports_pattern_only_run_without_model(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"id": "00000000-0000-0000-0000-000000000222"}]
+
+    class FakeAsyncClient:
+        call = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def patch(self, url, *, params, headers, json):
+            FakeAsyncClient.call = {"params": params, "headers": headers, "json": json}
+            return Response()
+
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_URL", "https://dedicated.example.supabase.co")
+    monkeypatch.setenv("EVEN_ODD_SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr("app.even_odd.storage.httpx.AsyncClient", FakeAsyncClient)
+
+    await complete_research_run(
+        research_run_id="00000000-0000-0000-0000-000000000222",
+        model_id=None,
+        partition_sizes={"pattern_discovery_observations": 1200},
+        evaluation={"research_objective": "adaptive_conditional_pattern_discovery"},
+    )
+    assert FakeAsyncClient.call["json"]["status"] == "completed"
+    assert FakeAsyncClient.call["json"]["model_id"] is None
+    assert FakeAsyncClient.call["json"]["partition_sizes"] == {"pattern_discovery_observations": 1200}
+
+
+@pytest.mark.asyncio
 async def test_fail_research_run_is_best_effort_without_configuration(monkeypatch):
     monkeypatch.delenv("EVEN_ODD_SUPABASE_URL", raising=False)
     monkeypatch.delenv("EVEN_ODD_SUPABASE_SECRET_KEY", raising=False)
