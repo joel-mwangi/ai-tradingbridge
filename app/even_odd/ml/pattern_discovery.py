@@ -305,7 +305,7 @@ def discover_patterns(digits: Sequence[int]) -> dict:
             "warning": "At least 100 ordered live observations are required for exploratory pattern discovery.",
         }
 
-    max_horizon = min(20, max(3, count // 25))
+    max_horizon = min(50, max(3, int(sqrt(count))))
     max_suffix = min(20, max(2, count // 20))
     max_digit_suffix = min(20, max(1, count // 20))
     candidate_windows = _adaptive_lengths(count)

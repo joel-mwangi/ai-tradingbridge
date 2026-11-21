@@ -12,7 +12,7 @@ def test_discovery_adapts_context_lengths_and_horizons_to_sample_size():
     assert report["adaptive_search"]["digit_sequence_lengths_tested"]
     assert report["adaptive_search"]["digit_sequence_lengths_tested"][-1] == 20
     assert report["adaptive_search"]["frequency_windows_tested"]
-    assert report["adaptive_search"]["future_horizons_tested"][-1] == 20
+    assert report["adaptive_search"]["future_horizons_tested"][-1] == 34
     assert report["interpretation"]["not_a_next_tick_classifier"] is True
 
 
