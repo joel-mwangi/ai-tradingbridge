@@ -1,10 +1,8 @@
 """Run Even/Odd research locally and persist the run/model to dedicated Supabase.
 
-Example:
-    python -m scripts.even_odd_research --symbol R_50 --limit 5000 --walk-forward
-
-Set EVEN_ODD_SUPABASE_URL and EVEN_ODD_SUPABASE_SECRET_KEY in the local
-environment first. Never commit these credentials or place them in source.
+The research report includes adaptive conditional pattern discovery. The legacy
+next-tick classifiers remain diagnostic candidates for compatibility and are
+not the primary pattern-learning output.
 """
 from __future__ import annotations
 
@@ -18,6 +16,7 @@ from app.even_odd.data_quality import (
     canonicalize_overlapping_collection_ticks,
     inspect_historical_ticks,
 )
+from app.even_odd.ml.pattern_discovery import discover_patterns
 from app.even_odd.ml.payout_replay import replay_payout_aware_strategy
 from app.even_odd.ml.pipeline import (
     run_research_experiment,
@@ -35,7 +34,7 @@ from app.even_odd.storage import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run chronological research on live-captured Even/Odd observations.")
+    parser = argparse.ArgumentParser(description="Run adaptive Even/Odd pattern discovery and diagnostic research on live-captured observations.")
     parser.add_argument("--symbol", required=True, help="Deriv market symbol, e.g. R_50.")
     parser.add_argument("--limit", type=int, default=5000, choices=range(1, 5001))
     parser.add_argument(
@@ -43,6 +42,7 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         nargs="+",
         default=[50, 100, 250, 500, 1000],
+        help="Legacy classifier feature windows. Pattern discovery selects its own context lengths.",
     )
     parser.add_argument("--max-epochs", type=int, default=200)
     parser.add_argument("--currency", default="USD", choices=("USD", "EUR", "GBP", "AUD"))
@@ -73,7 +73,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "status": "blocked",
                 "reason": (
                     "No live-captured observations are available yet. Start the "
-                    "always-on Deriv live collector and wait for data to accumulate."
+                    "browser-managed live collection and wait for data to accumulate."
                 ),
                 "historical_imports_enabled": False,
                 "order_execution_enabled": False,
@@ -123,6 +123,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
 
         digits = [row["last_digit"] for row in rows]
+        pattern_discovery = discover_patterns(digits)
         experiment = run_research_experiment(
             digits,
             windows=tuple(args.windows),
@@ -187,22 +188,28 @@ async def _run(args: argparse.Namespace) -> int:
 
         model_version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         evaluation = {
+            "research_objective": "adaptive_conditional_pattern_discovery",
+            "pattern_discovery": pattern_discovery,
+            # Preserve these legacy keys for existing Backtesting and Performance UI.
             "test_metrics": experiment["test_metrics"],
             "candidate_metrics": experiment["candidate_metrics"],
             "constant_baseline_metrics": experiment["constant_baseline_metrics"],
-            "rolling_frequency_baseline_metrics": experiment[
-                "rolling_frequency_baseline_metrics"
-            ],
+            "rolling_frequency_baseline_metrics": experiment["rolling_frequency_baseline_metrics"],
             "promotion_status": experiment["promotion_status"],
             "payout_replay_by_model": payout_replay_summary_by_model,
             "walk_forward": walk_forward,
+            "legacy_next_tick_classifier": {
+                "purpose": "diagnostic benchmark and backward compatibility only",
+                "not_the_primary_pattern_learning_output": True,
+            },
         }
         candidate_ids: dict[str, str] = {}
         for candidate_name, candidate_artifact in experiment["model_candidates"].items():
             candidate_metrics = {
+                "research_role": "legacy_next_tick_diagnostic_only",
                 "holdout_metrics": experiment["candidate_metrics"][candidate_name],
-                "constant_baseline_metrics": evaluation["constant_baseline_metrics"],
-                "rolling_frequency_baseline_metrics": evaluation["rolling_frequency_baseline_metrics"],
+                "constant_baseline_metrics": experiment["constant_baseline_metrics"],
+                "rolling_frequency_baseline_metrics": experiment["rolling_frequency_baseline_metrics"],
                 "walk_forward": None,
                 "promotion_status": experiment["promotion_status"],
                 "payout_replay": payout_replay_summary_by_model.get(candidate_name),
@@ -239,8 +246,12 @@ async def _run(args: argparse.Namespace) -> int:
             "limit": args.limit,
             "limit_reached": len(rows) == args.limit,
             "quality": quality,
-            "experiment": experiment,
-            "walk_forward": walk_forward,
+            "pattern_discovery": pattern_discovery,
+            "legacy_next_tick_classifier": {
+                "purpose": "diagnostic benchmark only",
+                "experiment": experiment,
+                "walk_forward": walk_forward,
+            },
             "model_persisted_as": "candidate",
             "candidate_families": sorted(candidate_ids),
             "payout_replay_by_model": payout_replay_by_model,

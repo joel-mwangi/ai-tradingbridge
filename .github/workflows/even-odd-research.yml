@@ -1,4 +1,4 @@
-name: Even/Odd live-stream research experiment
+name: Even/Odd adaptive pattern research
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ on:
           - "4000"
           - "5000"
       minimum_train_rows:
-        description: Initial expanding-window training rows
+        description: Initial expanding-window training rows for legacy diagnostic models
         required: true
         default: "500"
         type: choice
@@ -50,7 +50,7 @@ on:
           - "8"
           - "10"
       max_epochs:
-        description: Maximum logistic-regression training epochs
+        description: Maximum epochs for legacy diagnostic model training
         required: true
         default: "200"
         type: choice
@@ -68,7 +68,7 @@ concurrency:
 
 jobs:
   research:
-    name: Train and evaluate candidate model
+    name: Discover patterns and run diagnostic evaluation
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -104,7 +104,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run chronological research and walk-forward evaluation
+      - name: Discover conditional patterns and evaluate research
         shell: bash
         run: |
           set -o pipefail
@@ -117,11 +117,11 @@ jobs:
             --max-epochs "$MAX_EPOCHS" \
             --walk-forward | tee even-odd-research-report.json
 
-      - name: Upload live-stream research report
+      - name: Upload pattern research report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: even-odd-research-${{ inputs.symbol }}-${{ github.run_id }}
+          name: even-odd-pattern-research-${{ inputs.symbol }}-${{ github.run_id }}
           path: |
             even-odd-research-report.json
           if-no-files-found: ignore
