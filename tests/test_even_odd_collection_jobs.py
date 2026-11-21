@@ -112,13 +112,14 @@ async def test_start_collection_creates_requested_live_job(monkeypatch):
 
     monkeypatch.setattr(collection_jobs, "_configuration", lambda: ("https://db.example", "secret"))
     monkeypatch.setattr(collection_jobs.httpx, "AsyncClient", FakeClient)
-    request = collection_jobs.StartCollectionRequest(symbol="R_50", target_ticks=2500)
+    request = collection_jobs.StartCollectionRequest(symbol="R_50", target_ticks=100)
 
     result = await collection_jobs.start_collection(request, USER_ID)
 
     assert result["job"] == job
     assert result["live_only"] is True
     assert result["order_execution_enabled"] is False
+    assert result["job"]["target_ticks"] == 100
 
 
 @pytest.mark.asyncio
