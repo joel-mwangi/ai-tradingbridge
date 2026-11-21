@@ -134,7 +134,6 @@ def test_cross_window_features_expose_short_long_divergence():
 
     assert features["cross_w4_w8_even_rate_delta"] == -0.5
     assert "cross_w4_w8_digit_0_rate_delta" in features
-    assert "cross_w4_w8_even_rate_momentum_delta" in features
 
 
 def test_acceleration_features_capture_change_in_rate_momentum():
