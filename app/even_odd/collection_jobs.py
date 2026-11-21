@@ -71,7 +71,8 @@ async def start_collection(
             f"{url}/rest/v1/even_odd_collection_jobs",
             headers=_headers(key, "return=representation"),
             json={"owner_user_id": str(owner), "market_symbol": request.symbol,
-                  "target_ticks": request.target_ticks, "status": "queued"},
+                  "target_ticks": request.target_ticks, "status": "queued",
+                  "started_at": datetime.now(timezone.utc).isoformat()},
         )
         if created.status_code == 409:
             raise HTTPException(status_code=409, detail="A collection is already active for this market.")

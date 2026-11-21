@@ -94,6 +94,8 @@ async def test_start_collection_creates_requested_live_job(monkeypatch):
             return self.rows
 
     class FakeClient:
+        insert_payload = None
+
         def __init__(self, **kwargs):
             self.insert = None
 
@@ -108,6 +110,7 @@ async def test_start_collection_creates_requested_live_job(monkeypatch):
 
         async def post(self, url, **kwargs):
             self.insert = kwargs["json"]
+            FakeClient.insert_payload = self.insert
             return Response([job])
 
     monkeypatch.setattr(collection_jobs, "_configuration", lambda: ("https://db.example", "secret"))
@@ -120,6 +123,7 @@ async def test_start_collection_creates_requested_live_job(monkeypatch):
     assert result["live_only"] is True
     assert result["order_execution_enabled"] is False
     assert result["job"]["target_ticks"] == 100
+    assert FakeClient.insert_payload["started_at"]
 
 
 @pytest.mark.asyncio
