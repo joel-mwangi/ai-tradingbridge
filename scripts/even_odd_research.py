@@ -65,6 +65,7 @@ async def _run(args: argparse.Namespace) -> int:
         snapshot = await load_historical_ticks(
             symbol=args.symbol,
             limit=args.limit,
+            capture_mode="all_live",
         )
         raw_rows = snapshot["rows"]
         if not raw_rows:
